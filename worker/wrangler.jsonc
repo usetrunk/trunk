@@ -1,0 +1,19 @@
+{
+  "name": "trunk-push",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AGENT_CONNECTION",
+        "class_name": "AgentConnection"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AgentConnection"]
+    }
+  ]
+}

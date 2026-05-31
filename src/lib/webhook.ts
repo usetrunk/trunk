@@ -15,10 +15,34 @@ async function hmacSign(secret: string, body: string): Promise<string> {
   return `sha256=${Array.from(new Uint8Array(signature)).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
+// Notify the push worker (Cloudflare DO) for real-time delivery
+async function notifyPushWorker(agentId: string, message: typeof messages.$inferSelect) {
+  const pushUrl = process.env.PUSH_WORKER_URL;
+  const pushSecret = process.env.PUSH_SECRET;
+  if (!pushUrl || !pushSecret) return;
+
+  try {
+    await fetch(`${pushUrl}/notify/${agentId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${pushSecret}`,
+      },
+      body: JSON.stringify({ event: "message.received", message }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    // Push is best-effort — don't fail the message send
+  }
+}
+
 export async function deliverWebhook(
   message: typeof messages.$inferSelect,
   recipient: typeof agents.$inferSelect
 ): Promise<boolean> {
+  // Always try push worker (real-time to connected clients)
+  notifyPushWorker(recipient.id, message);
+
   if (!recipient.webhookUrl) return false;
 
   const body = JSON.stringify({
