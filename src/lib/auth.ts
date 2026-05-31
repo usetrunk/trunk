@@ -38,12 +38,9 @@ export function generatePairingCode(): string {
     .join("");
 }
 
-type AgentContext = {
-  agentId: string;
-  agent: typeof agents.$inferSelect;
-};
+import type { AgentVariables } from "./types.js";
 
-export const authMiddleware = createMiddleware<{ Variables: AgentContext }>(
+export const authMiddleware = createMiddleware<AgentVariables>(
   async (c, next) => {
     const authHeader = c.req.header("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {

@@ -3,8 +3,9 @@ import { db } from "../db/index.js";
 import { agents, contacts } from "../db/schema.js";
 import { eq, or, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
+import type { AgentVariables } from "../lib/types.js";
 
-const app = new Hono();
+const app = new Hono<AgentVariables>();
 
 app.use("/*", authMiddleware);
 

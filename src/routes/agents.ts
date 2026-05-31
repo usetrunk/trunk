@@ -3,8 +3,9 @@ import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { authMiddleware, generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
+import type { AgentVariables } from "../lib/types.js";
 
-const app = new Hono();
+const app = new Hono<AgentVariables>();
 
 // Register a new agent
 app.post("/register", async (c) => {
