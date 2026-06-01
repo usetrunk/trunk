@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, messages } from "../db/schema.js";
+import { agents, contacts, messages, workspaces } from "../db/schema.js";
 import { eq, or, and, desc } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -8,6 +8,7 @@ import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
+import { canMessage, getWorkspaceMembers } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -16,7 +17,7 @@ const DEFAULT_RETENTION_DAYS = 90;
 
 app.use("/*", authMiddleware);
 
-// Send a message
+// Send a message (supports workspace:<id> addressing for fan-out)
 app.post("/", async (c) => {
   const agentId = c.get("agentId");
   const body = await c.req.json<{
@@ -45,23 +46,90 @@ app.post("/", async (c) => {
     return c.json(receipt(existing), 200);
   }
 
-  // Allow self-messaging (same agent, different sessions/terminals)
-  // Otherwise verify they're contacts
-  if (body.to !== agentId) {
-    const contact = await db
-      .select()
-      .from(contacts)
-      .where(
-        or(
-          and(eq(contacts.agentA, agentId), eq(contacts.agentB, body.to)),
-          and(eq(contacts.agentA, body.to), eq(contacts.agentB, agentId))
-        )
-      )
-      .limit(1);
+  // Handle workspace addressing: "workspace:<id>"
+  if (body.to.startsWith("workspace:")) {
+    const workspaceId = body.to.slice("workspace:".length);
 
-    if (contact.length === 0) {
+    // Verify workspace exists
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
+    }
+
+    // Get all workspace members
+    const memberIds = await getWorkspaceMembers(workspaceId);
+    if (memberIds.length === 0) {
+      return c.json({ error: "Workspace has no members" }, 400);
+    }
+
+    // Filter out the sender from fan-out recipients
+    const recipients = memberIds.filter((id) => id !== agentId);
+    if (recipients.length === 0) {
+      return c.json({ error: "No other members in workspace" }, 400);
+    }
+
+    // Verify sender can message the workspace (member or workspace_contact)
+    const senderCanMessage = await canMessage(agentId, recipients[0]);
+    if (!senderCanMessage) {
       return c.json({ error: "Not a contact. Pair first." }, 403);
     }
+
+    // Fan-out: create a message for each recipient
+    const threadId = body.thread_id ?? crypto.randomUUID();
+    const created: MessageRow[] = [];
+
+    for (const recipientId of recipients) {
+      const [message] = await db
+        .insert(messages)
+        .values({
+          fromAgent: agentId,
+          toAgent: recipientId,
+          toWorkspace: workspaceId,
+          threadId,
+          replyTo: body.reply_to,
+          idempotencyKey: `${idempotencyKey}:${recipientId}`,
+          type: body.type,
+          payload: body.payload,
+        })
+        .returning();
+
+      await notifyPushWorker(recipientId, message);
+      await db
+        .update(messages)
+        .set({ status: "delivered", deliveredAt: new Date() })
+        .where(eq(messages.id, message.id));
+      message.status = "delivered";
+
+      const [recipient] = await db.select().from(agents).where(eq(agents.id, recipientId)).limit(1);
+      if (recipient?.webhookUrl) {
+        deliverWebhook(message, recipient).catch(() => {});
+      }
+
+      created.push(message);
+    }
+
+    await audit(agentId, "message.send_workspace", "workspace", workspaceId, {
+      thread_id: threadId,
+      recipient_count: recipients.length,
+    });
+
+    return c.json({
+      id: created[0].id,
+      thread_id: threadId,
+      status: "delivered",
+      created_at: created[0].createdAt,
+      recipients: recipients.length,
+    }, 201);
+  }
+
+  // Direct message: verify contact via canMessage helper
+  const allowed = await canMessage(agentId, body.to);
+  if (!allowed) {
+    return c.json({ error: "Not a contact. Pair first." }, 403);
   }
 
   // Create message
