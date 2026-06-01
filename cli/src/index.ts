@@ -303,186 +303,76 @@ server.tool(
   }
 );
 
-// --- Room tools ---
+// --- Room tools (consolidated) ---
 
 server.tool(
-  "trunk_room_create",
-  "Create a room (project). Returns a join code. Anyone with the code can join and see shared tasks.",
-  { name: z.string().describe("Room name (e.g., 'Koji', 'Trunk', 'Superkey')") },
-  async ({ name }) => {
-    const config = loadConfig();
-    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
-
-    const result = await relay("/rooms", { method: "POST", secret: config.secret, body: { name } });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-  }
-);
-
-server.tool(
-  "trunk_room_join",
-  "Join a room using its join code.",
-  { code: z.string().describe("Room join code") },
-  async ({ code }) => {
-    const config = loadConfig();
-    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
-
-    const result = await relay("/rooms/join", { method: "POST", secret: config.secret, body: { code } });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-  }
-);
-
-server.tool(
-  "trunk_room_list",
-  "List rooms I'm a member of.",
-  {},
-  async () => {
-    const config = loadConfig();
-    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
-
-    const result = await relay("/rooms", { secret: config.secret });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-  }
-);
-
-server.tool(
-  "trunk_room_members",
-  "List members of a room.",
-  { room_id: z.string().describe("Room ID") },
-  async ({ room_id }) => {
-    const config = loadConfig();
-    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
-
-    const result = await relay(`/rooms/${room_id}/members`, { secret: config.secret });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-  }
-);
-
-server.tool(
-  "trunk_room_tasks",
-  "List tasks in a room. Filter by status or owner.",
+  "trunk_room",
+  "Manage rooms (projects). Actions: create, join, list, members. Rooms are shared spaces for tasks visible to all members.",
   {
-    room_id: z.string().describe("Room ID"),
-    status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
-    owner: z.string().optional().describe("Filter by owner agent ID"),
+    action: z.enum(["create", "join", "list", "members"]).describe("What to do"),
+    name: z.string().optional().describe("Room name (for create)"),
+    code: z.string().optional().describe("Join code (for join)"),
+    room_id: z.string().optional().describe("Room ID (for members)"),
   },
-  async ({ room_id, status, owner }) => {
+  async ({ action, name, code, room_id }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
-    const params = new URLSearchParams();
-    if (status) params.set("status", status);
-    if (owner) params.set("owner", owner);
-    const query = params.toString();
-    const path = `/tasks/room/${room_id}${query ? `?${query}` : ""}`;
-
-    const result = await relay(path, { secret: config.secret });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-  }
-);
-
-server.tool(
-  "trunk_room_task_create",
-  "Create a task in a room.",
-  {
-    room_id: z.string().describe("Room ID"),
-    title: z.string().describe("Task title"),
-    description: z.string().optional().describe("Task description"),
-    priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("Priority (default: medium)"),
-    owner: z.string().optional().describe("Agent ID to assign to"),
-    due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
-  },
-  async ({ room_id, title, description, priority, owner, due }) => {
-    const config = loadConfig();
-    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
-
-    const result = await relay("/tasks", {
-      method: "POST",
-      secret: config.secret,
-      body: { room_id, title, description, priority, owner, due },
-    });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-  }
-);
-
-// --- .trunk file support ---
-
-server.tool(
-  "trunk_init",
-  "Initialize a .trunk file in the current directory, linking it to a room. Creates the room if needed.",
-  {
-    room_name: z.string().describe("Room name for this project"),
-    directory: z.string().optional().describe("Directory to create .trunk in (defaults to cwd)"),
-  },
-  async ({ room_name, directory }) => {
-    const config = loadConfig();
-    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
-
-    // Create room
-    const room = await relay("/rooms", { method: "POST", secret: config.secret, body: { name: room_name } });
-
-    // Write .trunk file
-    const dir = directory || process.cwd();
-    const trunkFile = join(dir, ".trunk");
-    const trunkConfig = {
-      project: room_name,
-      room_id: room.id,
-      join_code: room.pairing_code,
-    };
-    writeFileSync(trunkFile, JSON.stringify(trunkConfig, null, 2) + "\n");
-
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          initialized: true,
-          project: room_name,
-          room_id: room.id,
-          join_code: room.pairing_code,
-          trunk_file: trunkFile,
-          instructions: `Share join code ${room.pairing_code} with collaborators. They run trunk_room_join with this code.`,
-        }, null, 2),
-      }],
-    };
+    if (action === "create") {
+      if (!name) return { content: [{ type: "text", text: "Error: name required for create" }], isError: true };
+      const result = await relay("/rooms", { method: "POST", secret: config.secret, body: { name } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "join") {
+      if (!code) return { content: [{ type: "text", text: "Error: code required for join" }], isError: true };
+      const result = await relay("/rooms/join", { method: "POST", secret: config.secret, body: { code } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "list") {
+      const result = await relay("/rooms", { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "members") {
+      if (!room_id) return { content: [{ type: "text", text: "Error: room_id required for members" }], isError: true };
+      const result = await relay(`/rooms/${room_id}/members`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    return { content: [{ type: "text", text: "Unknown action" }], isError: true };
   }
 );
 
 server.tool(
   "trunk_project",
-  "Read the .trunk file from the current directory and show the linked room, members, and open tasks.",
+  "Read .trunk file from a directory OR initialize one. Shows linked room, members, open tasks. Auto-joins the room.",
   {
-    directory: z.string().optional().describe("Directory to read .trunk from (defaults to cwd)"),
+    action: z.enum(["status", "init"]).optional().describe("init = create room + .trunk file. status (default) = read existing."),
+    room_name: z.string().optional().describe("Room name (for init)"),
+    directory: z.string().optional().describe("Directory (defaults to cwd)"),
   },
-  async ({ directory }) => {
+  async ({ action, room_name, directory }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
     const dir = directory || process.cwd();
     const trunkFile = join(dir, ".trunk");
-    if (!existsSync(trunkFile)) {
-      return { content: [{ type: "text", text: `No .trunk file found in ${dir}. Run trunk_init to set up.` }] };
+
+    if (action === "init") {
+      if (!room_name) return { content: [{ type: "text", text: "Error: room_name required for init" }], isError: true };
+      const room = await relay("/rooms", { method: "POST", secret: config.secret, body: { name: room_name } });
+      const trunkConfig = { project: room_name, room_id: room.id, join_code: room.pairing_code };
+      writeFileSync(trunkFile, JSON.stringify(trunkConfig, null, 2) + "\n");
+      return { content: [{ type: "text", text: JSON.stringify({ initialized: true, ...trunkConfig, instructions: `Share join code ${room.pairing_code} with collaborators.` }, null, 2) }] };
     }
 
+    // Default: status
+    if (!existsSync(trunkFile)) {
+      return { content: [{ type: "text", text: `No .trunk file found in ${dir}. Use trunk_project with action=init to set up.` }] };
+    }
     const trunkConfig = JSON.parse(readFileSync(trunkFile, "utf-8"));
-
-    // Auto-join if not already a member
     await relay("/rooms/join", { method: "POST", secret: config.secret, body: { code: trunkConfig.join_code } }).catch(() => {});
-
-    // Get room tasks
     const tasks = await relay(`/tasks/room/${trunkConfig.room_id}?status=open`, { secret: config.secret }).catch(() => ({ tasks: [] }));
     const members = await relay(`/rooms/${trunkConfig.room_id}/members`, { secret: config.secret }).catch(() => ({ members: [] }));
-
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          project: trunkConfig.project,
-          room_id: trunkConfig.room_id,
-          join_code: trunkConfig.join_code,
-          members: members.members || [],
-          open_tasks: tasks.tasks || [],
-        }, null, 2),
-      }],
-    };
+    return { content: [{ type: "text", text: JSON.stringify({ project: trunkConfig.project, room_id: trunkConfig.room_id, join_code: trunkConfig.join_code, members: members.members || [], open_tasks: tasks.tasks || [] }, null, 2) }] };
   }
 );
 
