@@ -77,6 +77,7 @@ type SharedFactRow = {
   scope: string;
   key: string;
   value: unknown;
+  version: number;
   updatedBy: string;
   updatedAt: Date;
 };
@@ -664,11 +665,13 @@ describe("Hono API behavior", () => {
     await expect(alphaClient.putFact(beta.agent_id, "project.status", { phase: "build" })).resolves.toMatchObject({
       key: "project.status",
       value: { phase: "build" },
+      version: 1,
       updated_by: alpha.agent_id,
     });
     await expect(betaClient.getFact(alpha.agent_id, "project.status")).resolves.toMatchObject({
       key: "project.status",
       value: { phase: "build" },
+      version: 1,
     });
     await expect(betaClient.deleteFact(alpha.agent_id, "project.status")).resolves.toEqual({ ok: true });
     await expect(alphaClient.getFact(beta.agent_id, "project.status")).rejects.toMatchObject({ status: 404 });
@@ -692,6 +695,21 @@ describe("Hono API behavior", () => {
     await expect(betaClient.getFact(alpha.agent_id, "branch.active")).resolves.toMatchObject({
       value: "codex/playbook-implementation",
     });
+  });
+
+  it("uses If-Match to reject stale shared fact writes", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const created = await alphaClient.putFact(beta.agent_id, "decision.versioned", "first");
+    expect(created.version).toBe(1);
+
+    const updated = await alphaClient.putFact(beta.agent_id, "decision.versioned", "second", { ifMatch: 1 });
+    expect(updated).toMatchObject({ value: "second", version: 2 });
+
+    await expect(
+      alphaClient.putFact(beta.agent_id, "decision.versioned", "stale", { ifMatch: 1 })
+    ).rejects.toMatchObject({ status: 412, message: "Version mismatch" });
   });
 
   it("rate limits registrations to 10 per hour per IP", async () => {
@@ -1088,6 +1106,7 @@ class InsertQuery {
         scope: this.insertValues.scope as string,
         key: this.insertValues.key as string,
         value: this.insertValues.value,
+        version: (this.insertValues.version as number | undefined) ?? 1,
         updatedBy: this.insertValues.updatedBy as string,
         updatedAt: new Date(),
       };
@@ -1318,6 +1337,7 @@ const columnToProperty: Record<string, string> = {
   agent_id: "agentId",
   joined_at: "joinedAt",
   updated_by: "updatedBy",
+  version: "version",
   actor_agent: "actorAgent",
   target_type: "targetType",
   target_id: "targetId",
