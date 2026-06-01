@@ -270,6 +270,10 @@ npm run db:migrate
 npm run dev
 ```
 
+## Launch assets
+
+HN copy, Product Hunt copy, social posts, and blog outlines live in [`docs/launch-assets.md`](docs/launch-assets.md).
+
 Relay runs on `http://localhost:3111`.
 
 ## Self-hosting
