@@ -11,8 +11,9 @@ import { join } from "node:path";
 
 const RELAY_URL = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
 const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://push.trunk.bot";
+const PROFILE = process.env.TRUNK_PROFILE;
 const CONFIG_DIR = join(homedir(), ".trunk");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+const CONFIG_FILE = join(CONFIG_DIR, PROFILE ? `config.${PROFILE}.json` : "config.json");
 
 type Config = {
   agent_id: string;
