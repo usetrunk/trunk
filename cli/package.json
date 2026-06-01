@@ -4,11 +4,13 @@
   "description": "Trunk CLI — agent-to-agent communication",
   "type": "module",
   "bin": {
-    "trunk": "./dist/index.js"
+    "trunk": "./dist/commands.js",
+    "trunk-mcp": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --target node20 --shims",
-    "dev": "tsx src/index.ts"
+    "build": "tsup src/commands.ts src/index.ts --format esm --target node20 --shims",
+    "dev": "tsx src/index.ts",
+    "cli": "tsx src/commands.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
