@@ -8,6 +8,7 @@ import tasksRoutes from "./routes/tasks.js";
 import roomsRoutes from "./routes/rooms.js";
 import contextRoutes from "./routes/context.js";
 import connectRoutes from "./routes/connect.js";
+import documentsRoutes from "./routes/documents.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 
@@ -31,6 +32,7 @@ app.route("/tasks", tasksRoutes);
 app.route("/rooms", roomsRoutes);
 app.route("/context", contextRoutes);
 app.route("/connect", connectRoutes);
+app.route("/documents", documentsRoutes);
 app.route("/dashboard", dashboardRoutes);
 
 export default app;

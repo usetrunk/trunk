@@ -29,6 +29,13 @@
       "when": 1780347120000,
       "tag": "0003_playbook_protocol",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780349549564,
+      "tag": "0004_narrow_nuke",
+      "breakpoints": true
     }
   ]
 }
