@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SQL } from "drizzle-orm";
 import app from "../src/app.js";
+import { createTrunkInboxNode, createTrunkSendNode } from "../src/adapters/langgraph.js";
 import { TrunkApiError, TrunkClient, type RegisterResponse } from "../src/sdk/index.js";
 
 type AgentRow = {
@@ -740,6 +741,31 @@ describe("Hono API behavior", () => {
 
     expect(blocked.status).toBe(429);
     await expect(blocked.json()).resolves.toMatchObject({ error: "Rate limit exceeded" });
+  });
+
+  it("LangGraph adapter nodes send messages and write inbox results into graph state", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    type GraphState = { recipient: string; content: string };
+    const sendNode = createTrunkSendNode<GraphState>(alphaClient, {
+      to: (state) => state.recipient,
+      type: "handoff",
+      payload: (state) => ({ content: state.content }),
+      outputKey: "sent",
+    });
+    const afterSend = await sendNode({ recipient: beta.agent_id, content: "Graph handoff" });
+
+    expect(afterSend.sent).toMatchObject({ status: "delivered" });
+
+    const inboxNode = createTrunkInboxNode(betaClient, { outputKey: "messages" });
+    const afterInbox = await inboxNode({ checked: true });
+
+    expect(afterInbox.messages).toHaveLength(1);
+    expect(afterInbox.messages[0]).toMatchObject({
+      type: "handoff",
+      payload: { content: "Graph handoff" },
+    });
   });
 });
 
