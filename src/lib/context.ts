@@ -37,7 +37,7 @@ export async function applyFactUpdates(
     if (existing.length > 0) {
       await db
         .update(sharedFacts)
-        .set({ value, updatedBy: actorAgent, updatedAt: new Date() })
+        .set({ value, version: (existing[0].version ?? 1) + 1, updatedBy: actorAgent, updatedAt: new Date() })
         .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
     } else {
       await db.insert(sharedFacts).values({ scope, key, value, updatedBy: actorAgent });

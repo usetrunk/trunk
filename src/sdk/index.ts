@@ -207,14 +207,15 @@ export class TrunkClient {
     });
   }
 
-  getFact(contactId: string, key: string): Promise<{ key: string; value: unknown; updated_by: string; updated_at?: string | Date }> {
+  getFact(contactId: string, key: string): Promise<{ key: string; value: unknown; version: number; updated_by: string; updated_at?: string | Date }> {
     return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`);
   }
 
-  putFact(contactId: string, key: string, value: unknown): Promise<{ key: string; value: unknown; updated_by: string }> {
+  putFact(contactId: string, key: string, value: unknown, options: { ifMatch?: string | number } = {}): Promise<{ key: string; value: unknown; version: number; updated_by: string }> {
     return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`, {
       method: "PUT",
       body: { value },
+      ifMatch: options.ifMatch === undefined ? undefined : String(options.ifMatch),
     });
   }
 
@@ -232,7 +233,7 @@ export class TrunkClient {
 
   private async request<T>(
     path: string,
-    options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string } = {}
+    options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string } = {}
   ): Promise<T> {
     const headers = new Headers();
     if (options.body !== undefined) headers.set("Content-Type", "application/json");
@@ -240,6 +241,7 @@ export class TrunkClient {
     if (requiresIdempotencyKey(path, method)) {
       headers.set("Idempotency-Key", options.idempotencyKey ?? crypto.randomUUID());
     }
+    if (options.ifMatch) headers.set("If-Match", options.ifMatch);
     if (options.auth !== false) {
       if (!this.secret) {
         throw new Error("TrunkClient requires a secret for authenticated requests");

@@ -111,6 +111,7 @@ export const sharedFacts = pgTable("shared_facts", {
   scope: text("scope").notNull(),
   key: text("key").notNull(),
   value: jsonb("value").$type<unknown>().notNull(),
+  version: integer("version").notNull().default(1),
   updatedBy: text("updated_by").notNull().references(() => agents.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [

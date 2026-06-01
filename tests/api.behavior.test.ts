@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SQL } from "drizzle-orm";
 import app from "../src/app.js";
 import { createTrunkInboxNode, createTrunkSendNode } from "../src/adapters/langgraph.js";
+import { notifyPushWorker } from "../src/lib/webhook.js";
 import { TrunkApiError, TrunkClient, signWebhookPayload, verifyWebhookSignature, type RegisterResponse } from "../src/sdk/index.js";
 
 type AgentRow = {
@@ -77,6 +78,7 @@ type SharedFactRow = {
   scope: string;
   key: string;
   value: unknown;
+  version: number;
   updatedBy: string;
   updatedAt: Date;
 };
@@ -143,6 +145,7 @@ describe("Hono API behavior", () => {
     testState["audit_events"].length = 0;
     testState["rate_limits"].length = 0;
     testState.idCounter = 0;
+    vi.clearAllMocks();
   });
 
   it("register returns agent_id, secret, and pairing_code", async () => {
@@ -586,6 +589,36 @@ describe("Hono API behavior", () => {
     expect(doneTasks.tasks[0].title).toBe("Done task");
   });
 
+  it("renders a read-only observer dashboard with rooms and direct messages", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Playbook Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+    await createRoomTaskRaw(alpha.secret, room.id, { title: "Build observer UI" });
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Observer work started." },
+    });
+
+    const dashboard = await app.request(`/dashboard?secret=${alpha.secret}`);
+    const body = await dashboard.text();
+
+    expect(dashboard.status).toBe(200);
+    expect(body).toContain("Observer");
+    expect(body).toContain("read-only");
+    expect(body).toContain("Agent coordination");
+    expect(body).toContain("Contacts");
+    expect(body).toContain("Messages");
+    expect(body).toContain("Rooms");
+    expect(body).toContain("Playbook Room");
+    expect(body).toContain("Build observer UI");
+    expect(body).toContain("Observer work started.");
+    expect(body).not.toContain("<form");
+    expect(body).not.toContain("<textarea");
+  });
+
   it("keeps replies in the same thread, marks the original replied, and returns thread messages to participants", async () => {
     const { alpha, beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
@@ -657,6 +690,26 @@ describe("Hono API behavior", () => {
     expect(inbox.messages[0].payload).toMatchObject({ content: "once" });
   });
 
+  it("keeps messages durable when real-time push fails", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    vi.mocked(notifyPushWorker).mockRejectedValueOnce(new Error("push worker down"));
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Still lands in inbox." },
+    });
+
+    expect(sent.status).toBe("delivered");
+    await expect(betaClient.inbox()).resolves.toMatchObject({
+      messages: [expect.objectContaining({ id: sent.id, payload: { content: "Still lands in inbox." } })],
+    });
+    expect(testState["audit_events"]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "message.push_failed", targetId: sent.id }),
+    ]));
+  });
+
   it("stores shared facts through context CRUD for either contact", async () => {
     const { alpha, beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
@@ -664,11 +717,13 @@ describe("Hono API behavior", () => {
     await expect(alphaClient.putFact(beta.agent_id, "project.status", { phase: "build" })).resolves.toMatchObject({
       key: "project.status",
       value: { phase: "build" },
+      version: 1,
       updated_by: alpha.agent_id,
     });
     await expect(betaClient.getFact(alpha.agent_id, "project.status")).resolves.toMatchObject({
       key: "project.status",
       value: { phase: "build" },
+      version: 1,
     });
     await expect(betaClient.deleteFact(alpha.agent_id, "project.status")).resolves.toEqual({ ok: true });
     await expect(alphaClient.getFact(beta.agent_id, "project.status")).rejects.toMatchObject({ status: 404 });
@@ -692,6 +747,21 @@ describe("Hono API behavior", () => {
     await expect(betaClient.getFact(alpha.agent_id, "branch.active")).resolves.toMatchObject({
       value: "codex/playbook-implementation",
     });
+  });
+
+  it("uses If-Match to reject stale shared fact writes", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const created = await alphaClient.putFact(beta.agent_id, "decision.versioned", "first");
+    expect(created.version).toBe(1);
+
+    const updated = await alphaClient.putFact(beta.agent_id, "decision.versioned", "second", { ifMatch: 1 });
+    expect(updated).toMatchObject({ value: "second", version: 2 });
+
+    await expect(
+      alphaClient.putFact(beta.agent_id, "decision.versioned", "stale", { ifMatch: 1 })
+    ).rejects.toMatchObject({ status: 412, message: "Version mismatch" });
   });
 
   it("rate limits registrations to 10 per hour per IP", async () => {
@@ -883,6 +953,39 @@ function updateTaskRaw(secret: string, contactId: string, taskId: string, body: 
       "Authorization": `Bearer ${secret}`,
     },
     body: JSON.stringify(body),
+  });
+}
+
+function createRoomRaw(secret: string, body: Record<string, unknown>) {
+  return app.request("/rooms", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function joinRoomRaw(secret: string, code: string) {
+  return app.request("/rooms/join", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+    },
+    body: JSON.stringify({ code }),
+  });
+}
+
+function createRoomTaskRaw(secret: string, roomId: string, body: Record<string, unknown>) {
+  return app.request("/tasks", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+    },
+    body: JSON.stringify({ room_id: roomId, ...body }),
   });
 }
 
@@ -1088,6 +1191,7 @@ class InsertQuery {
         scope: this.insertValues.scope as string,
         key: this.insertValues.key as string,
         value: this.insertValues.value,
+        version: (this.insertValues.version as number | undefined) ?? 1,
         updatedBy: this.insertValues.updatedBy as string,
         updatedAt: new Date(),
       };
@@ -1318,6 +1422,7 @@ const columnToProperty: Record<string, string> = {
   agent_id: "agentId",
   joined_at: "joinedAt",
   updated_by: "updatedBy",
+  version: "version",
   actor_agent: "actorAgent",
   target_type: "targetType",
   target_id: "targetId",
