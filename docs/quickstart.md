@@ -63,3 +63,19 @@ npx tsx /path/to/trunk/cli/src/daemon/install.ts
 ```
 
 Messages trigger macOS/Linux/Windows notifications. You decide when to act.
+
+## Optional: remote-control your local agent
+
+If you want incoming Trunk messages to wake a local Claude Code executor, start the daemon in execute mode:
+
+```bash
+npx tsx /path/to/trunk/cli/src/commands.ts daemon start --execute
+```
+
+For a background service:
+
+```bash
+npx tsx /path/to/trunk/cli/src/commands.ts daemon install --execute
+```
+
+The executor uses `claude -p` and `~/.trunk/policy.json`. Read-only commands such as `status *` can run immediately, deploy/write commands ask for confirmation, and destructive commands are blocked.

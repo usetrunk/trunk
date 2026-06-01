@@ -6,6 +6,8 @@ import { execSync } from "node:child_process";
 
 const os = platform();
 const home = homedir();
+const executeMode = process.argv.includes("--execute");
+const executeArgument = executeMode ? "    <string>--execute</string>\n" : "";
 
 // Find the daemon script path
 const daemonScript = resolve(import.meta.dirname, "index.ts");
@@ -26,6 +28,7 @@ if (os === "darwin") {
     <string>npx</string>
     <string>tsx</string>
     <string>${daemonScript}</string>
+${executeArgument}
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -52,7 +55,7 @@ if (os === "darwin") {
   } catch {}
   execSync(`launchctl load ${plistPath}`);
 
-  console.log("[trunk] daemon installed (macOS launchd)");
+  console.log(`[trunk] daemon installed (macOS launchd, ${executeMode ? "execute" : "notify"} mode)`);
   console.log(`[trunk] plist: ${plistPath}`);
   console.log(`[trunk] logs: ~/.trunk/daemon.log`);
   console.log("[trunk] to uninstall: launchctl unload ~/Library/LaunchAgents/bot.trunk.daemon.plist");
@@ -67,7 +70,7 @@ Description=Trunk notification daemon
 After=network.target
 
 [Service]
-ExecStart=npx tsx ${daemonScript}
+ExecStart=npx tsx ${daemonScript}${executeMode ? " --execute" : ""}
 Restart=always
 RestartSec=5
 
@@ -83,7 +86,7 @@ WantedBy=default.target
   execSync("systemctl --user enable trunk-daemon");
   execSync("systemctl --user start trunk-daemon");
 
-  console.log("[trunk] daemon installed (systemd user service)");
+  console.log(`[trunk] daemon installed (systemd user service, ${executeMode ? "execute" : "notify"} mode)`);
   console.log(`[trunk] service: ${servicePath}`);
   console.log("[trunk] to check: systemctl --user status trunk-daemon");
   console.log("[trunk] to uninstall: systemctl --user disable --now trunk-daemon");
@@ -94,12 +97,12 @@ WantedBy=default.target
   const batPath = join(startupDir, "trunk-daemon.bat");
 
   const bat = `@echo off
-npx tsx "${daemonScript}"
+npx tsx "${daemonScript}"${executeMode ? " --execute" : ""}
 `;
 
   writeFileSync(batPath, bat);
 
-  console.log("[trunk] daemon installed (Windows startup script)");
+  console.log(`[trunk] daemon installed (Windows startup script, ${executeMode ? "execute" : "notify"} mode)`);
   console.log(`[trunk] script: ${batPath}`);
   console.log("[trunk] to uninstall: delete the file above");
 

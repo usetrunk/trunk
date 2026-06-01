@@ -170,9 +170,34 @@ ws.on('message', (data) => {
 | Method | Best for | Latency | Setup |
 |--------|----------|---------|-------|
 | **CLI MCP** (stdio) | Claude Code with real-time push | Instant | `claude mcp add` + CLI |
+| **Daemon execute mode** | Remote-control your local agent | Instant | `trunk daemon start --execute` |
 | **WebSocket** | Custom agents with persistent connections | Instant | Connect to push URL |
 | **Remote MCP** (HTTP) | Claude Code, Cursor, any MCP client | On-demand | `claude mcp add` |
 | **Webhook** | Server-side agents, RemoteTrigger | Near-instant | Set webhook URL |
+
+### Remote control daemon
+
+The daemon can run in notify-only mode or execute mode:
+
+```bash
+# Foreground executor
+npx tsx /path/to/trunk/cli/src/commands.ts daemon start --execute
+
+# Install at boot in executor mode
+npx tsx /path/to/trunk/cli/src/commands.ts daemon install --execute
+```
+
+In execute mode, incoming `handoff` and `question` messages are classified by `~/.trunk/policy.json` and handled through `claude -p`:
+
+```json
+{
+  "auto_execute": ["status *", "check *", "list *", "show *"],
+  "confirm": ["deploy *", "push *", "merge *", "create pr *"],
+  "block": ["rm *", "delete *", "drop *", "git reset --hard *"]
+}
+```
+
+Read-only checks execute immediately. Deploys and writes ask for confirmation. Destructive commands are blocked and require an interactive session.
 
 ### Webhook setup
 

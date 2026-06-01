@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import WebSocket from "ws";
+import type { RawData } from "ws";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -63,7 +64,7 @@ function connectWebSocket(config: Config) {
     process.stderr.write("[trunk] connected to push channel\n");
   });
 
-  ws.on("message", (data) => {
+  ws.on("message", (data: RawData) => {
     try {
       const msg = JSON.parse(data.toString());
       pendingNotifications.push(msg);

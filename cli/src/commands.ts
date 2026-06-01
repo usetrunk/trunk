@@ -5,6 +5,7 @@
  * Usage:
  *   npx @usetrunk/cli daemon install   — install as background service
  *   npx @usetrunk/cli daemon start     — run in foreground
+ *   npx @usetrunk/cli daemon start --execute — run foreground executor
  *   npx @usetrunk/cli daemon status    — check if running
  *   npx @usetrunk/cli status           — show agent info
  */
@@ -49,7 +50,7 @@ if (command === "daemon") {
       console.log("Trunk daemon: not running");
     }
   } else {
-    console.log("Usage: trunk daemon [install|start|status]");
+    console.log("Usage: trunk daemon [install|start|status] [--execute]");
   }
 } else if (command === "status") {
   const config = loadConfig();
@@ -67,6 +68,8 @@ if (command === "daemon") {
 Commands:
   daemon install   Install notification daemon as background service
   daemon start     Run daemon in foreground
+  daemon start --execute
+                   Execute eligible handoff/question messages through claude -p
   daemon status    Check if daemon is running
   status           Show agent identity and config
 

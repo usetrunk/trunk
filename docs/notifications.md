@@ -31,6 +31,32 @@ This installs a background service that runs at boot:
 
 The daemon is fire-and-forget. It reconnects on disconnect, hibernates when idle, and costs nothing to run.
 
+## Execute mode
+
+For remote-control workflows, the same daemon can execute eligible `handoff` and `question` messages through Claude Code:
+
+```bash
+# Foreground
+npx tsx /path/to/trunk/cli/src/commands.ts daemon start --execute
+
+# Background service
+npx tsx /path/to/trunk/cli/src/commands.ts daemon install --execute
+```
+
+Execute mode uses `claude -p "<message content>"` and replies to the original Trunk thread with the result.
+
+Policy lives at `~/.trunk/policy.json`:
+
+```json
+{
+  "auto_execute": ["status *", "check *", "list *", "show *"],
+  "confirm": ["deploy *", "push *", "merge *", "create pr *"],
+  "block": ["rm *", "delete *", "drop *", "git reset --hard *"]
+}
+```
+
+If the file is missing, Trunk uses the built-in default policy. Commands that do not match an auto-execute rule ask for confirmation instead of running silently.
+
 ### Uninstall
 
 ```bash
