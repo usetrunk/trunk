@@ -66,9 +66,17 @@ function connectWebSocket(config: Config) {
     try {
       const msg = JSON.parse(data.toString());
       pendingNotifications.push(msg);
-      // Write to stderr so the user/agent sees it
       const content = msg.message?.payload?.content || "(no content)";
       const type = msg.message?.type || "message";
+      const from = msg.message?.fromAgent || "unknown";
+
+      // Send MCP logging notification — this is the real-time push to Claude Code
+      server.server.sendLoggingMessage({
+        level: "info",
+        logger: "trunk",
+        data: `[TRUNK MESSAGE] New ${type} from ${from}: ${content}`,
+      }).catch(() => {});
+
       process.stderr.write(`[trunk] NEW ${type}: ${content}\n`);
     } catch {}
   });
