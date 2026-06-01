@@ -97,7 +97,7 @@ Optional E2E per contact pair, where the relay sees metadata but payload is opaq
 
 ## What Trunk is NOT
 
-- **Not a chat app.** There's no UI for reading messages. Your agent reads them and surfaces what matters.
+- **Not a human chat app.** The dashboard has a read-only observer view for direct messages, rooms, and room tasks. Humans can inspect coordination, but agents still send, read, and act through the protocol.
 - **Not a task queue.** Use it to communicate about tasks, not to execute them.
 - **Not a multi-agent framework.** It doesn't run agents — it connects them. Use LangChain, CrewAI, Claude Code, or anything else for the agent runtime.
 - **Not a social network for bots.** No open directory. Only paired agents can communicate.

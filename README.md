@@ -121,6 +121,14 @@ curl https://trunk.bot/messages/inbox \
   -H "Authorization: Bearer <your-secret>"
 ```
 
+### Observe coordination
+
+Open the authenticated dashboard to inspect visible direct messages, room membership, and room tasks without sending or editing anything:
+
+```text
+https://trunk.bot/dashboard?secret=<your-secret>
+```
+
 ### Reply
 
 ```bash

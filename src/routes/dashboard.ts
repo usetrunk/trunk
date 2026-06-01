@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { html } from "hono/html";
 import { db } from "../db/index.js";
-import { agents, contacts, messages } from "../db/schema.js";
-import { eq, or, and, desc, sql } from "drizzle-orm";
+import { agents, contacts, messages, roomMembers, rooms, tasks } from "../db/schema.js";
+import { eq, or, desc } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -65,10 +65,30 @@ app.get("/", async (c) => {
     .where(or(eq(contacts.agentA, agentId), eq(contacts.agentB, agentId)));
 
   const contactIds = contactRows.map((r) => r.agentA === agentId ? r.agentB : r.agentA);
-  const contactAgents = contactIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner })
-        .from(agents)
-        .where(or(...contactIds.map((id) => eq(agents.id, id))))
+
+  const memberships = await db
+    .select()
+    .from(roomMembers)
+    .where(eq(roomMembers.agentId, agentId));
+  const roomIds = memberships.map((membership) => membership.roomId);
+  const roomRows = roomIds.length > 0
+    ? await db
+        .select()
+        .from(rooms)
+        .where(or(...roomIds.map((id) => eq(rooms.id, id))))
+    : [];
+  const memberRows = roomIds.length > 0
+    ? await db
+        .select()
+        .from(roomMembers)
+        .where(or(...roomIds.map((id) => eq(roomMembers.roomId, id))))
+    : [];
+  const roomTaskRows = roomIds.length > 0
+    ? await db
+        .select()
+        .from(tasks)
+        .where(or(...roomIds.map((id) => eq(tasks.scope, `room:${id}`))))
+        .orderBy(desc(tasks.createdAt))
     : [];
 
   // Get recent messages
@@ -78,6 +98,24 @@ app.get("/", async (c) => {
     .where(or(eq(messages.toAgent, agentId), eq(messages.fromAgent, agentId)))
     .orderBy(desc(messages.createdAt))
     .limit(20);
+
+  const visibleAgentIds = unique([
+    agentId,
+    ...contactIds,
+    ...memberRows.map((member) => member.agentId),
+    ...recentMessages.flatMap((message) => [message.fromAgent, message.toAgent]),
+  ]);
+  const visibleAgents = visibleAgentIds.length > 0
+    ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner })
+        .from(agents)
+        .where(or(...visibleAgentIds.map((id) => eq(agents.id, id))))
+    : [];
+  const agentNames = new Map(visibleAgents.map((visibleAgent) => [visibleAgent.id, visibleAgent.name]));
+  const contactAgents = contactIds.map((contactId) => ({
+    id: contactId,
+    name: agentNames.get(contactId) ?? contactId,
+    owner: visibleAgents.find((visibleAgent) => visibleAgent.id === contactId)?.owner,
+  }));
 
   // Count pending
   const pendingCount = recentMessages.filter(m => m.toAgent === agentId && m.status === "pending").length;
@@ -176,6 +214,58 @@ app.get("/", async (c) => {
             `;
           })}
       </div>
+
+      <!-- Read-only Observer -->
+      <div class="card wide">
+        <div class="card-title">Observer <span class="badge">read-only</span></div>
+        <div class="observer-grid">
+          <div>
+            <div class="section-label">1:1 Messages</div>
+            ${recentMessages.length === 0
+              ? html`<p class="empty">No visible direct messages.</p>`
+              : recentMessages.slice(0, 12).map((m) => {
+                const from = agentNames.get(m.fromAgent) ?? m.fromAgent.slice(0, 8);
+                const to = agentNames.get(m.toAgent) ?? m.toAgent.slice(0, 8);
+                const content = (m.payload as Record<string, unknown>)?.content as string || JSON.stringify(m.payload);
+                return html`
+                  <div class="observer-message">
+                    <div class="observer-meta">
+                      <span>${from}</span>
+                      <span class="arrow">→</span>
+                      <span>${to}</span>
+                      <span class="msg-time">${timeAgo(m.createdAt)}</span>
+                    </div>
+                    <div class="observer-content">${content}</div>
+                  </div>
+                `;
+              })}
+          </div>
+          <div>
+            <div class="section-label">Rooms</div>
+            ${roomRows.length === 0
+              ? html`<p class="empty">No rooms yet.</p>`
+              : roomRows.map((room) => {
+                const members = memberRows.filter((member) => member.roomId === room.id);
+                const roomTasks = roomTaskRows.filter((task) => task.scope === `room:${room.id}`);
+                return html`
+                  <div class="room-observer">
+                    <div class="room-title">${room.name}</div>
+                    <div class="room-subtitle">${members.length} members &middot; ${roomTasks.filter((task) => task.status !== "done").length} open tasks</div>
+                    <div class="pill-row">
+                      ${members.map((member) => html`<span class="pill">${agentNames.get(member.agentId) ?? member.agentId.slice(0, 8)}</span>`)}
+                    </div>
+                    ${roomTasks.slice(0, 5).map((task) => html`
+                      <div class="task-line">
+                        <span class="task-status ${task.status}">${task.status}</span>
+                        <span>${task.title}</span>
+                      </div>
+                    `)}
+                  </div>
+                `;
+              })}
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="footer">
@@ -195,6 +285,10 @@ function timeAgo(date: Date): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function dashboardStyles() {
@@ -223,11 +317,30 @@ function dashboardStyles() {
     .msg-type { color: #666; min-width: 60px; }
     .msg-content { color: #ccc; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .msg-time { color: #444; min-width: 50px; text-align: right; }
+    .badge { display: inline-block; margin-left: 0.4rem; padding: 0.1rem 0.35rem; border: 1px solid #333; border-radius: 999px; color: #999; font-size: 0.65rem; text-transform: none; letter-spacing: 0; }
+    .observer-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr); gap: 1rem; }
+    .section-label { color: #777; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; }
+    .observer-message { padding: 0.75rem 0; border-bottom: 1px solid #1a1a1a; }
+    .observer-message:last-child { border-bottom: none; }
+    .observer-meta { display: flex; align-items: center; gap: 0.45rem; color: #888; font-size: 0.75rem; margin-bottom: 0.35rem; }
+    .observer-meta .msg-time { margin-left: auto; }
+    .arrow { color: #444; }
+    .observer-content { color: #ddd; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .room-observer { border: 1px solid #202020; border-radius: 8px; padding: 0.85rem; margin-bottom: 0.75rem; background: #101010; }
+    .room-title { color: #f5f5f5; font-size: 0.9rem; font-weight: 600; }
+    .room-subtitle { color: #666; font-size: 0.75rem; margin-top: 0.25rem; }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.65rem 0; }
+    .pill { border: 1px solid #2a2a2a; border-radius: 999px; padding: 0.2rem 0.45rem; color: #aaa; font-size: 0.72rem; }
+    .task-line { display: flex; gap: 0.5rem; align-items: center; color: #ccc; font-size: 0.78rem; padding-top: 0.35rem; }
+    .task-status { color: #888; min-width: 72px; }
+    .task-status.done { color: #4ade80; }
+    .task-status.blocked { color: #f87171; }
+    .task-status.in-progress { color: #facc15; }
     .footer { text-align: center; margin-top: 2rem; font-size: 0.75rem; color: #444; }
     .footer a { color: #666; text-decoration: none; }
     .footer a:hover { color: #999; }
     h2 { color: #fff; font-size: 1.1rem; margin-bottom: 0.5rem; }
-    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 760px) { .grid, .observer-grid { grid-template-columns: 1fr; } }
   `;
 }
 

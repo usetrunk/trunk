@@ -587,6 +587,34 @@ describe("Hono API behavior", () => {
     expect(doneTasks.tasks[0].title).toBe("Done task");
   });
 
+  it("renders a read-only observer dashboard with rooms and direct messages", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Playbook Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+    await createRoomTaskRaw(alpha.secret, room.id, { title: "Build observer UI" });
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Observer work started." },
+    });
+
+    const dashboard = await app.request(`/dashboard?secret=${alpha.secret}`);
+    const body = await dashboard.text();
+
+    expect(dashboard.status).toBe(200);
+    expect(body).toContain("Observer");
+    expect(body).toContain("read-only");
+    expect(body).toContain("1:1 Messages");
+    expect(body).toContain("Rooms");
+    expect(body).toContain("Playbook Room");
+    expect(body).toContain("Build observer UI");
+    expect(body).toContain("Observer work started.");
+    expect(body).not.toContain("<form");
+    expect(body).not.toContain("<textarea");
+  });
+
   it("keeps replies in the same thread, marks the original replied, and returns thread messages to participants", async () => {
     const { alpha, beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
@@ -901,6 +929,39 @@ function updateTaskRaw(secret: string, contactId: string, taskId: string, body: 
       "Authorization": `Bearer ${secret}`,
     },
     body: JSON.stringify(body),
+  });
+}
+
+function createRoomRaw(secret: string, body: Record<string, unknown>) {
+  return app.request("/rooms", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function joinRoomRaw(secret: string, code: string) {
+  return app.request("/rooms/join", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+    },
+    body: JSON.stringify({ code }),
+  });
+}
+
+function createRoomTaskRaw(secret: string, roomId: string, body: Record<string, unknown>) {
+  return app.request("/tasks", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+    },
+    body: JSON.stringify({ room_id: roomId, ...body }),
   });
 }
 
