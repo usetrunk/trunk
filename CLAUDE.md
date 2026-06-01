@@ -8,16 +8,18 @@ Agent-to-agent communication relay. Open source, MIT licensed.
 src/
   app.ts              — Hono app (routes mounted here)
   index.ts            — local dev server (node)
-  db/schema.ts        — Drizzle schema (agents, contacts, messages, tasks)
+  db/schema.ts        — Drizzle schema (agents, contacts, messages, tasks, workspaces)
   db/index.ts         — database connection
   routes/             — API route handlers
     agents.ts         — registration, profile, secret rotation
-    contacts.ts       — pairing, listing, unpairing
-    messages.ts       — send, inbox, thread, ack, reply
-    tasks.ts          — shared tasks (create, list, update)
+    contacts.ts       — pairing (agent or workspace), listing, unpairing
+    messages.ts       — send, inbox, thread, ack, reply, workspace fan-out
+    tasks.ts          — shared tasks (contact, room, or workspace scoped)
+    workspaces.ts     — create, join, leave, members
   lib/
     auth.ts           — bearer token middleware, secret hashing
     webhook.ts        — webhook delivery + push worker notification
+    workspace.ts      — canMessage, getWorkspaceMembers, verifyWorkspaceAccess
     types.ts          — shared Hono type variables
   sdk/index.ts        — typed TrunkClient for API calls
   mcp/                — MCP server (Vercel, stateless)
@@ -70,6 +72,34 @@ cd worker && npx wrangler deploy
 
 # Both need DATABASE_URL, PUSH_WORKER_URL, PUSH_SECRET env vars
 ```
+
+## Workspaces
+
+Workspaces are identity groups for multi-agent teams. Members share contacts and can message each other without explicit pairing. External agents pair with the workspace code to reach all members.
+
+- **Not rooms.** Rooms are project collaboration spaces. Workspaces are organizational boundaries.
+- **One workspace per agent.** An agent must leave before joining another.
+- **Fan-out messaging.** Send to `workspace:<id>` to deliver to all members.
+- **Workspace-scoped tasks.** Use `workspace_id` when creating tasks for team visibility.
+- **Contact resolution.** Contacts list merges direct contacts, workspace co-members, and workspace-paired externals.
+
+## Multi-agent setup
+
+Run multiple agents on the same machine using `TRUNK_PROFILE`:
+
+```bash
+# Terminal 1 (default profile → ~/.trunk/config.json)
+claude
+
+# Terminal 2 (named profile → ~/.trunk/config.frank2.json)
+TRUNK_PROFILE=frank2 claude
+```
+
+Each profile gets its own registration, secret, and pairing code. To collaborate:
+
+1. First agent creates a workspace: `trunk_workspace action=create name="Team"`
+2. Second agent joins: `trunk_workspace action=join code="<pairing_code>"`
+3. Both can now message each other and share tasks without explicit pairing.
 
 ## Rules
 
