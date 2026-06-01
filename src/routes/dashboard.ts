@@ -132,6 +132,8 @@ app.get("/", async (c) => {
     t.participants.add(m.fromAgent);
     if (m.createdAt > t.lastActivity) t.lastActivity = m.createdAt;
   }
+  const transcriptMessages = [...recentMessages].reverse();
+  const openRoomTasks = roomTaskRows.filter((task) => task.status !== "done");
 
   return c.html(html`<!DOCTYPE html>
 <html lang="en">
@@ -142,138 +144,145 @@ app.get("/", async (c) => {
   <style>${dashboardStyles()}</style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <div class="logo">trunk</div>
-      <div class="agent-name">${agent.name}</div>
-    </div>
-
-    <div class="grid">
-      <!-- Health -->
-      <div class="card">
-        <div class="card-title">Health</div>
-        <div class="stat-row">
-          <span class="stat-label">Status</span>
-          <span class="stat-value" style="color:#4ade80;">Connected</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-label">Pending messages</span>
-          <span class="stat-value">${pendingCount}</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-label">Pairing code</span>
-          <span class="stat-value mono">${agent.pairingCode}</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-label">Agent ID</span>
-          <span class="stat-value mono" style="font-size:0.7rem;">${agentId.slice(0, 12)}...</span>
-        </div>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="logo">trunk</div>
+        <div class="agent-name">${agent.name}</div>
       </div>
-
-      <!-- Contacts -->
-      <div class="card">
-        <div class="card-title">Contacts (${contactAgents.length})</div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Contacts</div>
         ${contactAgents.length === 0
-          ? html`<p class="empty">No contacts yet. Share your pairing code.</p>`
-          : contactAgents.map((ca) => html`
-            <div class="stat-row">
-              <span class="stat-label">${ca.name}</span>
-              <span class="stat-value">${ca.owner || ""}</span>
-            </div>
-          `)}
-      </div>
-
-      <!-- Active Threads -->
-      <div class="card wide">
-        <div class="card-title">Active Threads <a href="/dashboard/inbox?secret=${secret}" style="float:right;color:#7c6aef;font-size:0.7rem;text-decoration:none;text-transform:none;letter-spacing:0;font-weight:400;">View inbox →</a></div>
-        ${threads.size === 0
-          ? html`<p class="empty">No threads yet.</p>`
-          : Array.from(threads.entries()).slice(0, 10).map(([tid, t]) => html`
-            <a href="/dashboard/thread/${tid}?secret=${secret}" style="text-decoration:none;display:block;">
-              <div class="stat-row">
-                <span class="stat-label mono">${tid.slice(0, 12)}...</span>
-                <span class="stat-value">${t.count} msgs &middot; ${timeAgo(t.lastActivity)}</span>
-              </div>
-            </a>
-          `)}
-      </div>
-
-      <!-- Recent Messages -->
-      <div class="card wide">
-        <div class="card-title">Recent Messages</div>
-        ${recentMessages.length === 0
-          ? html`<p class="empty">No messages yet.</p>`
-          : recentMessages.slice(0, 10).map((m) => {
-            const direction = m.fromAgent === agentId ? "sent" : "received";
-            const content = (m.payload as Record<string, unknown>)?.content as string || "";
+          ? html`<div class="sidebar-empty">No contacts yet</div>`
+          : contactAgents.map((ca) => {
+            const contactMessages = recentMessages.filter((m) => m.fromAgent === ca.id || m.toAgent === ca.id).length;
             return html`
-              <div class="message-row">
-                <span class="msg-direction ${direction}">${direction === "sent" ? "→" : "←"}</span>
-                <span class="msg-type">${m.type}</span>
-                <span class="msg-content">${content.slice(0, 80)}${content.length > 80 ? "..." : ""}</span>
-                <span class="msg-time">${timeAgo(m.createdAt)}</span>
-              </div>
+              <a class="sidebar-item" href="/dashboard?secret=${secret}">
+                <span class="presence-dot"></span>
+                <span class="sidebar-main">${ca.name}</span>
+                <span class="sidebar-count">${contactMessages}</span>
+              </a>
             `;
           })}
       </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Rooms</div>
+        ${roomRows.length === 0
+          ? html`<div class="sidebar-empty">No rooms yet</div>`
+          : roomRows.map((room) => {
+            const members = memberRows.filter((member) => member.roomId === room.id);
+            const roomTasks = roomTaskRows.filter((task) => task.scope === `room:${room.id}` && task.status !== "done");
+            return html`
+              <a class="sidebar-item room" href="/dashboard?secret=${secret}">
+                <span class="room-hash">#</span>
+                <span class="sidebar-main">${room.name}</span>
+                <span class="sidebar-count">${roomTasks.length}</span>
+                <span class="sidebar-sub">${members.length} agents</span>
+              </a>
+            `;
+          })}
+      </div>
+      <div class="sidebar-footer">
+        <div class="sidebar-label">Pairing code</div>
+        <a class="pairing-code" href="https://trunk.bot/connect/${agent.pairingCode}">${agent.pairingCode}</a>
+      </div>
+    </aside>
 
-      <!-- Read-only Observer -->
-      <div class="card wide">
-        <div class="card-title">Observer <span class="badge">read-only</span></div>
-        <div class="observer-grid">
-          <div>
-            <div class="section-label">1:1 Messages</div>
-            ${recentMessages.length === 0
-              ? html`<p class="empty">No visible direct messages.</p>`
-              : recentMessages.slice(0, 12).map((m) => {
-                const from = agentNames.get(m.fromAgent) ?? m.fromAgent.slice(0, 8);
-                const to = agentNames.get(m.toAgent) ?? m.toAgent.slice(0, 8);
-                const content = (m.payload as Record<string, unknown>)?.content as string || JSON.stringify(m.payload);
-                return html`
-                  <div class="observer-message">
-                    <div class="observer-meta">
-                      <span>${from}</span>
-                      <span class="arrow">→</span>
-                      <span>${to}</span>
-                      <span class="msg-time">${timeAgo(m.createdAt)}</span>
-                    </div>
-                    <div class="observer-content">${content}</div>
-                  </div>
-                `;
-              })}
+    <main class="conversation-panel">
+      <header class="conversation-header">
+        <div>
+          <div class="eyebrow">Observer <span class="badge">read-only</span></div>
+          <h1>Agent coordination</h1>
+        </div>
+        <div class="health-strip">
+          <div><span>Connected</span><strong class="good">live</strong></div>
+          <div><span>Pending</span><strong>${pendingCount}</strong></div>
+          <div><span>Threads</span><strong>${threads.size}</strong></div>
+        </div>
+      </header>
+
+      <section class="conversation-body">
+        <div class="chat-stream">
+          <div class="stream-title">
+            <span>Messages</span>
+            <a href="/dashboard/inbox?secret=${secret}">Inbox</a>
           </div>
-          <div>
-            <div class="section-label">Rooms</div>
+          ${transcriptMessages.length === 0
+            ? html`<p class="empty">No visible direct messages.</p>`
+            : transcriptMessages.map((m) => {
+              const from = agentNames.get(m.fromAgent) ?? m.fromAgent.slice(0, 8);
+              const to = agentNames.get(m.toAgent) ?? m.toAgent.slice(0, 8);
+              const isMine = m.fromAgent === agentId;
+              const payload = m.payload as Record<string, unknown>;
+              const content = (payload.content as string) || JSON.stringify(m.payload);
+              const context = payload.context as string | undefined;
+              const finality = payload.finality as string | undefined;
+              return html`
+                <article class="chat-message ${isMine ? "mine" : "theirs"}">
+                  <div class="avatar">${initials(from)}</div>
+                  <div class="bubble">
+                    <div class="message-heading">
+                      <strong>${from}</strong>
+                      <span>to ${to}</span>
+                      <span>${m.type}</span>
+                      ${finality ? html`<span>${finality}</span>` : ""}
+                      <time>${timeAgo(m.createdAt)}</time>
+                    </div>
+                    <div class="message-copy">${content}</div>
+                    ${context ? html`<div class="message-context">${context}</div>` : ""}
+                  </div>
+                </article>
+              `;
+            })}
+        </div>
+
+        <aside class="context-rail">
+          <section class="rail-section">
+            <div class="rail-title">Rooms</div>
             ${roomRows.length === 0
               ? html`<p class="empty">No rooms yet.</p>`
               : roomRows.map((room) => {
                 const members = memberRows.filter((member) => member.roomId === room.id);
                 const roomTasks = roomTaskRows.filter((task) => task.scope === `room:${room.id}`);
                 return html`
-                  <div class="room-observer">
+                  <div class="room-card">
                     <div class="room-title">${room.name}</div>
-                    <div class="room-subtitle">${members.length} members &middot; ${roomTasks.filter((task) => task.status !== "done").length} open tasks</div>
+                    <div class="room-subtitle">${members.length} members, ${roomTasks.filter((task) => task.status !== "done").length} open tasks</div>
                     <div class="pill-row">
                       ${members.map((member) => html`<span class="pill">${agentNames.get(member.agentId) ?? member.agentId.slice(0, 8)}</span>`)}
                     </div>
-                    ${roomTasks.slice(0, 5).map((task) => html`
-                      <div class="task-line">
-                        <span class="task-status ${task.status}">${task.status}</span>
-                        <span>${task.title}</span>
-                      </div>
-                    `)}
                   </div>
                 `;
               })}
-          </div>
-        </div>
-      </div>
-    </div>
+          </section>
 
-    <div class="footer">
-      <a href="https://trunk.bot/connect/${agent.pairingCode}">Trunk link</a> &middot;
-      <a href="https://github.com/usetrunk/trunk">GitHub</a>
-    </div>
+          <section class="rail-section">
+            <div class="rail-title">Open room work</div>
+            ${openRoomTasks.length === 0
+              ? html`<p class="empty">No open room tasks.</p>`
+              : openRoomTasks.slice(0, 8).map((task) => html`
+                <div class="task-line">
+                  <span class="task-status ${task.status}">${task.status}</span>
+                  <span>${task.title}</span>
+                </div>
+              `)}
+          </section>
+
+          <section class="rail-section">
+            <div class="rail-title">Active threads</div>
+            ${threads.size === 0
+              ? html`<p class="empty">No threads yet.</p>`
+              : Array.from(threads.entries()).slice(0, 6).map(([tid, t]) => html`
+                <a class="thread-link" href="/dashboard/thread/${tid}?secret=${secret}">
+                  <span class="mono">${tid.slice(0, 8)}</span>
+                  <span>${t.count} msgs</span>
+                  <time>${timeAgo(t.lastActivity)}</time>
+                </a>
+              `)}
+          </section>
+        </aside>
+      </section>
+    </main>
   </div>
 </body>
 </html>`);
@@ -419,7 +428,7 @@ app.get("/inbox", async (c) => {
 });
 
 function timeAgo(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
@@ -432,10 +441,205 @@ function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("") || "?";
+}
+
 function dashboardStyles() {
   return `
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; min-height: 100vh; padding: 1.5rem; }
+    :root {
+      color-scheme: dark;
+      --bg: #080807;
+      --panel: #11110f;
+      --panel-2: #171714;
+      --line: #282820;
+      --muted: #8d8a7d;
+      --text: #f4f0e6;
+      --accent: #d5ff5f;
+      --accent-2: #64d2ff;
+      --danger: #ff7b72;
+      --good: #7ee787;
+    }
+    body {
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255,255,255,0.02) 1px, transparent 1px),
+        var(--bg);
+      background-size: 34px 34px;
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .app-shell { display: grid; grid-template-columns: 292px minmax(0, 1fr); min-height: 100vh; }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      padding: 1.25rem;
+      background: #0d0d0b;
+      border-right: 1px solid var(--line);
+      overflow-y: auto;
+    }
+    .brand-block { padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
+    .sidebar-section { display: grid; gap: 0.45rem; }
+    .sidebar-label, .rail-title {
+      color: #6f6b60;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .sidebar-item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 0.55rem;
+      min-height: 38px;
+      padding: 0.45rem 0.55rem;
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid transparent;
+      border-radius: 7px;
+    }
+    .sidebar-item:hover { background: #151511; border-color: var(--line); }
+    .sidebar-item.room { grid-template-columns: auto minmax(0, 1fr) auto; }
+    .sidebar-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
+    .sidebar-count {
+      min-width: 1.4rem;
+      padding: 0.1rem 0.35rem;
+      border: 1px solid #333329;
+      border-radius: 999px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 0.72rem;
+    }
+    .sidebar-sub { grid-column: 2 / 4; color: #646056; font-size: 0.72rem; }
+    .sidebar-empty { color: #5c584e; font-size: 0.84rem; padding: 0.45rem 0.55rem; }
+    .presence-dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--good); box-shadow: 0 0 12px rgba(126, 231, 135, 0.35); }
+    .room-hash { color: var(--accent-2); font-weight: 800; }
+    .sidebar-footer { margin-top: auto; display: grid; gap: 0.45rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+    .pairing-code { color: var(--accent); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.86rem; text-decoration: none; }
+    .conversation-panel { min-width: 0; display: flex; flex-direction: column; }
+    .conversation-header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 1.25rem 1.5rem;
+      background: rgba(8, 8, 7, 0.92);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow { color: var(--muted); font-size: 0.74rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+    h1 { font-size: clamp(1.35rem, 2vw, 2rem); line-height: 1.1; margin-top: 0.25rem; letter-spacing: 0; }
+    .health-strip { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #10100d; }
+    .health-strip div { min-width: 92px; padding: 0.55rem 0.7rem; border-left: 1px solid var(--line); }
+    .health-strip div:first-child { border-left: none; }
+    .health-strip span { display: block; color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .health-strip strong { display: block; margin-top: 0.18rem; font-size: 0.9rem; }
+    .good { color: var(--good); }
+    .conversation-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 0; min-height: 0; }
+    .chat-stream { min-width: 0; padding: 1.5rem; }
+    .stream-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; color: var(--muted); font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; }
+    .stream-title a, .thread-link { color: var(--accent-2); text-decoration: none; }
+    .chat-message {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .avatar {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #34342a;
+      border-radius: 8px;
+      background: #191913;
+      color: var(--accent);
+      font-size: 0.74rem;
+      font-weight: 800;
+    }
+    .bubble {
+      min-width: 0;
+      padding: 0.85rem 0.95rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(18, 18, 15, 0.92);
+    }
+    .chat-message.mine .bubble { border-left-color: var(--accent); }
+    .chat-message.theirs .bubble { border-left-color: var(--accent-2); }
+    .message-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+      color: var(--muted);
+      font-size: 0.74rem;
+      margin-bottom: 0.5rem;
+    }
+    .message-heading strong { color: var(--text); font-size: 0.86rem; }
+    .message-heading span:not(:first-child) {
+      padding: 0.1rem 0.35rem;
+      border: 1px solid #2d2d24;
+      border-radius: 999px;
+      color: #aaa596;
+    }
+    .message-heading time { margin-left: auto; color: #625e54; }
+    .message-copy { color: #eee9de; font-size: 0.94rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .message-context { margin-top: 0.65rem; padding-left: 0.75rem; border-left: 2px solid #333329; color: #a7a193; font-size: 0.84rem; line-height: 1.45; }
+    .context-rail {
+      border-left: 1px solid var(--line);
+      background: rgba(13, 13, 11, 0.72);
+      padding: 1.5rem 1rem;
+      display: grid;
+      align-content: start;
+      gap: 1rem;
+    }
+    .rail-section, .room-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(18, 18, 15, 0.8);
+      padding: 0.9rem;
+    }
+    .rail-section { display: grid; gap: 0.75rem; }
+    .room-title { color: var(--text); font-size: 0.92rem; font-weight: 700; }
+    .room-subtitle { color: var(--muted); font-size: 0.76rem; margin-top: 0.25rem; }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.65rem; }
+    .pill { border: 1px solid #333329; border-radius: 999px; padding: 0.2rem 0.45rem; color: #b7b09f; font-size: 0.72rem; }
+    .task-line {
+      display: grid;
+      grid-template-columns: 78px minmax(0, 1fr);
+      gap: 0.5rem;
+      color: #d8d2c4;
+      font-size: 0.8rem;
+      line-height: 1.35;
+    }
+    .task-status { color: var(--muted); }
+    .task-status.done { color: var(--good); }
+    .task-status.blocked { color: var(--danger); }
+    .task-status.in-progress { color: var(--accent); }
+    .thread-link {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.25rem 0.55rem;
+      padding: 0.45rem 0;
+      border-bottom: 1px solid #202019;
+      font-size: 0.8rem;
+    }
+    .thread-link time { grid-column: 1 / 3; color: var(--muted); font-size: 0.72rem; }
     .container { max-width: 960px; margin: 0 auto; }
     .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; }
     .logo { font-size: 1.25rem; font-weight: 700; color: #fff; }
@@ -472,7 +676,7 @@ function dashboardStyles() {
     .room-subtitle { color: #666; font-size: 0.75rem; margin-top: 0.25rem; }
     .pill-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.65rem 0; }
     .pill { border: 1px solid #2a2a2a; border-radius: 999px; padding: 0.2rem 0.45rem; color: #aaa; font-size: 0.72rem; }
-    .task-line { display: flex; gap: 0.5rem; align-items: center; color: #ccc; font-size: 0.78rem; padding-top: 0.35rem; }
+    .task-line { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 0.5rem; color: #d8d2c4; font-size: 0.8rem; line-height: 1.35; padding-top: 0.35rem; }
     .task-status { color: #888; min-width: 72px; }
     .task-status.done { color: #4ade80; }
     .task-status.blocked { color: #f87171; }
@@ -494,7 +698,20 @@ function dashboardStyles() {
     .thread-status { font-size: 0.65rem; color: #555; }
     .thread-msg-body { font-size: 0.9rem; line-height: 1.5; color: #ddd; white-space: pre-wrap; }
     .thread-msg-context { font-size: 0.8rem; color: #666; margin-top: 0.5rem; font-style: italic; }
-    @media (max-width: 760px) { .grid, .observer-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 980px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+      .conversation-header { position: static; align-items: flex-start; flex-direction: column; }
+      .conversation-body { grid-template-columns: 1fr; }
+      .context-rail { border-left: none; border-top: 1px solid var(--line); }
+    }
+    @media (max-width: 760px) {
+      .grid, .observer-grid { grid-template-columns: 1fr; }
+      .health-strip { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); }
+      .health-strip div { min-width: 0; }
+      .chat-stream, .conversation-header { padding-left: 1rem; padding-right: 1rem; }
+      .message-heading time { margin-left: 0; }
+    }
   `;
 }
 

@@ -608,7 +608,9 @@ describe("Hono API behavior", () => {
     expect(dashboard.status).toBe(200);
     expect(body).toContain("Observer");
     expect(body).toContain("read-only");
-    expect(body).toContain("1:1 Messages");
+    expect(body).toContain("Agent coordination");
+    expect(body).toContain("Contacts");
+    expect(body).toContain("Messages");
     expect(body).toContain("Rooms");
     expect(body).toContain("Playbook Room");
     expect(body).toContain("Build observer UI");
