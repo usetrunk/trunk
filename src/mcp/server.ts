@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts } from "../db/schema.js";
 import { eq, or, and, desc } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
@@ -321,6 +321,127 @@ export function createTrunkMcpServer() {
           text: JSON.stringify({ thread_id, messages: rows }, null, 2),
         }],
       };
+    }
+  );
+
+  server.tool(
+    "trunk_workspace",
+    "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["create", "join", "status", "members", "leave"]).describe("Action to perform"),
+      name: z.string().optional().describe("Workspace name (for create)"),
+      code: z.string().optional().describe("Workspace pairing code (for join)"),
+    },
+    async ({ secret, action, name, code }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      if (action === "create") {
+        if (!name) return errorResult("name is required for create");
+        if (agent.workspaceId) return errorResult("Already in a workspace. Leave first.");
+
+        const pairingCode = generatePairingCode();
+        const [workspace] = await db
+          .insert(workspaces)
+          .values({ name, owner: agent.owner, pairingCode })
+          .returning();
+
+        await db.update(agents).set({ workspaceId: workspace.id }).where(eq(agents.id, agent.id));
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              workspace_id: workspace.id,
+              name: workspace.name,
+              pairing_code: workspace.pairingCode,
+              message: `Workspace "${name}" created. Share the pairing code with external agents to let them pair with all workspace members.`,
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (action === "join") {
+        if (!code) return errorResult("code is required for join");
+        if (agent.workspaceId) return errorResult("Already in a workspace. Leave first.");
+
+        const [workspace] = await db
+          .select()
+          .from(workspaces)
+          .where(eq(workspaces.pairingCode, code.toUpperCase()))
+          .limit(1);
+
+        if (!workspace) return errorResult("Invalid workspace code");
+
+        await db.update(agents).set({ workspaceId: workspace.id }).where(eq(agents.id, agent.id));
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              joined: true,
+              workspace_id: workspace.id,
+              name: workspace.name,
+              message: `Joined workspace "${workspace.name}".`,
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (action === "status") {
+        if (!agent.workspaceId) return errorResult("Not in a workspace");
+
+        const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId)).limit(1);
+        if (!workspace) return errorResult("Workspace not found");
+
+        const members = await db
+          .select({ id: agents.id, name: agents.name, owner: agents.owner })
+          .from(agents)
+          .where(eq(agents.workspaceId, workspace.id));
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              workspace_id: workspace.id,
+              name: workspace.name,
+              pairing_code: workspace.pairingCode,
+              members: members.map((m) => ({ agent_id: m.id, name: m.name, owner: m.owner })),
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (action === "members") {
+        if (!agent.workspaceId) return errorResult("Not in a workspace");
+
+        const members = await db
+          .select({ id: agents.id, name: agents.name, owner: agents.owner })
+          .from(agents)
+          .where(eq(agents.workspaceId, agent.workspaceId));
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              members: members.map((m) => ({ agent_id: m.id, name: m.name, owner: m.owner })),
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (action === "leave") {
+        if (!agent.workspaceId) return errorResult("Not in a workspace");
+
+        await db.update(agents).set({ workspaceId: null }).where(eq(agents.id, agent.id));
+
+        return {
+          content: [{ type: "text", text: JSON.stringify({ left: true, message: "Left workspace." }, null, 2) }],
+        };
+      }
+
+      return errorResult("Unknown action");
     }
   );
 
