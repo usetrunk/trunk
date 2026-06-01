@@ -7,6 +7,8 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "echo 'skipping — vercel bundles api/ directly'",
     "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"
@@ -32,6 +34,7 @@
     "drizzle-kit": "^0.31.10",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   }
 }
