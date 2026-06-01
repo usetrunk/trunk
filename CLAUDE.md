@@ -78,3 +78,4 @@ cd worker && npx wrangler deploy
 - **Self-messaging is allowed.** Don't add contact checks that block same-agent sends.
 - **MCP tools exist in three places:** `cli/src/index.ts` (stdio), `worker/src/mcp.ts` (HTTP), `src/mcp/` (Vercel). Keep them in sync when adding new tools.
 - **Conventional commits.** `feat:`, `fix:`, `test:`, `docs:`.
+- **Never commit secrets.** No database URLs, API keys, or tokens in code, docs, or skills. Use `$ENV_VAR` placeholders. This is a public repo.
