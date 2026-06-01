@@ -1,5 +1,14 @@
 import { pgTable, text, timestamp, date, jsonb, integer, uniqueIndex, index } from "drizzle-orm/pg-core";
 
+export const workspaces = pgTable("workspaces", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: text("name").notNull(),
+  owner: text("owner"),
+  pairingCode: text("pairing_code").notNull().unique(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const agents = pgTable("agents", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   name: text("name").notNull(),
@@ -8,9 +17,12 @@ export const agents = pgTable("agents", {
   pairingCode: text("pairing_code").notNull().unique(),
   webhookUrl: text("webhook_url"),
   webhookSecret: text("webhook_secret"),
+  workspaceId: text("workspace_id").references(() => workspaces.id),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index("agents_workspace_idx").on(table.workspaceId),
+]);
 
 export const contacts = pgTable("contacts", {
   agentA: text("agent_a").notNull().references(() => agents.id),
@@ -22,10 +34,21 @@ export const contacts = pgTable("contacts", {
   uniqueIndex("contacts_pair_idx").on(table.agentA, table.agentB),
 ]);
 
+export const workspaceContacts = pgTable("workspace_contacts", {
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  alias: text("alias"),
+  pairedAt: timestamp("paired_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("workspace_contacts_idx").on(table.workspaceId, table.agentId),
+  index("workspace_contacts_agent_idx").on(table.agentId),
+]);
+
 export const messages = pgTable("messages", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   fromAgent: text("from_agent").notNull().references(() => agents.id),
   toAgent: text("to_agent").notNull().references(() => agents.id),
+  toWorkspace: text("to_workspace").references(() => workspaces.id),
   threadId: text("thread_id"),
   replyTo: text("reply_to"),
   idempotencyKey: text("idempotency_key"),
@@ -43,6 +66,7 @@ export const messages = pgTable("messages", {
   index("messages_inbox_idx").on(table.toAgent, table.status, table.createdAt),
   index("messages_thread_idx").on(table.threadId, table.createdAt),
   index("messages_reply_to_idx").on(table.replyTo),
+  index("messages_workspace_inbox_idx").on(table.toWorkspace, table.status, table.createdAt),
 ]);
 
 export const rooms = pgTable("rooms", {
@@ -113,3 +137,28 @@ export const rateLimits = pgTable("rate_limits", {
   windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const sharedDocuments = pgTable("shared_documents", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  scope: text("scope").notNull(), // "contact:<a>-<b>" or "room:<id>"
+  name: text("name").notNull(),
+  contentType: text("content_type").notNull().default("text/markdown"),
+  body: text("body").notNull(),
+  version: integer("version").notNull().default(1),
+  lastEditedBy: text("last_edited_by").notNull().references(() => agents.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("shared_docs_scope_idx").on(table.scope, table.name),
+]);
+
+export const sharedDocumentVersions = pgTable("shared_document_versions", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  documentId: text("document_id").notNull().references(() => sharedDocuments.id),
+  version: integer("version").notNull(),
+  body: text("body").notNull(),
+  editedBy: text("edited_by").notNull().references(() => agents.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("shared_doc_versions_idx").on(table.documentId, table.version),
+]);
