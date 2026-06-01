@@ -89,6 +89,13 @@ type AuditEventRow = {
   createdAt: Date;
 };
 
+type RateLimitRow = {
+  scope: string;
+  count: number;
+  windowStart: Date;
+  updatedAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -97,7 +104,8 @@ type TableName =
   | "rooms"
   | "room_members"
   | "shared_facts"
-  | "audit_events";
+  | "audit_events"
+  | "rate_limits";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -108,6 +116,7 @@ const testState = vi.hoisted(() => ({
   "room_members": [] as RoomMemberRow[],
   "shared_facts": [] as SharedFactRow[],
   "audit_events": [] as AuditEventRow[],
+  "rate_limits": [] as RateLimitRow[],
   idCounter: 0,
 }));
 
@@ -130,6 +139,7 @@ describe("Hono API behavior", () => {
     testState["room_members"].length = 0;
     testState["shared_facts"].length = 0;
     testState["audit_events"].length = 0;
+    testState["rate_limits"].length = 0;
     testState.idCounter = 0;
   });
 
@@ -677,6 +687,56 @@ describe("Hono API behavior", () => {
       value: "codex/playbook-implementation",
     });
   });
+
+  it("rate limits registrations to 10 per hour per IP", async () => {
+    for (let i = 0; i < 10; i += 1) {
+      const res = await app.request("/agents/register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-forwarded-for": "203.0.113.10",
+        },
+        body: JSON.stringify({ name: `agent-${i}` }),
+      });
+      expect(res.status).toBe(201);
+    }
+
+    const blocked = await app.request("/agents/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-forwarded-for": "203.0.113.10",
+      },
+      body: JSON.stringify({ name: "agent-blocked" }),
+    });
+
+    expect(blocked.status).toBe(429);
+    await expect(blocked.json()).resolves.toMatchObject({ error: "Rate limit exceeded" });
+  });
+
+  it("rate limits message sends to 60 per minute per agent", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 60; i += 1) {
+      const sent = await sendRaw(alphaClient, beta.agent_id, `send-${i}`, { content: `msg ${i}` });
+      expect(sent.status).toBe("delivered");
+    }
+
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const blocked = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${secret}`,
+        "Idempotency-Key": "send-blocked",
+      },
+      body: JSON.stringify({ to: beta.agent_id, type: "question", payload: { content: "too much" } }),
+    });
+
+    expect(blocked.status).toBe(429);
+    await expect(blocked.json()).resolves.toMatchObject({ error: "Rate limit exceeded" });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -893,6 +953,17 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "rate_limits") {
+      const row: RateLimitRow = {
+        scope: this.insertValues.scope as string,
+        count: (this.insertValues.count as number | undefined) ?? 0,
+        windowStart: (this.insertValues.windowStart as Date | undefined) ?? new Date(),
+        updatedAt: new Date(),
+      };
+      testState["rate_limits"].push(row);
+      return row;
+    }
+
     if (this.table === "tasks") {
       const row: TaskRow = {
         id: nextId("task"),
@@ -1022,7 +1093,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | AuditEventRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | AuditEventRow | RateLimitRow> {
   return testState[table];
 }
 
@@ -1044,7 +1115,8 @@ function getTableName(table: unknown): TableName {
     name === "rooms" ||
     name === "room_members" ||
     name === "shared_facts" ||
-    name === "audit_events"
+    name === "audit_events" ||
+    name === "rate_limits"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -1147,4 +1219,5 @@ const columnToProperty: Record<string, string> = {
   actor_agent: "actorAgent",
   target_type: "targetType",
   target_id: "targetId",
+  window_start: "windowStart",
 };

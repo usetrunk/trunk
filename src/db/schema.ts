@@ -104,3 +104,10 @@ export const auditEvents = pgTable("audit_events", {
   index("audit_events_actor_idx").on(table.actorAgent, table.createdAt),
   index("audit_events_target_idx").on(table.targetType, table.targetId),
 ]);
+
+export const rateLimits = pgTable("rate_limits", {
+  scope: text("scope").primaryKey(),
+  count: integer("count").notNull().default(0),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});

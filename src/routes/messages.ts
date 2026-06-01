@@ -6,6 +6,7 @@ import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
+import { checkRateLimit } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -28,6 +29,10 @@ app.post("/", async (c) => {
 
   if (!body.to || !body.type || !body.payload) {
     return c.json({ error: "to, type, and payload are required" }, 400);
+  }
+  const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
   const existing = await findIdempotentMessage(agentId, idempotencyKey);
@@ -188,6 +193,10 @@ app.post("/:id/reply", async (c) => {
 
   if (!original) {
     return c.json({ error: "Message not found" }, 404);
+  }
+  const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
   const existing = await findIdempotentMessage(agentId, idempotencyKey);

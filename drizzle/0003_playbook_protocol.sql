@@ -16,6 +16,13 @@ CREATE TABLE "shared_facts" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "rate_limits" (
+	"scope" text PRIMARY KEY NOT NULL,
+	"count" integer DEFAULT 0 NOT NULL,
+	"window_start" timestamp with time zone NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "reply_to" text;--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "idempotency_key" text;--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "delivered_at" timestamp with time zone;--> statement-breakpoint

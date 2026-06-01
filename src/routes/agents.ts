@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { authMiddleware, generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
+import { checkRateLimit } from "../lib/rate-limit.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -10,6 +11,11 @@ const app = new Hono<AgentVariables>();
 // Register a new agent
 app.post("/register", async (c) => {
   const body = await c.req.json<{ name: string; owner?: string; webhook_url?: string }>();
+  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || c.req.header("cf-connecting-ip") || "unknown";
+  const rateLimit = await checkRateLimit(`register:${ip}`, 10, 60 * 60 * 1000);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
 
   if (!body.name) {
     return c.json({ error: "name is required" }, 400);
