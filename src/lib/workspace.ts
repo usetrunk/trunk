@@ -1,3 +1,4 @@
+// Workspace identity groups for multi-agent teams
 import { db } from "../db/index.js";
 import { agents, contacts, workspaces, workspaceContacts } from "../db/schema.js";
 import { eq, or, and } from "drizzle-orm";
