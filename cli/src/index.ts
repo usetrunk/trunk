@@ -358,6 +358,46 @@ server.tool(
 );
 
 server.tool(
+  "trunk_workspace",
+  "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave.",
+  {
+    action: z.enum(["create", "join", "status", "members", "leave"]).describe("Action to perform"),
+    name: z.string().optional().describe("Workspace name (for create)"),
+    code: z.string().optional().describe("Workspace pairing code (for join)"),
+  },
+  async ({ action, name, code }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    if (action === "create") {
+      if (!name) return { content: [{ type: "text", text: "Error: name required for create" }], isError: true };
+      const result = await relay("/workspaces", { method: "POST", secret: config.secret, body: { name } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "join") {
+      if (!code) return { content: [{ type: "text", text: "Error: code required for join" }], isError: true };
+      const result = await relay("/workspaces/join", { method: "POST", secret: config.secret, body: { code } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "status") {
+      const result = await relay("/workspaces/me", { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "members") {
+      const ws = await relay("/workspaces/me", { secret: config.secret });
+      if (ws.error) return { content: [{ type: "text", text: `Error: ${ws.error}` }], isError: true };
+      const result = await relay(`/workspaces/${ws.workspace.id}/members`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "leave") {
+      const result = await relay("/workspaces/leave", { method: "POST", secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    return { content: [{ type: "text", text: "Unknown action" }], isError: true };
+  }
+);
+
+server.tool(
   "trunk_project",
   "Read .trunk file from a directory OR initialize one. Shows linked room, members, open tasks. Auto-joins the room.",
   {
