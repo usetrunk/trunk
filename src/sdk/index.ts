@@ -117,6 +117,7 @@ export type MessageReceipt = {
   thread_id: string;
   status: string;
   created_at: string | Date;
+  recipients?: number;
 };
 
 export type TrunkMessage = {
