@@ -1,0 +1,5 @@
+{
+  "name": "trunk-intercom-adapter",
+  "main": "index.ts",
+  "compatibility_date": "2025-06-01"
+}
