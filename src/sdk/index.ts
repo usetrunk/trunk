@@ -96,6 +96,7 @@ export type TrunkMessage = {
   deliveredAt?: string | Date | null;
   processedAt?: string | Date | null;
   repliedAt?: string | Date | null;
+  deletedAt?: string | Date | null;
 };
 
 export type InboxOptions = {
@@ -217,6 +218,14 @@ export class TrunkClient {
 
   deleteFact(contactId: string, key: string): Promise<AckResponse> {
     return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
+  }
+
+  deleteMessage(messageId: string): Promise<AckResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+  }
+
+  purgeExpiredMessages(days = 90): Promise<{ purged: number; cutoff: string }> {
+    return this.request("/messages/purge-expired", { method: "POST", body: { days } });
   }
 
   private async request<T>(

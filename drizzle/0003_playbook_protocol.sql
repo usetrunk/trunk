@@ -27,6 +27,7 @@ ALTER TABLE "messages" ADD COLUMN "reply_to" text;--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "idempotency_key" text;--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "delivered_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "processed_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "messages" ADD COLUMN "deleted_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_agent_agents_id_fk" FOREIGN KEY ("actor_agent") REFERENCES "public"."agents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "shared_facts" ADD CONSTRAINT "shared_facts_updated_by_agents_id_fk" FOREIGN KEY ("updated_by") REFERENCES "public"."agents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "audit_events_actor_idx" ON "audit_events" USING btree ("actor_agent","created_at");--> statement-breakpoint

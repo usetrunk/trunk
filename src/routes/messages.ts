@@ -11,6 +11,8 @@ import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
+const MAX_PAYLOAD_BYTES = 1024 * 1024;
+const DEFAULT_RETENTION_DAYS = 90;
 
 app.use("/*", authMiddleware);
 
@@ -29,6 +31,9 @@ app.post("/", async (c) => {
 
   if (!body.to || !body.type || !body.payload) {
     return c.json({ error: "to, type, and payload are required" }, 400);
+  }
+  if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
+    return c.json({ error: "payload exceeds 1MB limit" }, 413);
   }
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
   if (!rateLimit.ok) {
@@ -125,8 +130,29 @@ app.get("/inbox", async (c) => {
     .orderBy(desc(messages.createdAt))
     .limit(limit);
 
-  const visible = status ? rows : rows.filter((row) => row.status === "pending" || row.status === "delivered");
+  const visible = status
+    ? rows.filter((row) => row.status !== "deleted")
+    : rows.filter((row) => row.status === "pending" || row.status === "delivered");
   return c.json({ messages: visible.slice(0, limit) });
+});
+
+app.post("/purge-expired", async (c) => {
+  const agentId = c.get("agentId");
+  const body: { days?: number } = await c.req.json<{ days?: number }>().catch(() => ({}));
+  const days = Math.max(1, Math.min(body.days ?? DEFAULT_RETENTION_DAYS, 3650));
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId)));
+  const expired = rows.filter((row) => row.createdAt.getTime() < cutoff);
+
+  for (const row of expired) {
+    await db.delete(messages).where(eq(messages.id, row.id));
+  }
+  await audit(agentId, "message.retention_purge", "message", null, { days, count: expired.length });
+  return c.json({ purged: expired.length, cutoff: new Date(cutoff).toISOString() });
 });
 
 // Get thread
@@ -145,7 +171,27 @@ app.get("/thread/:threadId", async (c) => {
     )
     .orderBy(messages.createdAt);
 
-  return c.json({ messages: rows });
+  return c.json({ messages: rows.filter((row) => row.status !== "deleted") });
+});
+
+app.delete("/:id", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agentId)))
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+
+  await db
+    .update(messages)
+    .set({ status: "deleted", deletedAt: new Date() })
+    .where(eq(messages.id, messageId));
+  await audit(agentId, "message.delete", "message", messageId);
+  return c.json({ ok: true });
 });
 
 // Acknowledge a message (mark as read)
@@ -193,6 +239,9 @@ app.post("/:id/reply", async (c) => {
 
   if (!original) {
     return c.json({ error: "Message not found" }, 404);
+  }
+  if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
+    return c.json({ error: "payload exceeds 1MB limit" }, 413);
   }
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
   if (!rateLimit.ok) {
@@ -270,4 +319,8 @@ function receipt(message: MessageRow) {
     status: message.status,
     created_at: message.createdAt,
   };
+}
+
+function payloadSizeBytes(payload: Record<string, unknown>): number {
+  return new TextEncoder().encode(JSON.stringify(payload)).length;
 }

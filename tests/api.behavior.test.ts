@@ -39,6 +39,7 @@ type MessageRow = {
   deliveredAt?: Date | null;
   processedAt?: Date | null;
   repliedAt?: Date | null;
+  deletedAt?: Date | null;
 };
 
 type TaskRow = {
@@ -767,6 +768,66 @@ describe("Hono API behavior", () => {
       payload: { content: "Graph handoff" },
     });
   });
+
+  it("rejects message payloads larger than 1MB", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${secret}`,
+        "Idempotency-Key": "too-large",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "question",
+        payload: { content: "x".repeat(1024 * 1024 + 1) },
+      }),
+    });
+
+    expect(res.status).toBe(413);
+    await expect(res.json()).resolves.toMatchObject({ error: "payload exceeds 1MB limit" });
+  });
+
+  it("soft deletes only messages authored by the current agent", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "delete me" },
+    });
+
+    await expect(betaClient.deleteMessage(sent.id)).rejects.toMatchObject({ status: 404 });
+    await expect(alphaClient.deleteMessage(sent.id)).resolves.toEqual({ ok: true });
+    await expect(betaClient.thread(sent.thread_id)).resolves.toMatchObject({ messages: [] });
+  });
+
+  it("purges expired messages visible to the current agent", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const oldMessage = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "old" },
+    });
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "new" },
+    });
+    const row = testState.messages.find((message) => message.id === oldMessage.id);
+    expect(row).toBeDefined();
+    row!.createdAt = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000);
+
+    await expect(betaClient.purgeExpiredMessages(90)).resolves.toMatchObject({ purged: 1 });
+    const inbox = await betaClient.inbox();
+    expect(inbox.messages).toHaveLength(1);
+    expect(inbox.messages[0].payload).toMatchObject({ content: "new" });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -1054,6 +1115,7 @@ class InsertQuery {
       deliveredAt: null,
       processedAt: null,
       repliedAt: null,
+      deletedAt: null,
     };
     testState.messages.push(row);
     return row;
@@ -1239,6 +1301,7 @@ const columnToProperty: Record<string, string> = {
   delivered_at: "deliveredAt",
   processed_at: "processedAt",
   replied_at: "repliedAt",
+  deleted_at: "deletedAt",
   created_by: "createdBy",
   context_ref: "contextRef",
   updated_at: "updatedAt",
