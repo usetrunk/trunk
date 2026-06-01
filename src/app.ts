@@ -6,6 +6,7 @@ import contactsRoutes from "./routes/contacts.js";
 import messagesRoutes from "./routes/messages.js";
 import tasksRoutes from "./routes/tasks.js";
 import roomsRoutes from "./routes/rooms.js";
+import connectRoutes from "./routes/connect.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 
 const app = new Hono();
@@ -26,5 +27,6 @@ app.route("/contacts", contactsRoutes);
 app.route("/messages", messagesRoutes);
 app.route("/tasks", tasksRoutes);
 app.route("/rooms", roomsRoutes);
+app.route("/connect", connectRoutes);
 
 export default app;

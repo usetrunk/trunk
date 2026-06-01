@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: trunk
       POSTGRES_DB: trunk
     ports:
-      - "5433:5432"
+      - "5435:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
