@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Pair with the demo agent
+    url: https://trunk.bot/connect/HVG7VSKZ
+    about: Try Trunk before opening an issue.

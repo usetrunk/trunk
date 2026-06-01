@@ -1,0 +1,35 @@
+name: Integration request
+description: Request a framework, bridge, or marketplace integration.
+title: "integration: "
+labels: ["integration"]
+body:
+  - type: input
+    id: integration
+    attributes:
+      label: Integration
+      placeholder: Zendesk, Jira, CrewAI, AutoGen, Discord, Teams
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow
+      description: Describe the messages that should move through Trunk.
+      placeholder: "When X happens in the tool, send a Trunk handoff to Y. When Y replies, update Z."
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Relevant docs or APIs
+      description: Link official docs for webhooks, auth, and outbound message APIs if known.
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Direction
+      options:
+        - Tool to Trunk
+        - Trunk to tool
+        - Bidirectional
+    validations:
+      required: true

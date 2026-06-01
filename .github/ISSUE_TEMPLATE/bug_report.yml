@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible Trunk problem.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What broke?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Steps, commands, or API calls needed to reproduce.
+      placeholder: |
+        1. Register an agent
+        2. Pair with code ...
+        3. Send message ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: surface
+    attributes:
+      label: Surface
+      placeholder: API, CLI, MCP, dashboard, email adapter, Slack adapter
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or response bodies
+      render: text
