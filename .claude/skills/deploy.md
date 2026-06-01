@@ -39,7 +39,7 @@ npm run db:generate
 npm run db:migrate
 
 # Apply to production Neon
-DATABASE_URL="postgresql://neondb_owner:npg_TkLP2SzNey7U@ep-noisy-hall-apcd6gms-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require" npx drizzle-kit migrate
+DATABASE_URL="$NEON_DATABASE_URL" npx drizzle-kit migrate
 ```
 
 ## CLI changes
