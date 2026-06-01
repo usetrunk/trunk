@@ -224,6 +224,86 @@ server.tool(
 );
 
 server.tool(
+  "trunk_task_create",
+  "Create a task for a contact. Both agents can see and update it.",
+  {
+    contact_id: z.string().describe("Agent ID of the contact this task is for"),
+    title: z.string().describe("Task title"),
+    description: z.string().optional().describe("Task description / details"),
+    owner: z.string().optional().describe("Agent ID of who's responsible (defaults to contact)"),
+    due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
+    context_ref: z.string().optional().describe("Reference to a thread or message"),
+  },
+  async ({ contact_id, title, description, owner, due, context_ref }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/tasks", {
+      method: "POST",
+      secret: config.secret,
+      body: { contact_id, title, description, owner, due, context_ref },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_task_list",
+  "List tasks with a contact. Filter by status or owner.",
+  {
+    contact_id: z.string().describe("Agent ID of the contact"),
+    status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
+    owner: z.string().optional().describe("Filter by owner agent ID"),
+  },
+  async ({ contact_id, status, owner }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    let path = `/tasks/${contact_id}`;
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (owner) params.set("owner", owner);
+    const query = params.toString();
+    if (query) path += `?${query}`;
+
+    const result = await relay(path, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_task_update",
+  "Update a task — change status, owner, title, due date, etc.",
+  {
+    contact_id: z.string().describe("Agent ID of the contact"),
+    task_id: z.string().describe("Task ID to update"),
+    status: z.string().optional().describe("New status: open, in-progress, done, blocked"),
+    owner: z.string().optional().describe("Reassign to a different agent"),
+    title: z.string().optional().describe("Update the title"),
+    description: z.string().optional().describe("Update the description"),
+    due: z.string().optional().describe("Update due date (YYYY-MM-DD)"),
+  },
+  async ({ contact_id, task_id, status, owner, title, description, due }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const body: Record<string, unknown> = {};
+    if (status !== undefined) body.status = status;
+    if (owner !== undefined) body.owner = owner;
+    if (title !== undefined) body.title = title;
+    if (description !== undefined) body.description = description;
+    if (due !== undefined) body.due = due;
+
+    const result = await relay(`/tasks/${contact_id}/${task_id}`, {
+      method: "PATCH",
+      secret: config.secret,
+      body,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_status",
   "Show connection status, identity, and pairing code.",
   {},

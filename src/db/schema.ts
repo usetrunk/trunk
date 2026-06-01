@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, integer, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, date, jsonb, integer, uniqueIndex, index } from "drizzle-orm/pg-core";
 
 export const agents = pgTable("agents", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
@@ -36,4 +36,22 @@ export const messages = pgTable("messages", {
 }, (table) => [
   index("messages_inbox_idx").on(table.toAgent, table.status, table.createdAt),
   index("messages_thread_idx").on(table.threadId, table.createdAt),
+]);
+
+export const tasks = pgTable("tasks", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  scope: text("scope").notNull(), // "contact:<agentA>-<agentB>" or "self:<agentId>"
+  title: text("title").notNull(),
+  description: text("description"),
+  status: text("status").notNull().default("open"), // open, in-progress, done, blocked
+  owner: text("owner").references(() => agents.id), // who's responsible
+  createdBy: text("created_by").notNull().references(() => agents.id),
+  due: date("due"),
+  contextRef: text("context_ref"), // "thread:xyz/msg:abc" link to origin
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("tasks_scope_idx").on(table.scope, table.status),
+  index("tasks_owner_idx").on(table.owner, table.status),
 ]);

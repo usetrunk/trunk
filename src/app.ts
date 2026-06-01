@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import agentsRoutes from "./routes/agents.js";
 import contactsRoutes from "./routes/contacts.js";
 import messagesRoutes from "./routes/messages.js";
+import tasksRoutes from "./routes/tasks.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 
 const app = new Hono();
@@ -22,5 +23,6 @@ app.all("/mcp", (c) => handleMcpRequest(c.req.raw));
 app.route("/agents", agentsRoutes);
 app.route("/contacts", contactsRoutes);
 app.route("/messages", messagesRoutes);
+app.route("/tasks", tasksRoutes);
 
 export default app;

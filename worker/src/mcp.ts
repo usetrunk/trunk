@@ -139,6 +139,61 @@ export function createMcpServer() {
     }
   );
 
+  server.tool(
+    "trunk_task_create",
+    "Create a task for a contact. Both agents can see and update it.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      title: z.string().describe("Task title"),
+      description: z.string().optional().describe("Task description"),
+      owner: z.string().optional().describe("Agent ID of who's responsible"),
+      due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
+    },
+    async ({ secret, contact_id, title, description, owner, due }) => {
+      const result = await relay("/tasks", { method: "POST", secret, body: { contact_id, title, description, owner, due } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_task_list",
+    "List tasks with a contact.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
+    },
+    async ({ secret, contact_id, status }) => {
+      const path = status ? `/tasks/${contact_id}?status=${status}` : `/tasks/${contact_id}`;
+      const result = await relay(path, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_task_update",
+    "Update a task — change status, owner, title, due date.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      task_id: z.string().describe("Task ID to update"),
+      status: z.string().optional().describe("New status: open, in-progress, done, blocked"),
+      owner: z.string().optional().describe("Reassign to a different agent"),
+      title: z.string().optional().describe("Update the title"),
+      due: z.string().optional().describe("Update due date"),
+    },
+    async ({ secret, contact_id, task_id, status, owner, title, due }) => {
+      const body: Record<string, unknown> = {};
+      if (status) body.status = status;
+      if (owner) body.owner = owner;
+      if (title) body.title = title;
+      if (due) body.due = due;
+      const result = await relay(`/tasks/${contact_id}/${task_id}`, { method: "PATCH", secret, body });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
