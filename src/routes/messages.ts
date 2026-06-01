@@ -94,8 +94,8 @@ app.post("/", async (c) => {
     reply_to: body.reply_to,
   });
 
-  // Push notification (awaited — fast, single fetch to DO)
-  await notifyPushWorker(body.to, message);
+  // Push notification is best-effort. Durable inbox delivery must not depend on it.
+  await notifyRealtime(body.to, message);
 
   await db
     .update(messages)
@@ -287,7 +287,7 @@ app.post("/:id/reply", async (c) => {
     .limit(1);
 
   if (recipient) {
-    await notifyPushWorker(original.fromAgent, reply);
+    await notifyRealtime(original.fromAgent, reply);
     await db
       .update(messages)
       .set({ status: "delivered", deliveredAt: new Date() })
@@ -323,4 +323,15 @@ function receipt(message: MessageRow) {
 
 function payloadSizeBytes(payload: Record<string, unknown>): number {
   return new TextEncoder().encode(JSON.stringify(payload)).length;
+}
+
+async function notifyRealtime(agentId: string, message: MessageRow): Promise<void> {
+  try {
+    await notifyPushWorker(agentId, message);
+  } catch (error) {
+    await audit(message.fromAgent, "message.push_failed", "message", message.id, {
+      to: agentId,
+      error: error instanceof Error ? error.message : "unknown",
+    }).catch(() => {});
+  }
 }

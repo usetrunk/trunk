@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SQL } from "drizzle-orm";
 import app from "../src/app.js";
 import { createTrunkInboxNode, createTrunkSendNode } from "../src/adapters/langgraph.js";
+import { notifyPushWorker } from "../src/lib/webhook.js";
 import { TrunkApiError, TrunkClient, signWebhookPayload, verifyWebhookSignature, type RegisterResponse } from "../src/sdk/index.js";
 
 type AgentRow = {
@@ -144,6 +145,7 @@ describe("Hono API behavior", () => {
     testState["audit_events"].length = 0;
     testState["rate_limits"].length = 0;
     testState.idCounter = 0;
+    vi.clearAllMocks();
   });
 
   it("register returns agent_id, secret, and pairing_code", async () => {
@@ -684,6 +686,26 @@ describe("Hono API behavior", () => {
     expect(second).toMatchObject({ id: first.id, thread_id: first.thread_id });
     expect(inbox.messages).toHaveLength(1);
     expect(inbox.messages[0].payload).toMatchObject({ content: "once" });
+  });
+
+  it("keeps messages durable when real-time push fails", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    vi.mocked(notifyPushWorker).mockRejectedValueOnce(new Error("push worker down"));
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Still lands in inbox." },
+    });
+
+    expect(sent.status).toBe("delivered");
+    await expect(betaClient.inbox()).resolves.toMatchObject({
+      messages: [expect.objectContaining({ id: sent.id, payload: { content: "Still lands in inbox." } })],
+    });
+    expect(testState["audit_events"]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "message.push_failed", targetId: sent.id }),
+    ]));
   });
 
   it("stores shared facts through context CRUD for either contact", async () => {
