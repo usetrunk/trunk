@@ -5,9 +5,10 @@ import { z } from "zod";
 const RELAY_URL = "https://trunk.bot";
 
 // Proxy helper — calls the Vercel relay API
-async function relay(path: string, options: { method?: string; body?: unknown; secret?: string } = {}) {
+async function relay(path: string, options: { method?: string; body?: unknown; secret?: string; idempotencyKey?: string } = {}) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (options.secret) headers["Authorization"] = `Bearer ${options.secret}`;
+  if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
 
   const res = await fetch(`${RELAY_URL}${path}`, {
     method: options.method || "GET",
@@ -60,11 +61,13 @@ export function createMcpServer() {
       type: z.string().describe("Message type: question, decision, review, handoff, update, ack"),
       content: z.string().describe("Message content"),
       thread_id: z.string().optional().describe("Thread ID to continue a conversation"),
+      reply_to: z.string().optional().describe("Message ID this message replies to"),
+      idempotency_key: z.string().optional().describe("Optional stable key for retry-safe sends"),
       context: z.string().optional().describe("Background context for the recipient"),
       urgency: z.enum(["sync", "async"]).optional().describe("sync = need response soon, async = whenever"),
       finality: z.enum(["proposed", "decided", "fyi"]).optional().describe("Is this a proposal, decision, or FYI?"),
     },
-    async ({ secret, to, type, content, thread_id, context, urgency, finality }) => {
+    async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality }) => {
       const payload: Record<string, unknown> = { content };
       if (context) payload.context = context;
       if (urgency) payload.urgency = urgency;
@@ -73,7 +76,8 @@ export function createMcpServer() {
       const result = await relay("/messages", {
         method: "POST",
         secret,
-        body: { to, type, payload, thread_id },
+        idempotencyKey: idempotency_key ?? crypto.randomUUID(),
+        body: { to, type, payload, thread_id, reply_to },
       });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
@@ -101,16 +105,19 @@ export function createMcpServer() {
       message_id: z.string().describe("ID of the message you're replying to"),
       type: z.string().describe("Response type: question, decision, review, handoff, update, ack"),
       content: z.string().describe("Reply content"),
+      reply_to: z.string().optional().describe("Message ID this reply directly answers"),
+      idempotency_key: z.string().optional().describe("Optional stable key for retry-safe replies"),
       finality: z.enum(["proposed", "decided", "fyi"]).optional(),
     },
-    async ({ secret, message_id, type, content, finality }) => {
+    async ({ secret, message_id, type, content, reply_to, idempotency_key, finality }) => {
       const payload: Record<string, unknown> = { content };
       if (finality) payload.finality = finality;
 
       const result = await relay(`/messages/${message_id}/reply`, {
         method: "POST",
         secret,
-        body: { type, payload },
+        idempotencyKey: idempotency_key ?? crypto.randomUUID(),
+        body: { type, payload, reply_to },
       });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }

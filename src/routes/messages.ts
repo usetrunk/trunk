@@ -3,6 +3,9 @@ import { db } from "../db/index.js";
 import { agents, contacts, messages } from "../db/schema.js";
 import { eq, or, and, desc } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
+import { audit } from "../lib/audit.js";
+import { applyFactUpdates } from "../lib/context.js";
+import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -18,10 +21,18 @@ app.post("/", async (c) => {
     type: string;
     payload: Record<string, unknown>;
     thread_id?: string;
+    reply_to?: string;
   }>();
+  const idempotencyKey = requireIdempotencyKey(c);
+  if (idempotencyKey instanceof Response) return idempotencyKey;
 
   if (!body.to || !body.type || !body.payload) {
     return c.json({ error: "to, type, and payload are required" }, 400);
+  }
+
+  const existing = await findIdempotentMessage(agentId, idempotencyKey);
+  if (existing) {
+    return c.json(receipt(existing), 200);
   }
 
   // Allow self-messaging (same agent, different sessions/terminals)
@@ -50,6 +61,8 @@ app.post("/", async (c) => {
       fromAgent: agentId,
       toAgent: body.to,
       threadId: body.thread_id,
+      replyTo: body.reply_to,
+      idempotencyKey,
       type: body.type,
       payload: body.payload,
     })
@@ -64,8 +77,21 @@ app.post("/", async (c) => {
     message.threadId = message.id;
   }
 
+  await applyFactUpdates(agentId, body.to, body.payload.updates_facts);
+  await audit(agentId, "message.send", "message", message.id, {
+    to: body.to,
+    thread_id: message.threadId,
+    reply_to: body.reply_to,
+  });
+
   // Push notification (awaited — fast, single fetch to DO)
   await notifyPushWorker(body.to, message);
+
+  await db
+    .update(messages)
+    .set({ status: "delivered", deliveredAt: new Date() })
+    .where(eq(messages.id, message.id));
+  message.status = "delivered";
 
   // Deliver webhook (fire and forget — has retries/delays)
   const [recipient] = await db
@@ -78,28 +104,24 @@ app.post("/", async (c) => {
     deliverWebhook(message, recipient).catch(() => {});
   }
 
-  return c.json({
-    id: message.id,
-    thread_id: message.threadId,
-    status: message.status,
-    created_at: message.createdAt,
-  }, 201);
+  return c.json(receipt(message), 201);
 });
 
 // Get inbox (pending/unread messages)
 app.get("/inbox", async (c) => {
   const agentId = c.get("agentId");
-  const status = c.req.query("status") || "pending";
+  const status = c.req.query("status");
   const limit = Math.min(parseInt(c.req.query("limit") || "50"), 100);
 
   const rows = await db
     .select()
     .from(messages)
-    .where(and(eq(messages.toAgent, agentId), eq(messages.status, status)))
+    .where(status ? and(eq(messages.toAgent, agentId), eq(messages.status, status)) : eq(messages.toAgent, agentId))
     .orderBy(desc(messages.createdAt))
     .limit(limit);
 
-  return c.json({ messages: rows });
+  const visible = status ? rows : rows.filter((row) => row.status === "pending" || row.status === "delivered");
+  return c.json({ messages: visible.slice(0, limit) });
 });
 
 // Get thread
@@ -138,8 +160,9 @@ app.post("/:id/ack", async (c) => {
 
   await db
     .update(messages)
-    .set({ status: "read", readAt: new Date() })
+    .set({ status: "processed", readAt: new Date(), processedAt: new Date() })
     .where(eq(messages.id, messageId));
+  await audit(agentId, "message.ack", "message", messageId);
 
   return c.json({ ok: true });
 });
@@ -151,7 +174,10 @@ app.post("/:id/reply", async (c) => {
   const body = await c.req.json<{
     type: string;
     payload: Record<string, unknown>;
+    reply_to?: string;
   }>();
+  const idempotencyKey = requireIdempotencyKey(c);
+  if (idempotencyKey instanceof Response) return idempotencyKey;
 
   // Find original message
   const [original] = await db
@@ -164,10 +190,15 @@ app.post("/:id/reply", async (c) => {
     return c.json({ error: "Message not found" }, 404);
   }
 
+  const existing = await findIdempotentMessage(agentId, idempotencyKey);
+  if (existing) {
+    return c.json(receipt(existing), 200);
+  }
+
   // Mark original as replied
   await db
     .update(messages)
-    .set({ status: "replied", repliedAt: new Date() })
+    .set({ status: "replied", repliedAt: new Date(), readAt: original.readAt ?? new Date(), processedAt: new Date() })
     .where(eq(messages.id, messageId));
 
   // Send reply in same thread
@@ -177,10 +208,18 @@ app.post("/:id/reply", async (c) => {
       fromAgent: agentId,
       toAgent: original.fromAgent,
       threadId: original.threadId,
+      replyTo: body.reply_to ?? original.id,
+      idempotencyKey,
       type: body.type,
       payload: body.payload,
     })
     .returning();
+
+  await applyFactUpdates(agentId, original.fromAgent, body.payload.updates_facts);
+  await audit(agentId, "message.reply", "message", reply.id, {
+    original_message_id: original.id,
+    thread_id: original.threadId,
+  });
 
   // Deliver webhook
   const [recipient] = await db
@@ -190,15 +229,36 @@ app.post("/:id/reply", async (c) => {
     .limit(1);
 
   if (recipient) {
+    await notifyPushWorker(original.fromAgent, reply);
+    await db
+      .update(messages)
+      .set({ status: "delivered", deliveredAt: new Date() })
+      .where(eq(messages.id, reply.id));
+    reply.status = "delivered";
     deliverWebhook(reply, recipient).catch(() => {});
   }
 
-  return c.json({
-    id: reply.id,
-    thread_id: reply.threadId,
-    status: reply.status,
-    created_at: reply.createdAt,
-  }, 201);
+  return c.json(receipt(reply), 201);
 });
 
 export default app;
+
+type MessageRow = typeof messages.$inferSelect;
+
+async function findIdempotentMessage(agentId: string, idempotencyKey: string): Promise<MessageRow | undefined> {
+  const [existing] = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.fromAgent, agentId), eq(messages.idempotencyKey, idempotencyKey)))
+    .limit(1);
+  return existing;
+}
+
+function receipt(message: MessageRow) {
+  return {
+    id: message.id,
+    thread_id: message.threadId,
+    status: message.status,
+    created_at: message.createdAt,
+  };
+}

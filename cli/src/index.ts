@@ -36,9 +36,10 @@ function saveConfig(config: Config): void {
 
 // --- Relay API helper ---
 
-async function relay(path: string, opts: { method?: string; body?: unknown; secret?: string } = {}) {
+async function relay(path: string, opts: { method?: string; body?: unknown; secret?: string; idempotencyKey?: string } = {}) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.secret) headers["Authorization"] = `Bearer ${opts.secret}`;
+  if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
 
   const res = await fetch(`${RELAY_URL}${path}`, {
     method: opts.method || "GET",
@@ -135,11 +136,13 @@ server.tool(
     type: z.string().describe("Message type: question, decision, review, handoff, update, ack"),
     content: z.string().describe("Message content"),
     thread_id: z.string().optional().describe("Thread ID to continue a conversation"),
+    reply_to: z.string().optional().describe("Message ID this message replies to"),
+    idempotency_key: z.string().optional().describe("Optional stable key for retry-safe sends"),
     context: z.string().optional().describe("Background context"),
     urgency: z.enum(["sync", "async"]).optional(),
     finality: z.enum(["proposed", "decided", "fyi"]).optional(),
   },
-  async ({ to, type, content, thread_id, context, urgency, finality }) => {
+  async ({ to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -148,7 +151,12 @@ server.tool(
     if (urgency) payload.urgency = urgency;
     if (finality) payload.finality = finality;
 
-    const result = await relay("/messages", { method: "POST", secret: config.secret, body: { to, type, payload, thread_id } });
+    const result = await relay("/messages", {
+      method: "POST",
+      secret: config.secret,
+      idempotencyKey: idempotency_key ?? crypto.randomUUID(),
+      body: { to, type, payload, thread_id, reply_to },
+    });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
@@ -183,16 +191,23 @@ server.tool(
     message_id: z.string().describe("ID of the message to reply to"),
     type: z.string().describe("Response type"),
     content: z.string().describe("Reply content"),
+    reply_to: z.string().optional().describe("Message ID this reply directly answers"),
+    idempotency_key: z.string().optional().describe("Optional stable key for retry-safe replies"),
     finality: z.enum(["proposed", "decided", "fyi"]).optional(),
   },
-  async ({ message_id, type, content, finality }) => {
+  async ({ message_id, type, content, reply_to, idempotency_key, finality }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
     const payload: Record<string, unknown> = { content };
     if (finality) payload.finality = finality;
 
-    const result = await relay(`/messages/${message_id}/reply`, { method: "POST", secret: config.secret, body: { type, payload } });
+    const result = await relay(`/messages/${message_id}/reply`, {
+      method: "POST",
+      secret: config.secret,
+      idempotencyKey: idempotency_key ?? crypto.randomUUID(),
+      body: { type, payload, reply_to },
+    });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );

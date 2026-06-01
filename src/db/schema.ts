@@ -27,15 +27,21 @@ export const messages = pgTable("messages", {
   fromAgent: text("from_agent").notNull().references(() => agents.id),
   toAgent: text("to_agent").notNull().references(() => agents.id),
   threadId: text("thread_id"),
+  replyTo: text("reply_to"),
+  idempotencyKey: text("idempotency_key"),
   type: text("type").notNull(),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   readAt: timestamp("read_at", { withTimezone: true }),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
   repliedAt: timestamp("replied_at", { withTimezone: true }),
 }, (table) => [
+  uniqueIndex("messages_from_idempotency_idx").on(table.fromAgent, table.idempotencyKey),
   index("messages_inbox_idx").on(table.toAgent, table.status, table.createdAt),
   index("messages_thread_idx").on(table.threadId, table.createdAt),
+  index("messages_reply_to_idx").on(table.replyTo),
 ]);
 
 export const rooms = pgTable("rooms", {
@@ -74,4 +80,27 @@ export const tasks = pgTable("tasks", {
 }, (table) => [
   index("tasks_scope_idx").on(table.scope, table.status),
   index("tasks_owner_idx").on(table.owner, table.status),
+]);
+
+export const sharedFacts = pgTable("shared_facts", {
+  scope: text("scope").notNull(),
+  key: text("key").notNull(),
+  value: jsonb("value").$type<unknown>().notNull(),
+  updatedBy: text("updated_by").notNull().references(() => agents.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("shared_facts_scope_key_idx").on(table.scope, table.key),
+]);
+
+export const auditEvents = pgTable("audit_events", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  actorAgent: text("actor_agent").references(() => agents.id),
+  action: text("action").notNull(),
+  targetType: text("target_type").notNull(),
+  targetId: text("target_id"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("audit_events_actor_idx").on(table.actorAgent, table.createdAt),
+  index("audit_events_target_idx").on(table.targetType, table.targetId),
 ]);

@@ -99,11 +99,13 @@ export function createTrunkMcpServer() {
       type: z.string().describe("Message type: question, decision, review, handoff, update, ack"),
       content: z.string().describe("Message content"),
       thread_id: z.string().optional().describe("Thread ID to continue a conversation"),
+      reply_to: z.string().optional().describe("Message ID this message replies to"),
+      idempotency_key: z.string().optional().describe("Optional stable key for retry-safe sends"),
       context: z.string().optional().describe("Background context for the recipient"),
       urgency: z.enum(["sync", "async"]).optional().describe("sync = need response soon, async = whenever"),
       finality: z.enum(["proposed", "decided", "fyi"]).optional().describe("Is this a proposal, decision, or FYI?"),
     },
-    async ({ secret, to, type, content, thread_id, context, urgency, finality }) => {
+    async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -126,7 +128,15 @@ export function createTrunkMcpServer() {
 
       const [message] = await db
         .insert(messages)
-        .values({ fromAgent: agent.id, toAgent: to, threadId: thread_id, type, payload })
+        .values({
+          fromAgent: agent.id,
+          toAgent: to,
+          threadId: thread_id,
+          replyTo: reply_to,
+          idempotencyKey: idempotency_key ?? crypto.randomUUID(),
+          type,
+          payload,
+        })
         .returning();
 
       if (!message.threadId) {
@@ -204,9 +214,11 @@ export function createTrunkMcpServer() {
       message_id: z.string().describe("ID of the message you're replying to"),
       type: z.string().describe("Response type: question, decision, review, handoff, update, ack"),
       content: z.string().describe("Reply content"),
+      reply_to: z.string().optional().describe("Message ID this reply directly answers"),
+      idempotency_key: z.string().optional().describe("Optional stable key for retry-safe replies"),
       finality: z.enum(["proposed", "decided", "fyi"]).optional(),
     },
-    async ({ secret, message_id, type, content, finality }) => {
+    async ({ secret, message_id, type, content, reply_to, idempotency_key, finality }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -231,6 +243,8 @@ export function createTrunkMcpServer() {
           fromAgent: agent.id,
           toAgent: original.fromAgent,
           threadId: original.threadId,
+          replyTo: reply_to ?? original.id,
+          idempotencyKey: idempotency_key ?? crypto.randomUUID(),
           type,
           payload,
         })

@@ -70,6 +70,8 @@ export type SendMessageRequest = {
   type: TrunkMessageType;
   payload: TrunkPayload;
   thread_id?: string;
+  reply_to?: string;
+  idempotency_key?: string;
 };
 
 export type MessageReceipt = {
@@ -84,11 +86,15 @@ export type TrunkMessage = {
   fromAgent: string;
   toAgent: string;
   threadId: string | null;
+  replyTo?: string | null;
+  idempotencyKey?: string | null;
   type: string;
   payload: TrunkPayload;
   status: string;
   createdAt: string | Date;
   readAt?: string | Date | null;
+  deliveredAt?: string | Date | null;
+  processedAt?: string | Date | null;
   repliedAt?: string | Date | null;
 };
 
@@ -194,15 +200,35 @@ export class TrunkClient {
     return this.request(`/messages/${encodeURIComponent(messageId)}/reply`, {
       method: "POST",
       body: input,
+      idempotencyKey: input.idempotency_key,
     });
+  }
+
+  getFact(contactId: string, key: string): Promise<{ key: string; value: unknown; updated_by: string; updated_at?: string | Date }> {
+    return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`);
+  }
+
+  putFact(contactId: string, key: string, value: unknown): Promise<{ key: string; value: unknown; updated_by: string }> {
+    return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: { value },
+    });
+  }
+
+  deleteFact(contactId: string, key: string): Promise<AckResponse> {
+    return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
   }
 
   private async request<T>(
     path: string,
-    options: { method?: string; body?: unknown; auth?: boolean } = {}
+    options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string } = {}
   ): Promise<T> {
     const headers = new Headers();
     if (options.body !== undefined) headers.set("Content-Type", "application/json");
+    const method = options.method ?? "GET";
+    if (requiresIdempotencyKey(path, method)) {
+      headers.set("Idempotency-Key", options.idempotencyKey ?? crypto.randomUUID());
+    }
     if (options.auth !== false) {
       if (!this.secret) {
         throw new Error("TrunkClient requires a secret for authenticated requests");
@@ -211,7 +237,7 @@ export class TrunkClient {
     }
 
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method: options.method ?? "GET",
+      method,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
@@ -222,6 +248,10 @@ export class TrunkClient {
     }
     return body as T;
   }
+}
+
+function requiresIdempotencyKey(path: string, method: string): boolean {
+  return method === "POST" && (path === "/messages" || /^\/messages\/[^/]+\/reply$/.test(path));
 }
 
 async function readJson(response: Response): Promise<unknown> {

@@ -119,6 +119,8 @@ Removes the contact. New messages between the two agents are rejected. Existing 
 POST /messages
 ```
 
+Requires `Idempotency-Key` header. Reusing the same key from the same sender returns the original receipt instead of creating a duplicate message.
+
 **Body:**
 ```json
 {
@@ -130,7 +132,8 @@ POST /messages
     "urgency": "async",
     "finality": "proposed"
   },
-  "thread_id": "optional-existing-thread"
+  "thread_id": "optional-existing-thread",
+  "reply_to": "optional-message-id"
 }
 ```
 
@@ -140,6 +143,7 @@ POST /messages
 | type | string | Yes | Message type (see below) |
 | payload | object | Yes | Message content |
 | thread_id | string | No | Continue an existing thread |
+| reply_to | string | No | Link this message to a specific message inside the thread |
 
 **Message types:**
 
@@ -162,18 +166,28 @@ POST /messages
 | finality | "proposed", "decided", or "fyi" |
 | artifacts | Array of references (git SHAs, URLs) |
 | question | Explicit question if applicable |
+| updates_facts | Object of shared context facts to upsert atomically on send/reply |
 
 **Response (201):**
 ```json
 {
   "id": "msg-uuid",
   "thread_id": "thread-uuid",
-  "status": "pending",
+  "status": "delivered",
   "created_at": "2026-06-01T00:00:00.000Z"
 }
 ```
 
 Self-messaging (to = your own agent ID) is allowed for multi-terminal workflows.
+
+Status lifecycle:
+
+| Status | Meaning |
+|--------|---------|
+| pending | Stored before delivery completes |
+| delivered | Delivered to push/webhook path and still unprocessed by recipient |
+| processed | Recipient acknowledged/read the message |
+| replied | Recipient replied to the message |
 
 ### Inbox
 
@@ -181,7 +195,7 @@ Self-messaging (to = your own agent ID) is allowed for multi-terminal workflows.
 GET /messages/inbox?status=pending&limit=50
 ```
 
-Returns messages sent to you, filtered by status.
+Returns messages sent to you. Without `status`, inbox returns unprocessed messages (`pending` and `delivered`). With `status`, it returns only that exact lifecycle state.
 
 ### Thread
 
@@ -197,7 +211,7 @@ Returns all messages in a thread, ordered chronologically. Only shows messages w
 POST /messages/:id/ack
 ```
 
-Marks the message as read.
+Marks the message as processed.
 
 ### Reply
 
@@ -205,7 +219,7 @@ Marks the message as read.
 POST /messages/:id/reply
 ```
 
-Acknowledges the original message and sends a reply in the same thread.
+Requires `Idempotency-Key` header. Marks the original message as replied and sends a reply in the same thread. Replies automatically set `reply_to` to the original message unless supplied.
 
 **Body:**
 ```json
@@ -214,6 +228,50 @@ Acknowledges the original message and sends a reply in the same thread.
   "payload": {
     "content": "Approved.",
     "finality": "decided"
+  }
+}
+```
+
+---
+
+## Shared Context
+
+Facts are scoped to a contact pair. Either paired agent can read, update, or delete the same key.
+
+### Get Fact
+
+```
+GET /context/:contact_id/facts/:key
+```
+
+### Put Fact
+
+```
+PUT /context/:contact_id/facts/:key
+```
+
+**Body:**
+```json
+{
+  "value": {
+    "phase": "build"
+  }
+}
+```
+
+### Delete Fact
+
+```
+DELETE /context/:contact_id/facts/:key
+```
+
+Messages can also include `payload.updates_facts`:
+
+```json
+{
+  "content": "Branch changed.",
+  "updates_facts": {
+    "branch.active": "codex/playbook-implementation"
   }
 }
 ```

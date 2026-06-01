@@ -28,11 +28,15 @@ type MessageRow = {
   fromAgent: string;
   toAgent: string;
   threadId: string | null;
+  replyTo: string | null;
+  idempotencyKey: string | null;
   type: string;
   payload: Record<string, unknown>;
   status: string;
   createdAt: Date;
   readAt?: Date | null;
+  deliveredAt?: Date | null;
+  processedAt?: Date | null;
   repliedAt?: Date | null;
 };
 
@@ -67,7 +71,33 @@ type RoomMemberRow = {
   joinedAt: Date;
 };
 
-type TableName = "agents" | "contacts" | "messages" | "tasks" | "rooms" | "room_members";
+type SharedFactRow = {
+  scope: string;
+  key: string;
+  value: unknown;
+  updatedBy: string;
+  updatedAt: Date;
+};
+
+type AuditEventRow = {
+  id: string;
+  actorAgent: string | null;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
+type TableName =
+  | "agents"
+  | "contacts"
+  | "messages"
+  | "tasks"
+  | "rooms"
+  | "room_members"
+  | "shared_facts"
+  | "audit_events";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -76,6 +106,8 @@ const testState = vi.hoisted(() => ({
   tasks: [] as TaskRow[],
   rooms: [] as RoomRow[],
   "room_members": [] as RoomMemberRow[],
+  "shared_facts": [] as SharedFactRow[],
+  "audit_events": [] as AuditEventRow[],
   idCounter: 0,
 }));
 
@@ -96,6 +128,8 @@ describe("Hono API behavior", () => {
     testState.tasks.length = 0;
     testState.rooms.length = 0;
     testState["room_members"].length = 0;
+    testState["shared_facts"].length = 0;
+    testState["audit_events"].length = 0;
     testState.idCounter = 0;
   });
 
@@ -216,13 +250,13 @@ describe("Hono API behavior", () => {
     });
     const inbox = await betaClient.inbox();
 
-    expect(sent.status).toBe("pending");
+    expect(sent.status).toBe("delivered");
     expect(inbox.messages).toHaveLength(1);
     expect(inbox.messages[0]).toMatchObject({
       id: sent.id,
       threadId: sent.thread_id,
       type: "question",
-      status: "pending",
+      status: "delivered",
       payload: { content: "Review this API?" },
     });
   });
@@ -239,12 +273,13 @@ describe("Hono API behavior", () => {
     await expect(betaClient.ack(sent.id)).resolves.toEqual({ ok: true });
 
     await expect(betaClient.inbox()).resolves.toMatchObject({ messages: [] });
-    const readInbox = await betaClient.inbox({ status: "read" });
-    expect(readInbox.messages).toHaveLength(1);
-    expect(readInbox.messages[0]).toMatchObject({
+    const processedInbox = await betaClient.inbox({ status: "processed" });
+    expect(processedInbox.messages).toHaveLength(1);
+    expect(processedInbox.messages[0]).toMatchObject({
       id: sent.id,
-      status: "read",
+      status: "processed",
       readAt: expect.any(String),
+      processedAt: expect.any(String),
     });
   });
 
@@ -292,7 +327,7 @@ describe("Hono API behavior", () => {
       payload: { content: "Delegate this task to the developer session" },
     });
 
-    expect(sent.status).toBe("pending");
+    expect(sent.status).toBe("delivered");
     const inbox = await alphaClient.inbox();
     expect(inbox.messages).toHaveLength(1);
     expect(inbox.messages[0]).toMatchObject({
@@ -568,9 +603,79 @@ describe("Hono API behavior", () => {
         fromAgent: beta.agent_id,
         toAgent: alpha.agent_id,
         threadId: sent.thread_id,
-        status: "pending",
+        replyTo: sent.id,
+        status: "delivered",
       });
     }
+  });
+
+  it("requires Idempotency-Key for raw message sends", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const alpha = await alphaClient.me();
+
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${(alphaClient as unknown as { secret: string }).secret}`,
+      },
+      body: JSON.stringify({ to: beta.agent_id, type: "question", payload: { content: "missing key" } }),
+    });
+
+    expect(alpha.agent_id).toBeDefined();
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "Idempotency-Key header is required" });
+  });
+
+  it("deduplicates sends by Idempotency-Key for the same sender", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const first = await sendRaw(alphaClient, beta.agent_id, "fixed-send-key", { content: "once" });
+    const second = await sendRaw(alphaClient, beta.agent_id, "fixed-send-key", { content: "twice" });
+    const inbox = await betaClient.inbox({ status: "delivered" });
+
+    expect(second).toMatchObject({ id: first.id, thread_id: first.thread_id });
+    expect(inbox.messages).toHaveLength(1);
+    expect(inbox.messages[0].payload).toMatchObject({ content: "once" });
+  });
+
+  it("stores shared facts through context CRUD for either contact", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(alphaClient.putFact(beta.agent_id, "project.status", { phase: "build" })).resolves.toMatchObject({
+      key: "project.status",
+      value: { phase: "build" },
+      updated_by: alpha.agent_id,
+    });
+    await expect(betaClient.getFact(alpha.agent_id, "project.status")).resolves.toMatchObject({
+      key: "project.status",
+      value: { phase: "build" },
+    });
+    await expect(betaClient.deleteFact(alpha.agent_id, "project.status")).resolves.toEqual({ ok: true });
+    await expect(alphaClient.getFact(beta.agent_id, "project.status")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("applies updates_facts from message payloads to shared context", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: {
+        content: "Context changed.",
+        updates_facts: {
+          "branch.active": "codex/playbook-implementation",
+        },
+      },
+    });
+
+    await expect(betaClient.getFact(alpha.agent_id, "branch.active")).resolves.toMatchObject({
+      value: "codex/playbook-implementation",
+    });
   });
 });
 
@@ -619,6 +724,25 @@ function updateTaskRaw(secret: string, contactId: string, taskId: string, body: 
     },
     body: JSON.stringify(body),
   });
+}
+
+async function sendRaw(
+  client: TrunkClient,
+  to: string,
+  idempotencyKey: string,
+  payload: Record<string, unknown>
+): Promise<{ id: string; thread_id: string; status: string }> {
+  const secret = (client as unknown as { secret: string }).secret;
+  const res = await app.request("/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({ to, type: "question", payload }),
+  });
+  return res.json();
 }
 
 function createClient(secret?: string): TrunkClient {
@@ -788,16 +912,46 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "shared_facts") {
+      const row: SharedFactRow = {
+        scope: this.insertValues.scope as string,
+        key: this.insertValues.key as string,
+        value: this.insertValues.value,
+        updatedBy: this.insertValues.updatedBy as string,
+        updatedAt: new Date(),
+      };
+      testState["shared_facts"].push(row);
+      return row;
+    }
+
+    if (this.table === "audit_events") {
+      const row: AuditEventRow = {
+        id: nextId("audit"),
+        actorAgent: (this.insertValues.actorAgent as string | undefined) ?? null,
+        action: this.insertValues.action as string,
+        targetType: this.insertValues.targetType as string,
+        targetId: (this.insertValues.targetId as string | undefined) ?? null,
+        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        createdAt: new Date(),
+      };
+      testState["audit_events"].push(row);
+      return row;
+    }
+
     const row: MessageRow = {
       id: nextId("message"),
       fromAgent: this.insertValues.fromAgent as string,
       toAgent: this.insertValues.toAgent as string,
       threadId: (this.insertValues.threadId as string | undefined) ?? null,
+      replyTo: (this.insertValues.replyTo as string | undefined) ?? null,
+      idempotencyKey: (this.insertValues.idempotencyKey as string | undefined) ?? null,
       type: this.insertValues.type as string,
       payload: this.insertValues.payload as Record<string, unknown>,
       status: "pending",
       createdAt: new Date(Date.now() + testState.idCounter),
       readAt: null,
+      deliveredAt: null,
+      processedAt: null,
       repliedAt: null,
     };
     testState.messages.push(row);
@@ -868,7 +1022,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | AuditEventRow> {
   return testState[table];
 }
 
@@ -882,7 +1036,16 @@ function getTableName(table: unknown): TableName {
     (candidate) => candidate.description === "drizzle:Name"
   );
   const name = symbol ? (table as Record<symbol, string>)[symbol] : undefined;
-  if (name === "agents" || name === "contacts" || name === "messages" || name === "tasks" || name === "rooms" || name === "room_members") return name;
+  if (
+    name === "agents" ||
+    name === "contacts" ||
+    name === "messages" ||
+    name === "tasks" ||
+    name === "rooms" ||
+    name === "room_members" ||
+    name === "shared_facts" ||
+    name === "audit_events"
+  ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
 
@@ -968,7 +1131,11 @@ const columnToProperty: Record<string, string> = {
   from_agent: "fromAgent",
   to_agent: "toAgent",
   thread_id: "threadId",
+  reply_to: "replyTo",
+  idempotency_key: "idempotencyKey",
   read_at: "readAt",
+  delivered_at: "deliveredAt",
+  processed_at: "processedAt",
   replied_at: "repliedAt",
   created_by: "createdBy",
   context_ref: "contextRef",
@@ -976,4 +1143,8 @@ const columnToProperty: Record<string, string> = {
   room_id: "roomId",
   agent_id: "agentId",
   joined_at: "joinedAt",
+  updated_by: "updatedBy",
+  actor_agent: "actorAgent",
+  target_type: "targetType",
+  target_id: "targetId",
 };
