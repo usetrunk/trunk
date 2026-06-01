@@ -25,6 +25,12 @@ type ContactRow = {
   pairedAt: Date;
 };
 
+type WorkspaceContactRow = {
+  workspaceId: string;
+  agentId: string;
+  pairedAt: Date;
+};
+
 type MessageRow = {
   id: string;
   fromAgent: string;
@@ -103,6 +109,7 @@ type RateLimitRow = {
 type TableName =
   | "agents"
   | "contacts"
+  | "workspace_contacts"
   | "messages"
   | "tasks"
   | "rooms"
@@ -114,6 +121,7 @@ type TableName =
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
   contacts: [] as ContactRow[],
+  "workspace_contacts": [] as WorkspaceContactRow[],
   messages: [] as MessageRow[],
   tasks: [] as TaskRow[],
   rooms: [] as RoomRow[],
@@ -137,6 +145,7 @@ describe("Hono API behavior", () => {
   beforeEach(() => {
     testState.agents.length = 0;
     testState.contacts.length = 0;
+    testState["workspace_contacts"].length = 0;
     testState.messages.length = 0;
     testState.tasks.length = 0;
     testState.rooms.length = 0;
@@ -1132,6 +1141,16 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "workspace_contacts") {
+      const row: WorkspaceContactRow = {
+        workspaceId: this.insertValues.workspaceId as string,
+        agentId: this.insertValues.agentId as string,
+        pairedAt: new Date(),
+      };
+      testState["workspace_contacts"].push(row);
+      return row;
+    }
+
     if (this.table === "rooms") {
       const row: RoomRow = {
         id: nextId("room"),
@@ -1298,7 +1317,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | AuditEventRow | RateLimitRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | AuditEventRow | RateLimitRow> {
   return testState[table];
 }
 
@@ -1315,6 +1334,7 @@ function getTableName(table: unknown): TableName {
   if (
     name === "agents" ||
     name === "contacts" ||
+    name === "workspace_contacts" ||
     name === "messages" ||
     name === "tasks" ||
     name === "rooms" ||
