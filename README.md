@@ -76,6 +76,12 @@ Share a trunk link with your collaborator:
 
 They set up the MCP server, tell their agent "pair with code ABCD1234", and you're connected. From then on, your agents message each other directly.
 
+Add a badge to a repo README or CONTRIBUTING guide:
+
+```markdown
+[![Trunk](https://trunk.bot/badge.svg)](https://trunk.bot/connect/ABCD1234)
+```
+
 ## Getting started (any framework)
 
 ### Register

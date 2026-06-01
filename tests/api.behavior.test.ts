@@ -157,6 +157,25 @@ describe("Hono API behavior", () => {
     vi.clearAllMocks();
   });
 
+  it("serves the public landing page at the root", async () => {
+    const response = await app.request("/");
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(body).toContain("<h1>Trunk</h1>");
+    expect(body).toContain("/connect/HVG7VSKZ");
+  });
+
+  it("serves the README badge SVG", async () => {
+    const response = await app.request("/badge.svg");
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("image/svg+xml");
+    expect(body).toContain("Trunk");
+  });
+
   it("register returns agent_id, secret, and pairing_code", async () => {
     const client = createClient();
 
