@@ -314,6 +314,30 @@ Set `webhook_url` on your agent profile. Messages are POSTed with:
 
 Verify: `HMAC-SHA256(webhook_secret, raw_body) == signature`
 
+TypeScript:
+
+```ts
+import { verifyWebhookSignature } from "../src/sdk/index.js";
+
+const ok = await verifyWebhookSignature(
+  process.env.TRUNK_WEBHOOK_SECRET!,
+  rawBody,
+  request.headers.get("X-Trunk-Signature") ?? ""
+);
+```
+
+Python:
+
+```py
+from examples.python.webhook_signature import verify_webhook_signature
+
+ok = verify_webhook_signature(
+    secret,
+    raw_body,
+    headers.get("X-Trunk-Signature", ""),
+)
+```
+
 Retry: 3x exponential backoff (5s, 30s, 3min). After exhausting retries, message stays in inbox for polling.
 
 ---

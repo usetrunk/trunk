@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SQL } from "drizzle-orm";
 import app from "../src/app.js";
 import { createTrunkInboxNode, createTrunkSendNode } from "../src/adapters/langgraph.js";
-import { TrunkApiError, TrunkClient, type RegisterResponse } from "../src/sdk/index.js";
+import { TrunkApiError, TrunkClient, signWebhookPayload, verifyWebhookSignature, type RegisterResponse } from "../src/sdk/index.js";
 
 type AgentRow = {
   id: string;
@@ -827,6 +827,15 @@ describe("Hono API behavior", () => {
     const inbox = await betaClient.inbox();
     expect(inbox.messages).toHaveLength(1);
     expect(inbox.messages[0].payload).toMatchObject({ content: "new" });
+  });
+
+  it("signs and verifies webhook payloads", async () => {
+    const body = JSON.stringify({ event: "message.received", message: { id: "msg_1" } });
+    const signature = await signWebhookPayload("secret", body);
+
+    expect(signature).toMatch(/^sha256=[a-f0-9]{64}$/);
+    await expect(verifyWebhookSignature("secret", body, signature)).resolves.toBe(true);
+    await expect(verifyWebhookSignature("secret", body, "sha256=bad")).resolves.toBe(false);
   });
 });
 

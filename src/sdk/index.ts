@@ -272,3 +272,35 @@ async function readJson(response: Response): Promise<unknown> {
     return text;
   }
 }
+
+export async function signWebhookPayload(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  return `sha256=${bytesToHex(new Uint8Array(signature))}`;
+}
+
+export async function verifyWebhookSignature(secret: string, body: string, signature: string): Promise<boolean> {
+  const expected = await signWebhookPayload(secret, body);
+  return timingSafeEqual(expected, signature);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function timingSafeEqual(left: string, right: string): boolean {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  if (leftBytes.length !== rightBytes.length) return false;
+  let diff = 0;
+  for (let i = 0; i < leftBytes.length; i += 1) {
+    diff |= leftBytes[i] ^ rightBytes[i];
+  }
+  return diff === 0;
+}
