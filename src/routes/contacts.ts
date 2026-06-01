@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { agents, contacts } from "../db/schema.js";
 import { eq, or, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
+import { audit } from "../lib/audit.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -55,6 +56,7 @@ app.post("/pair", async (c) => {
     agentB: target.id,
     aliasA: body.alias,
   });
+  await audit(agentId, "contact.pair", "agent", target.id, { alias: body.alias });
 
   return c.json({
     contact_id: target.id,
@@ -113,6 +115,7 @@ app.delete("/:agentId", async (c) => {
         and(eq(contacts.agentA, targetId), eq(contacts.agentB, myId))
       )
     );
+  await audit(myId, "contact.unpair", "agent", targetId);
 
   return c.json({ ok: true });
 });

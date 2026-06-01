@@ -308,6 +308,10 @@ describe("Hono API behavior", () => {
         payload: { content: "Still there?" },
       })
     ).rejects.toMatchObject({ status: 403, message: "Not a contact. Pair first." });
+    expect(testState["audit_events"].map((event) => event.action)).toEqual([
+      "contact.pair",
+      "contact.unpair",
+    ]);
   });
 
   it("preserves explicit thread_id on send", async () => {

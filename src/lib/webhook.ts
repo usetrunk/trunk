@@ -1,6 +1,7 @@
 import { db } from "../db/index.js";
 import { agents, messages } from "../db/schema.js";
 import { eq } from "drizzle-orm";
+import { audit } from "./audit.js";
 
 async function hmacSign(secret: string, body: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -95,5 +96,9 @@ export async function deliverWebhook(
     .update(messages)
     .set({ status: "undelivered" })
     .where(eq(messages.id, message.id));
+  await audit(message.fromAgent, "message.delivery_failed", "message", message.id, {
+    to: message.toAgent,
+    webhook_url_configured: Boolean(recipient.webhookUrl),
+  });
   return false;
 }
