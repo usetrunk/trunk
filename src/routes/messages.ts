@@ -24,20 +24,23 @@ app.post("/", async (c) => {
     return c.json({ error: "to, type, and payload are required" }, 400);
   }
 
-  // Verify they're contacts
-  const contact = await db
-    .select()
-    .from(contacts)
-    .where(
-      or(
-        and(eq(contacts.agentA, agentId), eq(contacts.agentB, body.to)),
-        and(eq(contacts.agentA, body.to), eq(contacts.agentB, agentId))
+  // Allow self-messaging (same agent, different sessions/terminals)
+  // Otherwise verify they're contacts
+  if (body.to !== agentId) {
+    const contact = await db
+      .select()
+      .from(contacts)
+      .where(
+        or(
+          and(eq(contacts.agentA, agentId), eq(contacts.agentB, body.to)),
+          and(eq(contacts.agentA, body.to), eq(contacts.agentB, agentId))
+        )
       )
-    )
-    .limit(1);
+      .limit(1);
 
-  if (contact.length === 0) {
-    return c.json({ error: "Not a contact. Pair first." }, 403);
+    if (contact.length === 0) {
+      return c.json({ error: "Not a contact. Pair first." }, 403);
+    }
   }
 
   // Create message
