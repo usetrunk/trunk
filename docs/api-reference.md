@@ -329,12 +329,12 @@ const ok = await verifyWebhookSignature(
 Python:
 
 ```py
-from examples.python.webhook_signature import verify_webhook_signature
+from docs.examples.verify_webhook import verify_trunk_webhook
 
-ok = verify_webhook_signature(
-    secret,
-    raw_body,
+ok = verify_trunk_webhook(
     headers.get("X-Trunk-Signature", ""),
+    raw_body,
+    secret,
 )
 ```
 

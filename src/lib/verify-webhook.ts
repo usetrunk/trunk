@@ -26,7 +26,18 @@ export async function verifyTrunkWebhook(
   if (!signature || !signature.startsWith("sha256=")) return false;
 
   const expected = signature.slice(7);
+  const computed = (await signTrunkWebhook(rawBody, webhookSecret)).slice(7);
 
+  // Constant-time comparison
+  if (expected.length !== computed.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < expected.length; i++) {
+    mismatch |= expected.charCodeAt(i) ^ computed.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
+export async function signTrunkWebhook(rawBody: string, webhookSecret: string): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
@@ -40,12 +51,5 @@ export async function verifyTrunkWebhook(
   const computed = Array.from(new Uint8Array(sig))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-
-  // Constant-time comparison
-  if (expected.length !== computed.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < expected.length; i++) {
-    mismatch |= expected.charCodeAt(i) ^ computed.charCodeAt(i);
-  }
-  return mismatch === 0;
+  return `sha256=${computed}`;
 }
