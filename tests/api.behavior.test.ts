@@ -245,6 +245,156 @@ describe("Hono API behavior", () => {
     });
   });
 
+  it("allows self-messaging (same agent, different sessions)", async () => {
+    const alpha = await createClient().register({ name: "planner", owner: "Frank" });
+    const alphaClient = createClient(alpha.secret);
+
+    const sent = await alphaClient.send({
+      to: alpha.agent_id,
+      type: "handoff",
+      payload: { content: "Delegate this task to the developer session" },
+    });
+
+    expect(sent.status).toBe("pending");
+    const inbox = await alphaClient.inbox();
+    expect(inbox.messages).toHaveLength(1);
+    expect(inbox.messages[0]).toMatchObject({
+      fromAgent: alpha.agent_id,
+      toAgent: alpha.agent_id,
+      type: "handoff",
+      payload: { content: "Delegate this task to the developer session" },
+    });
+  });
+
+  it("multi-agent workflow: planner delegates to developer who reports back", async () => {
+    const anon = createClient();
+    const planner = await anon.register({ name: "Frank (planner)", owner: "Frank" });
+    const developer = await anon.register({ name: "Frank (developer)", owner: "Frank" });
+    const plannerClient = createClient(planner.secret);
+    const developerClient = createClient(developer.secret);
+
+    // Pair
+    await plannerClient.pair({ code: developer.pairing_code });
+
+    // Planner sends task
+    const task = await plannerClient.send({
+      to: developer.agent_id,
+      type: "handoff",
+      payload: { content: "Implement the webhook retry logic" },
+    });
+
+    // Developer sees it
+    const devInbox = await developerClient.inbox();
+    expect(devInbox.messages).toHaveLength(1);
+    expect(devInbox.messages[0].payload).toMatchObject({ content: "Implement the webhook retry logic" });
+
+    // Developer replies
+    const reply = await developerClient.reply(task.id, {
+      type: "update",
+      payload: { content: "Done — 3x exponential backoff, tested locally" },
+    });
+
+    // Same thread
+    expect(reply.thread_id).toBe(task.thread_id);
+
+    // Planner sees the reply
+    const plannerInbox = await plannerClient.inbox();
+    expect(plannerInbox.messages).toHaveLength(1);
+    expect(plannerInbox.messages[0]).toMatchObject({
+      fromAgent: developer.agent_id,
+      type: "update",
+      payload: { content: "Done — 3x exponential backoff, tested locally" },
+    });
+
+    // Thread has both messages
+    const thread = await plannerClient.thread(task.thread_id);
+    expect(thread.messages).toHaveLength(2);
+    expect(thread.messages[0].fromAgent).toBe(planner.agent_id);
+    expect(thread.messages[1].fromAgent).toBe(developer.agent_id);
+  });
+
+  it("three-agent coordination: planner, developer, reviewer", async () => {
+    const anon = createClient();
+    const planner = await anon.register({ name: "planner", owner: "Frank" });
+    const developer = await anon.register({ name: "developer", owner: "Frank" });
+    const reviewer = await anon.register({ name: "reviewer", owner: "Frank" });
+    const plannerClient = createClient(planner.secret);
+    const developerClient = createClient(developer.secret);
+    const reviewerClient = createClient(reviewer.secret);
+
+    // Pair all with each other
+    await plannerClient.pair({ code: developer.pairing_code });
+    await plannerClient.pair({ code: reviewer.pairing_code });
+    await developerClient.pair({ code: reviewer.pairing_code });
+
+    // Planner assigns work to developer
+    const task = await plannerClient.send({
+      to: developer.agent_id,
+      type: "handoff",
+      payload: { content: "Build the auth middleware" },
+    });
+
+    // Developer finishes and sends to reviewer
+    await developerClient.reply(task.id, {
+      type: "ack",
+      payload: { content: "On it" },
+    });
+    const reviewRequest = await developerClient.send({
+      to: reviewer.agent_id,
+      type: "review",
+      payload: { content: "Auth middleware PR ready for review" },
+    });
+
+    // Reviewer sees the review request
+    const reviewInbox = await reviewerClient.inbox();
+    expect(reviewInbox.messages).toHaveLength(1);
+    expect(reviewInbox.messages[0].type).toBe("review");
+
+    // Reviewer approves
+    const approval = await reviewerClient.reply(reviewRequest.id, {
+      type: "decision",
+      payload: { content: "LGTM, approved" },
+    });
+
+    // Developer sees approval
+    const devInbox = await developerClient.inbox();
+    const approvalMsg = devInbox.messages.find(m => m.type === "decision");
+    expect(approvalMsg).toBeDefined();
+    expect(approvalMsg!.payload).toMatchObject({ content: "LGTM, approved" });
+  });
+
+  it("messages between agents show sender identity clearly", async () => {
+    const anon = createClient();
+    const planner = await anon.register({ name: "Frank (planner)", owner: "Frank" });
+    const developer = await anon.register({ name: "Frank (developer)", owner: "Frank" });
+    const plannerClient = createClient(planner.secret);
+    const developerClient = createClient(developer.secret);
+    await plannerClient.pair({ code: developer.pairing_code });
+
+    await plannerClient.send({
+      to: developer.agent_id,
+      type: "question",
+      payload: { content: "Status?" },
+    });
+    await developerClient.send({
+      to: planner.agent_id,
+      type: "update",
+      payload: { content: "Almost done" },
+    });
+
+    // Each agent sees messages from the other with correct fromAgent
+    const devInbox = await developerClient.inbox();
+    expect(devInbox.messages[0].fromAgent).toBe(planner.agent_id);
+
+    const plannerInbox = await plannerClient.inbox();
+    expect(plannerInbox.messages[0].fromAgent).toBe(developer.agent_id);
+
+    // Can resolve names by looking up contacts
+    const devContacts = await developerClient.contacts();
+    const plannerContact = devContacts.contacts.find(c => c.agent_id === planner.agent_id);
+    expect(plannerContact?.name).toBe("Frank (planner)");
+  });
+
   it("reports missing auth and invalid tokens through SDK auth behavior", async () => {
     await createClient().register({ name: "alpha" });
 
