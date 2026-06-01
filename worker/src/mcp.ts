@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 
-const RELAY_URL = "https://trunk.vercel.app";
+const RELAY_URL = "https://trunk.bot";
 
 // Proxy helper — calls the Vercel relay API
 async function relay(path: string, options: { method?: string; body?: unknown; secret?: string } = {}) {

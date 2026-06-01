@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { sendNotification } from "./notify.js";
 
 const CONFIG_FILE = join(homedir(), ".trunk", "config.json");
-const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://trunk-push.koji-e6d.workers.dev";
+const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://push.trunk.bot";
 
 type Config = {
   agent_id: string;

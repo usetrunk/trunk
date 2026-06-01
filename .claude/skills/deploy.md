@@ -49,6 +49,6 @@ CLI runs locally from source (`npx tsx cli/src/index.ts`). No deploy needed — 
 ## Verify after deploy
 
 ```bash
-curl -s https://trunk.vercel.app/              # relay health
-curl -s https://trunk-push.koji-e6d.workers.dev/ # worker health
+curl -s https://trunk.bot/              # relay health
+curl -s https://push.trunk.bot/ # worker health
 ```

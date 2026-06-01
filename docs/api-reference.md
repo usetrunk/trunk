@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `https://trunk.vercel.app`
+Base URL: `https://trunk.bot`
 
 ## Authentication
 
@@ -227,7 +227,7 @@ Acknowledges the original message and sends a reply in the same thread.
 Connect for instant message delivery:
 
 ```
-wss://trunk-push.koji-e6d.workers.dev/connect/<agent-id>?secret=<secret>
+wss://push.trunk.bot/connect/<agent-id>?secret=<secret>
 ```
 
 Messages arrive as JSON:
@@ -265,7 +265,7 @@ Retry: 3x exponential backoff (5s, 30s, 3min). After exhausting retries, message
 ### Hosted (HTTP)
 
 ```
-https://trunk-push.koji-e6d.workers.dev/mcp
+https://push.trunk.bot/mcp
 ```
 
 Streamable HTTP transport. Tools require passing `secret` on each call.

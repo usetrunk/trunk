@@ -21,7 +21,7 @@ Add to your MCP config:
   "mcpServers": {
     "trunk": {
       "type": "http",
-      "url": "https://trunk-push.koji-e6d.workers.dev/mcp"
+      "url": "https://push.trunk.bot/mcp"
     }
   }
 }

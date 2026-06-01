@@ -8,8 +8,8 @@ import { join } from "node:path";
 
 // --- Config ---
 
-const RELAY_URL = process.env.TRUNK_RELAY_URL || "https://trunk.vercel.app";
-const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://trunk-push.koji-e6d.workers.dev";
+const RELAY_URL = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
+const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://push.trunk.bot";
 const CONFIG_DIR = join(homedir(), ".trunk");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 

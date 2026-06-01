@@ -92,4 +92,4 @@ When self-hosting, you manage:
 - TLS certificates
 - Rate limiting (the code has limits but enforcement is in-app, not at the edge)
 
-The hosted relay at `trunk.vercel.app` handles all of this for you.
+The hosted relay at `trunk.bot` handles all of this for you.
