@@ -51,13 +51,31 @@ type TaskRow = {
   updatedAt: Date;
 };
 
-type TableName = "agents" | "contacts" | "messages" | "tasks";
+type RoomRow = {
+  id: string;
+  name: string;
+  createdBy: string;
+  pairingCode: string;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
+type RoomMemberRow = {
+  roomId: string;
+  agentId: string;
+  role: string;
+  joinedAt: Date;
+};
+
+type TableName = "agents" | "contacts" | "messages" | "tasks" | "rooms" | "room_members";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
   contacts: [] as ContactRow[],
   messages: [] as MessageRow[],
   tasks: [] as TaskRow[],
+  rooms: [] as RoomRow[],
+  "room_members": [] as RoomMemberRow[],
   idCounter: 0,
 }));
 
@@ -76,6 +94,8 @@ describe("Hono API behavior", () => {
     testState.contacts.length = 0;
     testState.messages.length = 0;
     testState.tasks.length = 0;
+    testState.rooms.length = 0;
+    testState["room_members"].length = 0;
     testState.idCounter = 0;
   });
 
@@ -725,6 +745,30 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "rooms") {
+      const row: RoomRow = {
+        id: nextId("room"),
+        name: this.insertValues.name as string,
+        createdBy: this.insertValues.createdBy as string,
+        pairingCode: this.insertValues.pairingCode as string,
+        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        createdAt: new Date(),
+      };
+      testState.rooms.push(row);
+      return row;
+    }
+
+    if (this.table === "room_members") {
+      const row: RoomMemberRow = {
+        roomId: this.insertValues.roomId as string,
+        agentId: this.insertValues.agentId as string,
+        role: (this.insertValues.role as string) ?? "member",
+        joinedAt: new Date(),
+      };
+      testState["room_members"].push(row);
+      return row;
+    }
+
     if (this.table === "tasks") {
       const row: TaskRow = {
         id: nextId("task"),
@@ -824,7 +868,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow | TaskRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow> {
   return testState[table];
 }
 
@@ -838,7 +882,7 @@ function getTableName(table: unknown): TableName {
     (candidate) => candidate.description === "drizzle:Name"
   );
   const name = symbol ? (table as Record<symbol, string>)[symbol] : undefined;
-  if (name === "agents" || name === "contacts" || name === "messages" || name === "tasks") return name;
+  if (name === "agents" || name === "contacts" || name === "messages" || name === "tasks" || name === "rooms" || name === "room_members") return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
 
@@ -929,4 +973,7 @@ const columnToProperty: Record<string, string> = {
   created_by: "createdBy",
   context_ref: "contextRef",
   updated_at: "updatedAt",
+  room_id: "roomId",
+  agent_id: "agentId",
+  joined_at: "joinedAt",
 };

@@ -38,16 +38,36 @@ export const messages = pgTable("messages", {
   index("messages_thread_idx").on(table.threadId, table.createdAt),
 ]);
 
+export const rooms = pgTable("rooms", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: text("name").notNull(),
+  createdBy: text("created_by").notNull().references(() => agents.id),
+  pairingCode: text("pairing_code").notNull().unique(), // join code for the room
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const roomMembers = pgTable("room_members", {
+  roomId: text("room_id").notNull().references(() => rooms.id),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  role: text("role").notNull().default("member"), // creator, admin, member
+  joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("room_members_idx").on(table.roomId, table.agentId),
+  index("room_members_agent_idx").on(table.agentId),
+]);
+
 export const tasks = pgTable("tasks", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
-  scope: text("scope").notNull(), // "contact:<agentA>-<agentB>" or "self:<agentId>"
+  scope: text("scope").notNull(), // "contact:<a>-<b>", "room:<id>", or "self:<id>"
   title: text("title").notNull(),
   description: text("description"),
   status: text("status").notNull().default("open"), // open, in-progress, done, blocked
-  owner: text("owner").references(() => agents.id), // who's responsible
+  priority: text("priority").notNull().default("medium"), // critical, high, medium, low
+  owner: text("owner").references(() => agents.id),
   createdBy: text("created_by").notNull().references(() => agents.id),
   due: date("due"),
-  contextRef: text("context_ref"), // "thread:xyz/msg:abc" link to origin
+  contextRef: text("context_ref"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
