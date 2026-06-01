@@ -97,7 +97,7 @@ app.post("/", async (c) => {
         })
         .returning();
 
-      await notifyPushWorker(recipientId, message);
+      await notifyRealtime(recipientId, message);
       await db
         .update(messages)
         .set({ status: "delivered", deliveredAt: new Date() })

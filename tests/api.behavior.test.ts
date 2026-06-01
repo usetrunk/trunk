@@ -13,6 +13,7 @@ type AgentRow = {
   pairingCode: string;
   webhookUrl?: string | null;
   webhookSecret?: string | null;
+  workspaceId?: string | null;
   metadata: Record<string, unknown>;
   createdAt: Date;
 };
@@ -25,16 +26,11 @@ type ContactRow = {
   pairedAt: Date;
 };
 
-type WorkspaceContactRow = {
-  workspaceId: string;
-  agentId: string;
-  pairedAt: Date;
-};
-
 type MessageRow = {
   id: string;
   fromAgent: string;
   toAgent: string;
+  toWorkspace?: string | null;
   threadId: string | null;
   replyTo: string | null;
   idempotencyKey: string | null;
@@ -80,6 +76,22 @@ type RoomMemberRow = {
   joinedAt: Date;
 };
 
+type WorkspaceRow = {
+  id: string;
+  name: string;
+  owner: string | null;
+  pairingCode: string;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
+type WorkspaceContactRow = {
+  workspaceId: string;
+  agentId: string;
+  alias: string | null;
+  pairedAt: Date;
+};
+
 type SharedFactRow = {
   scope: string;
   key: string;
@@ -109,11 +121,12 @@ type RateLimitRow = {
 type TableName =
   | "agents"
   | "contacts"
-  | "workspace_contacts"
   | "messages"
   | "tasks"
   | "rooms"
   | "room_members"
+  | "workspaces"
+  | "workspace_contacts"
   | "shared_facts"
   | "audit_events"
   | "rate_limits";
@@ -121,11 +134,12 @@ type TableName =
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
   contacts: [] as ContactRow[],
-  "workspace_contacts": [] as WorkspaceContactRow[],
   messages: [] as MessageRow[],
   tasks: [] as TaskRow[],
   rooms: [] as RoomRow[],
   "room_members": [] as RoomMemberRow[],
+  workspaces: [] as WorkspaceRow[],
+  "workspace_contacts": [] as WorkspaceContactRow[],
   "shared_facts": [] as SharedFactRow[],
   "audit_events": [] as AuditEventRow[],
   "rate_limits": [] as RateLimitRow[],
@@ -145,11 +159,12 @@ describe("Hono API behavior", () => {
   beforeEach(() => {
     testState.agents.length = 0;
     testState.contacts.length = 0;
-    testState["workspace_contacts"].length = 0;
     testState.messages.length = 0;
     testState.tasks.length = 0;
     testState.rooms.length = 0;
     testState["room_members"].length = 0;
+    testState.workspaces.length = 0;
+    testState["workspace_contacts"].length = 0;
     testState["shared_facts"].length = 0;
     testState["audit_events"].length = 0;
     testState["rate_limits"].length = 0;
@@ -927,6 +942,210 @@ describe("Hono API behavior", () => {
     expect(inbox.messages[0].payload).toMatchObject({ content: "new" });
   });
 
+  // --- Workspace tests ---
+
+  it("creates a workspace and the creator auto-joins", async () => {
+    const alpha = await createClient().register({ name: "agent-1", owner: "Frank" });
+    const client = createClient(alpha.secret);
+
+    const ws = await client.createWorkspace({ name: "Frank Team" });
+
+    expect(ws.id).toEqual(expect.any(String));
+    expect(ws.name).toBe("Frank Team");
+    expect(ws.pairing_code).toMatch(/^[A-HJ-NP-Z2-9]{8}$/);
+
+    const info = await client.myWorkspace();
+    expect(info.workspace.id).toBe(ws.id);
+    expect(info.members).toHaveLength(1);
+    expect(info.members[0]).toMatchObject({ agent_id: alpha.agent_id, name: "agent-1" });
+  });
+
+  it("second agent joins workspace via pairing code", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "agent-1" });
+    const beta = await anon.register({ name: "agent-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Team" });
+    const joined = await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    expect(joined.joined).toBe(true);
+    expect(joined.workspace_id).toBe(ws.id);
+
+    const info = await alphaClient.myWorkspace();
+    expect(info.members).toHaveLength(2);
+  });
+
+  it("workspace members can message each other without explicit pairing", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "agent-1" });
+    const beta = await anon.register({ name: "agent-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "handoff",
+      payload: { content: "Workspace message" },
+    });
+
+    expect(sent.status).toBe("delivered");
+    const inbox = await betaClient.inbox();
+    expect(inbox.messages).toHaveLength(1);
+    expect(inbox.messages[0].payload).toMatchObject({ content: "Workspace message" });
+  });
+
+  it("external agent pairs with workspace and can message all members", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-member-1" });
+    const beta = await anon.register({ name: "ws-member-2" });
+    const external = await anon.register({ name: "external-agent" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const externalClient = createClient(external.secret);
+
+    // Create workspace, beta joins
+    const ws = await alphaClient.createWorkspace({ name: "Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // External agent pairs with the workspace
+    const paired = await externalClient.pair({ code: ws.pairing_code });
+    expect(paired.contact_type).toBe("workspace");
+    expect(paired.workspace_id).toBe(ws.id);
+
+    // External can message workspace members
+    const sent = await externalClient.send({
+      to: alpha.agent_id,
+      type: "question",
+      payload: { content: "Hello from outside" },
+    });
+    expect(sent.status).toBe("delivered");
+
+    const sent2 = await externalClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "Hello to member 2" },
+    });
+    expect(sent2.status).toBe("delivered");
+
+    // Workspace members can see external in contacts
+    const alphaContacts = await alphaClient.contacts();
+    const hasExternal = alphaContacts.contacts.some((c) => c.agent_id === external.agent_id);
+    expect(hasExternal).toBe(true);
+  });
+
+  it("workspace-addressed message fans out to all members", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "member-1" });
+    const beta = await anon.register({ name: "member-2" });
+    const external = await anon.register({ name: "outsider" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const externalClient = createClient(external.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+    await externalClient.pair({ code: ws.pairing_code });
+
+    // External sends to workspace — fans out to alpha and beta
+    const sent = await externalClient.send({
+      to: `workspace:${ws.id}`,
+      type: "update",
+      payload: { content: "Broadcast to team" },
+    });
+
+    expect(sent.status).toBe("delivered");
+    expect(sent.recipients).toBe(2);
+
+    const alphaInbox = await alphaClient.inbox();
+    const betaInbox = await betaClient.inbox();
+    expect(alphaInbox.messages).toHaveLength(1);
+    expect(betaInbox.messages).toHaveLength(1);
+    expect(alphaInbox.messages[0].payload).toMatchObject({ content: "Broadcast to team" });
+    expect(betaInbox.messages[0].payload).toMatchObject({ content: "Broadcast to team" });
+  });
+
+  it("workspace-scoped tasks are visible to all members", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "member-1" });
+    const beta = await anon.register({ name: "member-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Create workspace-scoped task
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({
+        workspace_id: ws.id,
+        title: "Implement workspaces",
+        description: "Add workspace support",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const task = await res.json();
+    expect(task.scope).toBe(`workspace:${ws.id}`);
+
+    // Both members can see it
+    const alphaView = await app.request(`/tasks/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const betaView = await app.request(`/tasks/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${beta.secret}` },
+    });
+
+    const alphaTasks = await alphaView.json();
+    const betaTasks = await betaView.json();
+    expect(alphaTasks.tasks).toHaveLength(1);
+    expect(betaTasks.tasks).toHaveLength(1);
+    expect(alphaTasks.tasks[0].title).toBe("Implement workspaces");
+  });
+
+  it("agent can leave a workspace", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "member-1" });
+    const beta = await anon.register({ name: "member-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await betaClient.leaveWorkspace();
+
+    // Beta can no longer see workspace
+    await expect(betaClient.myWorkspace()).rejects.toMatchObject({ status: 404 });
+
+    // Alpha still in workspace, now alone
+    const info = await alphaClient.myWorkspace();
+    expect(info.members).toHaveLength(1);
+  });
+
+  it("solo agents work exactly as before without workspaces", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "No workspace needed" },
+    });
+
+    expect(sent.status).toBe("delivered");
+    const inbox = await betaClient.inbox();
+    expect(inbox.messages).toHaveLength(1);
+  });
+
   it("signs and verifies webhook payloads", async () => {
     const body = JSON.stringify({ event: "message.received", message: { id: "msg_1" } });
     const signature = await signWebhookPayload("secret", body);
@@ -1141,6 +1360,7 @@ class InsertQuery {
         pairingCode: this.insertValues.pairingCode as string,
         webhookUrl: (this.insertValues.webhookUrl as string | undefined) ?? null,
         webhookSecret: (this.insertValues.webhookSecret as string | undefined) ?? null,
+        workspaceId: (this.insertValues.workspaceId as string | undefined) ?? null,
         metadata: {},
         createdAt: new Date(),
       };
@@ -1157,16 +1377,6 @@ class InsertQuery {
         pairedAt: new Date(),
       };
       testState.contacts.push(row);
-      return row;
-    }
-
-    if (this.table === "workspace_contacts") {
-      const row: WorkspaceContactRow = {
-        workspaceId: this.insertValues.workspaceId as string,
-        agentId: this.insertValues.agentId as string,
-        pairedAt: new Date(),
-      };
-      testState["workspace_contacts"].push(row);
       return row;
     }
 
@@ -1191,6 +1401,30 @@ class InsertQuery {
         joinedAt: new Date(),
       };
       testState["room_members"].push(row);
+      return row;
+    }
+
+    if (this.table === "workspaces") {
+      const row: WorkspaceRow = {
+        id: nextId("workspace"),
+        name: this.insertValues.name as string,
+        owner: (this.insertValues.owner as string | undefined) ?? null,
+        pairingCode: this.insertValues.pairingCode as string,
+        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        createdAt: new Date(),
+      };
+      testState.workspaces.push(row);
+      return row;
+    }
+
+    if (this.table === "workspace_contacts") {
+      const row: WorkspaceContactRow = {
+        workspaceId: this.insertValues.workspaceId as string,
+        agentId: this.insertValues.agentId as string,
+        alias: (this.insertValues.alias as string | undefined) ?? null,
+        pairedAt: new Date(),
+      };
+      testState["workspace_contacts"].push(row);
       return row;
     }
 
@@ -1255,6 +1489,7 @@ class InsertQuery {
       id: nextId("message"),
       fromAgent: this.insertValues.fromAgent as string,
       toAgent: this.insertValues.toAgent as string,
+      toWorkspace: (this.insertValues.toWorkspace as string | undefined) ?? null,
       threadId: (this.insertValues.threadId as string | undefined) ?? null,
       replyTo: (this.insertValues.replyTo as string | undefined) ?? null,
       idempotencyKey: (this.insertValues.idempotencyKey as string | undefined) ?? null,
@@ -1358,6 +1593,8 @@ function getTableName(table: unknown): TableName {
     name === "tasks" ||
     name === "rooms" ||
     name === "room_members" ||
+    name === "workspaces" ||
+    name === "workspace_contacts" ||
     name === "shared_facts" ||
     name === "audit_events" ||
     name === "rate_limits"
@@ -1466,4 +1703,6 @@ const columnToProperty: Record<string, string> = {
   target_type: "targetType",
   target_id: "targetId",
   window_start: "windowStart",
+  workspace_id: "workspaceId",
+  to_workspace: "toWorkspace",
 };

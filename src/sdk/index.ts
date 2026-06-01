@@ -51,9 +51,45 @@ export type PairRequest = {
 };
 
 export type PairResponse = {
-  contact_id: string;
-  name: string;
+  contact_id?: string;
+  name?: string;
+  contact_type: "agent" | "workspace";
+  workspace_id?: string;
+  workspace_name?: string;
+  members?: Array<{ agent_id: string; name: string; owner?: string | null }>;
   paired_at: string;
+};
+
+export type CreateWorkspaceRequest = {
+  name: string;
+  owner?: string;
+};
+
+export type WorkspaceResponse = {
+  id: string;
+  name: string;
+  owner?: string | null;
+  pairing_code: string;
+  created_at: string | Date;
+};
+
+export type WorkspaceJoinRequest = {
+  code: string;
+};
+
+export type WorkspaceJoinResponse = {
+  joined: boolean;
+  workspace_id: string;
+  name: string;
+};
+
+export type WorkspaceInfo = {
+  workspace: WorkspaceResponse;
+  members: Array<{ agent_id: string; name: string; owner?: string | null }>;
+};
+
+export type WorkspaceMembersResponse = {
+  members: Array<{ agent_id: string; name: string; owner?: string | null }>;
 };
 
 export type Contact = {
@@ -169,6 +205,26 @@ export class TrunkClient {
 
   pair(input: PairRequest): Promise<PairResponse> {
     return this.request("/contacts/pair", { method: "POST", body: input });
+  }
+
+  createWorkspace(input: CreateWorkspaceRequest): Promise<WorkspaceResponse> {
+    return this.request("/workspaces", { method: "POST", body: input });
+  }
+
+  joinWorkspace(input: WorkspaceJoinRequest): Promise<WorkspaceJoinResponse> {
+    return this.request("/workspaces/join", { method: "POST", body: input });
+  }
+
+  myWorkspace(): Promise<WorkspaceInfo> {
+    return this.request("/workspaces/me");
+  }
+
+  leaveWorkspace(): Promise<AckResponse> {
+    return this.request("/workspaces/leave", { method: "POST" });
+  }
+
+  workspaceMembers(workspaceId: string): Promise<WorkspaceMembersResponse> {
+    return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/members`);
   }
 
   contacts(): Promise<ContactsResponse> {
