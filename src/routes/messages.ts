@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { agents, contacts, messages } from "../db/schema.js";
 import { eq, or, and, desc } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
-import { deliverWebhook } from "../lib/webhook.js";
+import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -61,14 +61,17 @@ app.post("/", async (c) => {
     message.threadId = message.id;
   }
 
-  // Deliver webhook (fire and forget — don't block response)
+  // Push notification (awaited — fast, single fetch to DO)
+  await notifyPushWorker(body.to, message);
+
+  // Deliver webhook (fire and forget — has retries/delays)
   const [recipient] = await db
     .select()
     .from(agents)
     .where(eq(agents.id, body.to))
     .limit(1);
 
-  if (recipient) {
+  if (recipient?.webhookUrl) {
     deliverWebhook(message, recipient).catch(() => {});
   }
 

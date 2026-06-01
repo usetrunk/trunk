@@ -95,19 +95,19 @@ export class AgentConnection {
       const message = await request.json();
       const payload = JSON.stringify(message);
 
-      // Push to all connected WebSockets
+      // Use state.getWebSockets() directly — survives hibernation
+      const sockets = this.state.getWebSockets();
       let delivered = 0;
-      for (const ws of this.connections) {
+      for (const ws of sockets) {
         try {
           ws.send(payload);
           delivered++;
         } catch {
-          // Dead connection — will be cleaned up in webSocketClose
-          this.connections.delete(ws);
+          // Dead connection
         }
       }
 
-      return new Response(JSON.stringify({ delivered, total_connections: this.connections.size }), {
+      return new Response(JSON.stringify({ delivered, total_connections: sockets.length }), {
         headers: { "Content-Type": "application/json" },
       });
     }

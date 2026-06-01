@@ -16,7 +16,7 @@ async function hmacSign(secret: string, body: string): Promise<string> {
 }
 
 // Notify the push worker (Cloudflare DO) for real-time delivery
-async function notifyPushWorker(agentId: string, message: typeof messages.$inferSelect) {
+export async function notifyPushWorker(agentId: string, message: typeof messages.$inferSelect) {
   const pushUrl = process.env.PUSH_WORKER_URL;
   const pushSecret = process.env.PUSH_SECRET;
   if (!pushUrl || !pushSecret) return;
