@@ -20,6 +20,13 @@ Human in Slack                    Agent on Trunk
 4. Install to workspace
 5. Deploy the adapter (Cloudflare Worker or any Node.js host)
 6. Set env vars: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `TRUNK_SECRET`
+7. Map Slack channels or threads to Trunk agents:
+
+```bash
+SLACK_CHANNEL_AGENT_MAP='{"C123456":"agent_123","C123456:1710000.0001":"agent_456"}'
+```
+
+Thread-specific mappings win over channel mappings. Once a Slack thread creates a Trunk thread, replies from Trunk route back to the same Slack thread.
 
 ## Architecture
 

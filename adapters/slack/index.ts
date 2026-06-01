@@ -15,15 +15,20 @@ const TRUNK_RELAY = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
 const TRUNK_SECRET = process.env.TRUNK_AGENT_SECRET || "";
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const SLACK_SIGNING = process.env.SLACK_SIGNING_SECRET || "";
+const SLACK_CHANNEL_AGENT_MAP = parseJsonMap(process.env.SLACK_CHANNEL_AGENT_MAP);
+
+const slackToTrunkThread = new Map<string, string>();
+const trunkToSlackThread = new Map<string, { channel: string; threadTs: string }>();
 
 // --- Trunk API helpers ---
 
 async function trunkSend(to: string, type: string, content: string, threadId?: string) {
-  return fetch(`${TRUNK_RELAY}/messages`, {
+  const res = await fetch(`${TRUNK_RELAY}/messages`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${TRUNK_SECRET}`,
+      "Idempotency-Key": crypto.randomUUID(),
     },
     body: JSON.stringify({
       to,
@@ -32,6 +37,8 @@ async function trunkSend(to: string, type: string, content: string, threadId?: s
       thread_id: threadId,
     }),
   });
+  if (!res.ok) return null;
+  return res.json() as Promise<{ id: string; thread_id: string; status: string }>;
 }
 
 async function trunkInbox() {
@@ -117,13 +124,17 @@ export async function handleSlackEvent(request: Request): Promise<Response> {
     const text = event.event.text.replace(/<@[A-Z0-9]+>/g, "").trim();
     const channel = event.event.channel;
     const threadTs = event.event.thread_ts || event.event.ts;
+    const slackThreadKey = slackKey(channel, threadTs);
 
-    // TODO: resolve which Trunk agent to send to based on channel mapping
-    // For now, this is a placeholder — you'd store channel→agent mappings
-    const targetAgent = ""; // Set this based on your pairing
+    const targetAgent = resolveSlackTarget(channel, threadTs);
 
     if (targetAgent) {
-      await trunkSend(targetAgent, "question", text);
+      const existingThread = slackToTrunkThread.get(slackThreadKey);
+      const receipt = await trunkSend(targetAgent, "question", text, existingThread);
+      if (receipt) {
+        slackToTrunkThread.set(slackThreadKey, receipt.thread_id);
+        trunkToSlackThread.set(receipt.thread_id, { channel, threadTs });
+      }
     }
 
     return new Response("ok");
@@ -142,15 +153,38 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
 
   if (body.event === "message.received") {
     const content = body.message.payload.content || "(no content)";
+    const destination = trunkToSlackThread.get(body.message.threadId);
 
-    // TODO: resolve which Slack channel to post to based on thread/contact mapping
-    const channel = ""; // Set this based on your mapping
-
-    if (channel) {
-      await slackPost(channel, content);
+    if (destination) {
+      await slackPost(destination.channel, content, destination.threadTs);
       await trunkAck(body.message.id);
     }
   }
 
   return new Response("ok");
+}
+
+export function resolveSlackTarget(
+  channel: string,
+  threadTs?: string,
+  channelMap: Record<string, string> = SLACK_CHANNEL_AGENT_MAP
+): string {
+  if (threadTs) {
+    const threadTarget = channelMap[slackKey(channel, threadTs)];
+    if (threadTarget) return threadTarget;
+  }
+  return channelMap[channel] || "";
+}
+
+function slackKey(channel: string, threadTs: string): string {
+  return `${channel}:${threadTs}`;
+}
+
+function parseJsonMap(value: string | undefined): Record<string, string> {
+  if (!value) return {};
+  try {
+    return JSON.parse(value) as Record<string, string>;
+  } catch {
+    return {};
+  }
 }

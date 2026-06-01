@@ -19,7 +19,8 @@ const INTERCOM_SECRET = process.env.INTERCOM_WEBHOOK_SECRET || "";
 const ESCALATION_AGENT = process.env.ESCALATION_AGENT_ID || "";
 
 // --- Conversation ↔ Thread mapping ---
-// In production: KV, D1, or DB. In-memory for skeleton.
+// Single-worker deployments can keep the active conversation map in memory.
+// Multi-instance deployments should back this with KV, D1, or the relay DB.
 const conversationToThread = new Map<string, string>();
 const threadToConversation = new Map<string, string>();
 

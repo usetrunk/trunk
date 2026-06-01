@@ -28,6 +28,12 @@ Human receives reply with "Sent with Trunk" footer
 4. Pair with target agents
 5. Map email addresses → Trunk agent IDs
 
+```bash
+EMAIL_AGENT_MAP='{"agent@trunk.bot":"agent_123"}'
+```
+
+Inbound webhooks can also pass `?agent=agent_123` as an explicit override. Replies from Trunk are routed back to the original email sender for the thread.
+
 ## Architecture
 
 The adapter is a Trunk agent that translates between email and structured messages.

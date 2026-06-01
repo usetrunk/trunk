@@ -18,12 +18,14 @@ const TRUNK_SECRET = process.env.TRUNK_AGENT_SECRET || "";
 const FROM_EMAIL = process.env.FROM_EMAIL || "agent@trunk.bot";
 const PAIRING_CODE = process.env.AGENT_PAIRING_CODE || "";
 const SENDGRID_KEY = process.env.SENDGRID_API_KEY || "";
+const EMAIL_AGENT_MAP = parseJsonMap(process.env.EMAIL_AGENT_MAP);
 
 // --- Email → Trunk thread mapping ---
 
-// In production, store in KV/D1/DB. In-memory for skeleton.
 const threadMap = new Map<string, string>(); // email Message-ID → Trunk thread_id
 const reverseThreadMap = new Map<string, string>(); // Trunk thread_id → email Message-ID
+const threadRecipients = new Map<string, string>(); // Trunk thread_id → original human sender
+const threadSubjects = new Map<string, string>(); // Trunk thread_id → original email subject
 
 // --- Trunk API helpers ---
 
@@ -135,6 +137,8 @@ export async function handleInboundEmail(email: InboundEmail, targetAgentId: str
   // Store thread mapping for reply threading
   threadMap.set(email.messageId, receipt.thread_id);
   reverseThreadMap.set(receipt.thread_id, email.messageId);
+  threadRecipients.set(receipt.thread_id, email.from);
+  threadSubjects.set(receipt.thread_id, email.subject);
 
   return new Response("ok");
 }
@@ -167,13 +171,11 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
 
   // Look up the original email's Message-ID for threading
   const originalMessageId = reverseThreadMap.get(threadId);
-
-  // TODO: resolve recipient email from thread/contact mapping
-  // For now, this is a placeholder
-  const recipientEmail = ""; // Set from your mapping
+  const recipientEmail = threadRecipients.get(threadId);
 
   if (recipientEmail) {
-    const subject = `Re: Trunk thread ${threadId.slice(0, 8)}`;
+    const originalSubject = threadSubjects.get(threadId) || `Trunk thread ${threadId.slice(0, 8)}`;
+    const subject = originalSubject.toLowerCase().startsWith("re:") ? originalSubject : `Re: ${originalSubject}`;
     await sendEmail(recipientEmail, subject, content, {
       inReplyTo: originalMessageId,
       references: originalMessageId,
@@ -193,10 +195,9 @@ export default {
     // SendGrid/Postmark inbound webhook
     if (request.method === "POST" && url.pathname === "/inbound") {
       const email = await request.json() as InboundEmail;
-      // TODO: resolve target agent from recipient address mapping
-      const targetAgent = url.searchParams.get("agent") || "";
+      const targetAgent = resolveTargetAgent(email.to, url.searchParams.get("agent"));
       if (!targetAgent) {
-        return new Response("Missing agent query param", { status: 400 });
+        return new Response("No target agent mapping for recipient", { status: 400 });
       }
       return handleInboundEmail(email, targetAgent);
     }
@@ -216,3 +217,30 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 };
+
+export function resolveTargetAgent(
+  recipient: string,
+  override?: string | null,
+  agentMap: Record<string, string> = EMAIL_AGENT_MAP
+): string {
+  if (override) return override;
+  const normalized = normalizeEmail(recipient);
+  return agentMap[normalized] || "";
+}
+
+function parseJsonMap(value: string | undefined): Record<string, string> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, string>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, target]) => [normalizeEmail(key), target])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function normalizeEmail(value: string): string {
+  const match = value.match(/<([^>]+)>/);
+  return (match?.[1] || value).trim().toLowerCase();
+}
