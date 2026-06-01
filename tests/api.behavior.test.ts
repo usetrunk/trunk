@@ -36,12 +36,28 @@ type MessageRow = {
   repliedAt?: Date | null;
 };
 
-type TableName = "agents" | "contacts" | "messages";
+type TaskRow = {
+  id: string;
+  scope: string;
+  title: string;
+  description: string | null;
+  status: string;
+  owner: string | null;
+  createdBy: string;
+  due: string | null;
+  contextRef: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type TableName = "agents" | "contacts" | "messages" | "tasks";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
   contacts: [] as ContactRow[],
   messages: [] as MessageRow[],
+  tasks: [] as TaskRow[],
   idCounter: 0,
 }));
 
@@ -59,6 +75,7 @@ describe("Hono API behavior", () => {
     testState.agents.length = 0;
     testState.contacts.length = 0;
     testState.messages.length = 0;
+    testState.tasks.length = 0;
     testState.idCounter = 0;
   });
 
@@ -405,6 +422,99 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // --- Task tests ---
+
+  it("creates a task assigned to a contact", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Build Intercom adapter",
+      description: "First support vertical adapter",
+      due: "2026-06-07",
+    });
+
+    expect(res.status).toBe(201);
+    const task = await res.json();
+    expect(task).toMatchObject({
+      title: "Build Intercom adapter",
+      description: "First support vertical adapter",
+      status: "open",
+      owner: beta.agent_id,
+      created_by: alpha.agent_id,
+      due: "2026-06-07",
+    });
+  });
+
+  it("both contacts can see shared tasks", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await createTaskRaw(alpha.secret, beta.agent_id, { title: "Task from alpha" });
+
+    const alphaView = await listTasksRaw(alpha.secret, beta.agent_id);
+    const betaView = await listTasksRaw(beta.secret, alpha.agent_id);
+
+    const alphaTasks = await alphaView.json();
+    const betaTasks = await betaView.json();
+
+    expect(alphaTasks.tasks).toHaveLength(1);
+    expect(betaTasks.tasks).toHaveLength(1);
+    expect(alphaTasks.tasks[0].title).toBe("Task from alpha");
+    expect(betaTasks.tasks[0].title).toBe("Task from alpha");
+  });
+
+  it("updates task status and owner", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Do the thing" });
+    const task = await createRes.json();
+
+    // Beta marks it in-progress
+    const updateRes = await updateTaskRaw(beta.secret, alpha.agent_id, task.id, {
+      status: "in-progress",
+    });
+    const updated = await updateRes.json();
+    expect(updated.status).toBe("in-progress");
+
+    // Beta marks it done
+    const doneRes = await updateTaskRaw(beta.secret, alpha.agent_id, task.id, {
+      status: "done",
+    });
+    const done = await doneRes.json();
+    expect(done.status).toBe("done");
+  });
+
+  it("rejects task creation for non-contacts", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Should fail" });
+    expect(res.status).toBe(403);
+  });
+
+  it("filters tasks by status", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const t1Res = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Open task" });
+    const t2Res = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Done task" });
+    const t2 = await t2Res.json();
+    await updateTaskRaw(alpha.secret, beta.agent_id, t2.id, { status: "done" });
+
+    const openRes = await listTasksRaw(alpha.secret, beta.agent_id, "open");
+    const openTasks = await openRes.json();
+    expect(openTasks.tasks).toHaveLength(1);
+    expect(openTasks.tasks[0].title).toBe("Open task");
+
+    const doneRes = await listTasksRaw(alpha.secret, beta.agent_id, "done");
+    const doneTasks = await doneRes.json();
+    expect(doneTasks.tasks).toHaveLength(1);
+    expect(doneTasks.tasks[0].title).toBe("Done task");
+  });
+
   it("keeps replies in the same thread, marks the original replied, and returns thread messages to participants", async () => {
     const { alpha, beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
@@ -459,6 +569,36 @@ async function registerPair(): Promise<{
     alphaClient: createClient(alpha.secret),
     betaClient: createClient(beta.secret),
   };
+}
+
+// Raw task helpers (SDK doesn't have task methods yet)
+function createTaskRaw(secret: string, contactId: string, body: Record<string, unknown>) {
+  return app.request("/tasks", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+    },
+    body: JSON.stringify({ contact_id: contactId, ...body }),
+  });
+}
+
+function listTasksRaw(secret: string, contactId: string, status?: string) {
+  const path = status ? `/tasks/${contactId}?status=${status}` : `/tasks/${contactId}`;
+  return app.request(path, {
+    headers: { "Authorization": `Bearer ${secret}` },
+  });
+}
+
+function updateTaskRaw(secret: string, contactId: string, taskId: string, body: Record<string, unknown>) {
+  return app.request(`/tasks/${contactId}/${taskId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${secret}`,
+    },
+    body: JSON.stringify(body),
+  });
 }
 
 function createClient(secret?: string): TrunkClient {
@@ -585,6 +725,25 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "tasks") {
+      const row: TaskRow = {
+        id: nextId("task"),
+        scope: this.insertValues.scope as string,
+        title: this.insertValues.title as string,
+        description: (this.insertValues.description as string | undefined) ?? null,
+        status: (this.insertValues.status as string | undefined) ?? "open",
+        owner: (this.insertValues.owner as string | undefined) ?? null,
+        createdBy: this.insertValues.createdBy as string,
+        due: (this.insertValues.due as string | undefined) ?? null,
+        contextRef: (this.insertValues.contextRef as string | undefined) ?? null,
+        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      testState.tasks.push(row);
+      return row;
+    }
+
     const row: MessageRow = {
       id: nextId("message"),
       fromAgent: this.insertValues.fromAgent as string,
@@ -665,7 +824,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | MessageRow | TaskRow> {
   return testState[table];
 }
 
@@ -679,7 +838,7 @@ function getTableName(table: unknown): TableName {
     (candidate) => candidate.description === "drizzle:Name"
   );
   const name = symbol ? (table as Record<symbol, string>)[symbol] : undefined;
-  if (name === "agents" || name === "contacts" || name === "messages") return name;
+  if (name === "agents" || name === "contacts" || name === "messages" || name === "tasks") return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
 
@@ -767,4 +926,7 @@ const columnToProperty: Record<string, string> = {
   thread_id: "threadId",
   read_at: "readAt",
   replied_at: "repliedAt",
+  created_by: "createdBy",
+  context_ref: "contextRef",
+  updated_at: "updatedAt",
 };
