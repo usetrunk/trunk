@@ -673,6 +673,122 @@ describe("Hono API behavior", () => {
     expect(updated.priority).toBe("high");
   });
 
+  // --- SDK task method tests ---
+
+  it("SDK createTask + listTasks round-trip", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const task = await alphaClient.createTask({
+      contact_id: beta.agent_id,
+      title: "SDK task test",
+      description: "Created via SDK",
+      priority: "high",
+      due: "2026-06-15",
+    });
+
+    expect(task.title).toBe("SDK task test");
+    expect(task.description).toBe("Created via SDK");
+    expect(task.priority).toBe("high");
+    expect(task.status).toBe("open");
+    expect(task.due).toBe("2026-06-15");
+    expect(task.created_by).toBe(alpha.agent_id);
+
+    // Both sides can list
+    const alphaList = await alphaClient.listTasks(beta.agent_id);
+    const betaList = await betaClient.listTasks(alpha.agent_id);
+    expect(alphaList.tasks).toHaveLength(1);
+    expect(betaList.tasks).toHaveLength(1);
+    expect(alphaList.tasks[0].id).toBe(task.id);
+  });
+
+  it("SDK updateTask changes status and priority", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const task = await alphaClient.createTask({
+      contact_id: beta.agent_id,
+      title: "Update me via SDK",
+    });
+
+    const updated = await betaClient.updateTask(alpha.agent_id, task.id, {
+      status: "in-progress",
+      priority: "critical",
+    });
+
+    expect(updated.status).toBe("in-progress");
+    expect(updated.priority).toBe("critical");
+  });
+
+  it("SDK listTasks filters by status", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const t1 = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Open one" });
+    const t2 = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Done one" });
+    await alphaClient.updateTask(beta.agent_id, t2.id, { status: "done" });
+
+    const openTasks = await alphaClient.listTasks(beta.agent_id, { status: "open" });
+    expect(openTasks.tasks).toHaveLength(1);
+    expect(openTasks.tasks[0].title).toBe("Open one");
+
+    const doneTasks = await alphaClient.listTasks(beta.agent_id, { status: "done" });
+    expect(doneTasks.tasks).toHaveLength(1);
+    expect(doneTasks.tasks[0].title).toBe("Done one");
+  });
+
+  it("SDK createTask rejects without scope", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(alphaClient.createTask({ title: "No scope" } as any)).rejects.toThrow();
+  });
+
+  it("SDK listRoomTasks works for room-scoped tasks", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+
+    // Create room, both join
+    const roomRes = await createRoomRaw(alpha.secret, { name: "SDK Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Create task via SDK with room scope
+    const task = await alphaClient.createTask({
+      room_id: room.id,
+      title: "Room task via SDK",
+    });
+    expect(task.title).toBe("Room task via SDK");
+
+    // Both members can list room tasks
+    const alphaList = await alphaClient.listRoomTasks(room.id);
+    const betaList = await betaClient.listRoomTasks(room.id);
+    expect(alphaList.tasks).toHaveLength(1);
+    expect(betaList.tasks).toHaveLength(1);
+  });
+
+  it("SDK listWorkspaceTasks works for workspace-scoped tasks", async () => {
+    const anonymous = createClient();
+    const alpha = await anonymous.register({ name: "ws-sdk-alpha" });
+    const beta = await anonymous.register({ name: "ws-sdk-beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "SDK WS" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const task = await alphaClient.createTask({
+      workspace_id: ws.id,
+      title: "Workspace task via SDK",
+      priority: "low",
+    });
+    expect(task.title).toBe("Workspace task via SDK");
+    expect(task.priority).toBe("low");
+
+    const alphaList = await alphaClient.listWorkspaceTasks(ws.id);
+    const betaList = await betaClient.listWorkspaceTasks(ws.id);
+    expect(alphaList.tasks).toHaveLength(1);
+    expect(betaList.tasks).toHaveLength(1);
+    expect(alphaList.tasks[0].id).toBe(task.id);
+  });
+
   // --- Room tests ---
 
   it("creates a room and returns id + pairing_code", async () => {

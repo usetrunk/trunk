@@ -144,6 +144,54 @@ export type TrunkMessage = {
   deletedAt?: string | Date | null;
 };
 
+export type CreateTaskRequest = {
+  contact_id?: string;
+  room_id?: string;
+  workspace_id?: string;
+  title: string;
+  description?: string;
+  priority?: "critical" | "high" | "medium" | "low";
+  owner?: string;
+  due?: string;
+  context_ref?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type TaskResponse = {
+  id: string;
+  scope: string;
+  title: string;
+  description: string | null;
+  status: string;
+  priority: string;
+  owner: string | null;
+  created_by: string;
+  due: string | null;
+  context_ref: string | null;
+  created_at: string | Date;
+  updated_at?: string | Date;
+};
+
+export type TaskListResponse = {
+  tasks: TaskResponse[];
+};
+
+export type UpdateTaskRequest = {
+  title?: string;
+  description?: string;
+  status?: string;
+  priority?: "critical" | "high" | "medium" | "low";
+  owner?: string;
+  due?: string;
+  context_ref?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type TaskListOptions = {
+  status?: string;
+  owner?: string;
+};
+
 export type InboxOptions = {
   status?: string;
   limit?: number;
@@ -296,6 +344,41 @@ export class TrunkClient {
 
   purgeExpiredMessages(days = 90): Promise<{ purged: number; cutoff: string }> {
     return this.request("/messages/purge-expired", { method: "POST", body: { days } });
+  }
+
+  createTask(input: CreateTaskRequest): Promise<TaskResponse> {
+    return this.request("/tasks", { method: "POST", body: input });
+  }
+
+  listTasks(contactId: string, options: TaskListOptions = {}): Promise<TaskListResponse> {
+    const search = new URLSearchParams();
+    if (options.status) search.set("status", options.status);
+    if (options.owner) search.set("owner", options.owner);
+    const query = search.toString();
+    return this.request(`/tasks/${encodeURIComponent(contactId)}${query ? `?${query}` : ""}`);
+  }
+
+  listRoomTasks(roomId: string, options: TaskListOptions = {}): Promise<TaskListResponse> {
+    const search = new URLSearchParams();
+    if (options.status) search.set("status", options.status);
+    if (options.owner) search.set("owner", options.owner);
+    const query = search.toString();
+    return this.request(`/tasks/room/${encodeURIComponent(roomId)}${query ? `?${query}` : ""}`);
+  }
+
+  listWorkspaceTasks(workspaceId: string, options: TaskListOptions = {}): Promise<TaskListResponse> {
+    const search = new URLSearchParams();
+    if (options.status) search.set("status", options.status);
+    if (options.owner) search.set("owner", options.owner);
+    const query = search.toString();
+    return this.request(`/tasks/workspace/${encodeURIComponent(workspaceId)}${query ? `?${query}` : ""}`);
+  }
+
+  updateTask(scopeId: string, taskId: string, input: UpdateTaskRequest): Promise<TaskResponse> {
+    return this.request(`/tasks/${encodeURIComponent(scopeId)}/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      body: input,
+    });
   }
 
   private async request<T>(
