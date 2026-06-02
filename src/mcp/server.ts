@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -1610,69 +1610,184 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
-    "trunk_webhook_test",
-    "Send a test ping to your configured webhook URL to verify it's reachable and responding. Set your webhook URL with trunk_config first.",
+    "trunk_webhook",
+    "Manage webhook configuration. Actions: status (view config), set (configure URL), remove (clear URL), rotate_secret (new signing secret), deliveries (recent delivery log), test (send test ping).",
     {
       secret: z.string().describe("Your agent secret"),
+      action: z.enum(["status", "set", "remove", "rotate_secret", "deliveries", "test"]).describe("Action to perform"),
+      url: z.string().optional().describe("Webhook URL (required for 'set' action)"),
+      limit: z.number().optional().describe("Max deliveries to return (for 'deliveries' action, default 20)"),
     },
-    async ({ secret }) => {
+    async ({ secret, action, url, limit: deliveryLimit }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
-      if (!agent.webhookUrl) return errorResult("No webhook URL configured. Use trunk_config or PATCH /agents/me to set one.");
 
-      const testPayload = JSON.stringify({
-        event: "webhook.test",
-        agent_id: agent.id,
-        timestamp: new Date().toISOString(),
-      });
-
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "X-Trunk-Event": "webhook.test",
-      };
-
-      if (agent.webhookSecret) {
-        const encoder = new TextEncoder();
-        const key = await crypto.subtle.importKey(
-          "raw", encoder.encode(agent.webhookSecret),
-          { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
-        );
-        const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(testPayload));
-        headers["X-Trunk-Signature"] = `sha256=${Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+      if (action === "status") {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              url: agent.webhookUrl ?? null,
+              secret_hint: agent.webhookSecret ? `${agent.webhookSecret.slice(0, 6)}...` : null,
+              configured: Boolean(agent.webhookUrl),
+            }, null, 2),
+          }],
+        };
       }
 
-      try {
-        const res = await fetch(agent.webhookUrl, {
-          method: "POST",
-          headers,
-          body: testPayload,
-          signal: AbortSignal.timeout(10000),
+      if (action === "set") {
+        if (!url) return errorResult("url is required for 'set' action");
+        try { new URL(url); } catch { return errorResult("Invalid URL"); }
+        const [updated] = await db.update(agents).set({ webhookUrl: url }).where(eq(agents.id, agent.id)).returning();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              url: updated.webhookUrl,
+              secret_hint: updated.webhookSecret ? `${updated.webhookSecret.slice(0, 6)}...` : null,
+              configured: true,
+              message: "Webhook URL configured.",
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (action === "remove") {
+        await db.update(agents).set({ webhookUrl: null }).where(eq(agents.id, agent.id));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, message: "Webhook URL removed." }, null, 2) }] };
+      }
+
+      if (action === "rotate_secret") {
+        const newSecret = generateSecret();
+        await db.update(agents).set({ webhookSecret: newSecret }).where(eq(agents.id, agent.id));
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              webhook_secret: newSecret,
+              message: "Webhook signing secret rotated. Update your verification logic.",
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (action === "deliveries") {
+        const maxItems = Math.min(deliveryLimit ?? 20, 100);
+        const rows = await db
+          .select()
+          .from(webhookDeliveries)
+          .where(eq(webhookDeliveries.agentId, agent.id))
+          .orderBy(desc(webhookDeliveries.createdAt))
+          .limit(maxItems);
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              deliveries: rows.map((d) => ({
+                id: d.id,
+                message_id: d.messageId,
+                url: d.url,
+                event: d.event,
+                success: d.success === 1,
+                http_status: d.httpStatus,
+                latency_ms: d.latencyMs,
+                error: d.error,
+                attempts: d.attempts,
+                created_at: d.createdAt,
+              })),
+              count: rows.length,
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (action === "test") {
+        if (!agent.webhookUrl) return errorResult("No webhook URL configured. Use action='set' first.");
+
+        const testPayload = JSON.stringify({
+          event: "webhook.test",
+          agent_id: agent.id,
+          timestamp: new Date().toISOString(),
         });
 
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              ok: res.ok,
-              status: res.status,
-              webhook_url: agent.webhookUrl,
-              message: res.ok ? "Webhook responded successfully" : `Webhook returned ${res.status}`,
-            }, null, 2),
-          }],
+        const reqHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+          "X-Trunk-Event": "webhook.test",
         };
-      } catch (err: unknown) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              ok: false,
-              webhook_url: agent.webhookUrl,
-              message: `Webhook unreachable: ${err instanceof Error ? err.message : "unknown error"}`,
-            }, null, 2),
-          }],
-          isError: true,
-        };
+
+        if (agent.webhookSecret) {
+          const encoder = new TextEncoder();
+          const key = await crypto.subtle.importKey(
+            "raw", encoder.encode(agent.webhookSecret),
+            { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+          );
+          const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(testPayload));
+          reqHeaders["X-Trunk-Signature"] = `sha256=${Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+        }
+
+        const start = Date.now();
+        try {
+          const res = await fetch(agent.webhookUrl, {
+            method: "POST",
+            headers: reqHeaders,
+            body: testPayload,
+            signal: AbortSignal.timeout(10000),
+          });
+
+          const latencyMs = Date.now() - start;
+          await db.insert(webhookDeliveries).values({
+            agentId: agent.id,
+            url: agent.webhookUrl,
+            event: "webhook.test",
+            success: res.ok ? 1 : 0,
+            httpStatus: res.status,
+            latencyMs,
+            error: res.ok ? null : `HTTP ${res.status}`,
+            attempts: 1,
+          });
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                ok: res.ok,
+                status: res.status,
+                webhook_url: agent.webhookUrl,
+                latency_ms: latencyMs,
+                message: res.ok ? "Webhook responded successfully" : `Webhook returned ${res.status}`,
+              }, null, 2),
+            }],
+          };
+        } catch (err: unknown) {
+          const latencyMs = Date.now() - start;
+          const errorMsg = err instanceof Error ? err.message : "unknown error";
+          await db.insert(webhookDeliveries).values({
+            agentId: agent.id,
+            url: agent.webhookUrl,
+            event: "webhook.test",
+            success: 0,
+            latencyMs,
+            error: errorMsg,
+            attempts: 1,
+          });
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                ok: false,
+                webhook_url: agent.webhookUrl,
+                latency_ms: latencyMs,
+                message: `Webhook unreachable: ${errorMsg}`,
+              }, null, 2),
+            }],
+            isError: true,
+          };
+        }
       }
+
+      return errorResult("Unknown action");
     }
   );
 

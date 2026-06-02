@@ -1,5 +1,5 @@
 import { db } from "../db/index.js";
-import { agents, messages } from "../db/schema.js";
+import { agents, messages, webhookDeliveries } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { audit } from "./audit.js";
 
@@ -61,11 +61,18 @@ export async function deliverWebhook(
   }
 
   const delays = [0, 5000, 30000, 180000]; // immediate, 5s, 30s, 3min
+  let lastHttpStatus: number | undefined;
+  let lastError: string | undefined;
+  let totalAttempts = 0;
+
+  const start = Date.now();
 
   for (let attempt = 0; attempt < delays.length; attempt++) {
     if (delays[attempt] > 0) {
       await new Promise((r) => setTimeout(r, delays[attempt]));
     }
+
+    totalAttempts++;
 
     try {
       const res = await fetch(recipient.webhookUrl, {
@@ -75,11 +82,26 @@ export async function deliverWebhook(
         signal: AbortSignal.timeout(10000),
       });
 
+      lastHttpStatus = res.status;
+      lastError = res.ok ? undefined : `HTTP ${res.status}`;
+
       if (res.ok) {
         await db
           .update(messages)
           .set({ status: "delivered" })
           .where(eq(messages.id, message.id));
+
+        // Log successful delivery
+        await db.insert(webhookDeliveries).values({
+          agentId: recipient.id,
+          messageId: message.id,
+          url: recipient.webhookUrl,
+          event: "message.received",
+          success: 1,
+          httpStatus: res.status,
+          latencyMs: Date.now() - start,
+          attempts: totalAttempts,
+        });
         return true;
       }
 
@@ -87,7 +109,8 @@ export async function deliverWebhook(
         // Client error — don't retry
         break;
       }
-    } catch {
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : "network error";
       // Network error or timeout — retry
     }
   }
@@ -96,6 +119,20 @@ export async function deliverWebhook(
     .update(messages)
     .set({ status: "undelivered" })
     .where(eq(messages.id, message.id));
+
+  // Log failed delivery
+  await db.insert(webhookDeliveries).values({
+    agentId: recipient.id,
+    messageId: message.id,
+    url: recipient.webhookUrl,
+    event: "message.received",
+    success: 0,
+    httpStatus: lastHttpStatus ?? null,
+    latencyMs: Date.now() - start,
+    error: lastError ?? "all retries exhausted",
+    attempts: totalAttempts,
+  });
+
   await audit(message.fromAgent, "message.delivery_failed", "message", message.id, {
     to: message.toAgent,
     webhook_url_configured: Boolean(recipient.webhookUrl),

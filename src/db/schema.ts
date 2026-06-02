@@ -189,6 +189,22 @@ export const reactions = pgTable("reactions", {
   index("reactions_message_idx").on(table.messageId),
 ]);
 
+export const webhookDeliveries = pgTable("webhook_deliveries", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  messageId: text("message_id").references(() => messages.id),
+  url: text("url").notNull(),
+  event: text("event").notNull(), // message.received, webhook.test, etc.
+  success: integer("success").notNull(), // 1 = success, 0 = failure (boolean via integer for portability)
+  httpStatus: integer("http_status"),
+  latencyMs: integer("latency_ms"),
+  error: text("error"),
+  attempts: integer("attempts").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("webhook_deliveries_agent_idx").on(table.agentId, table.createdAt),
+]);
+
 export const sharedDocumentVersions = pgTable("shared_document_versions", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   documentId: text("document_id").notNull().references(() => sharedDocuments.id),

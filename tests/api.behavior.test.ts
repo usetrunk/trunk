@@ -170,6 +170,20 @@ type ReactionRow = {
   createdAt: Date;
 };
 
+type WebhookDeliveryRow = {
+  id: string;
+  agentId: string;
+  messageId: string | null;
+  url: string;
+  event: string;
+  success: number;
+  httpStatus: number | null;
+  latencyMs: number | null;
+  error: string | null;
+  attempts: number;
+  createdAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -185,7 +199,8 @@ type TableName =
   | "audit_events"
   | "rate_limits"
   | "subscriptions"
-  | "reactions";
+  | "reactions"
+  | "webhook_deliveries";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -203,6 +218,7 @@ const testState = vi.hoisted(() => ({
   "rate_limits": [] as RateLimitRow[],
   subscriptions: [] as SubscriptionRow[],
   reactions: [] as ReactionRow[],
+  "webhook_deliveries": [] as WebhookDeliveryRow[],
   idCounter: 0,
 }));
 
@@ -232,6 +248,7 @@ describe("Hono API behavior", () => {
     testState["rate_limits"].length = 0;
     testState.subscriptions.length = 0;
     testState.reactions.length = 0;
+    testState["webhook_deliveries"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -3315,6 +3332,133 @@ describe("Hono API behavior", () => {
     await expect(client.testWebhook()).rejects.toMatchObject({ status: 400 });
   });
 
+  // --- Webhook management ---
+
+  it("webhookConfig returns unconfigured state for new agents", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const config = await client.webhookConfig();
+    expect(config).toMatchObject({
+      url: null,
+      configured: false,
+    });
+  });
+
+  it("updateWebhook sets the webhook URL", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const config = await client.updateWebhook("https://example.com/hook");
+    expect(config).toMatchObject({
+      url: "https://example.com/hook",
+      configured: true,
+    });
+    expect(config.secret_hint).toBeTruthy();
+
+    const me = await client.me();
+    expect(me.webhook_url).toBe("https://example.com/hook");
+  });
+
+  it("updateWebhook rejects invalid URLs", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.updateWebhook("not-a-url")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("removeWebhook clears the webhook URL", async () => {
+    const alpha = await createClient().register({ name: "alpha", webhook_url: "https://example.com/hook" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.removeWebhook()).resolves.toEqual({ ok: true });
+
+    const config = await client.webhookConfig();
+    expect(config).toMatchObject({
+      url: null,
+      configured: false,
+    });
+  });
+
+  it("rotateWebhookSecret returns a new secret", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const oldConfig = await client.webhookConfig();
+    const rotated = await client.rotateWebhookSecret();
+    expect(rotated.webhook_secret).toBeTruthy();
+    expect(rotated.webhook_secret).toMatch(/^[a-f0-9]{64}$/);
+
+    const newConfig = await client.webhookConfig();
+    expect(newConfig.secret_hint).not.toBe(oldConfig.secret_hint);
+  });
+
+  it("webhookDeliveries returns empty for new agents", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const result = await client.webhookDeliveries();
+    expect(result).toMatchObject({
+      deliveries: [],
+      count: 0,
+    });
+  });
+
+  it("webhookDeliveries returns logged deliveries", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    // Manually insert a delivery record to simulate webhook delivery logging
+    testState["webhook_deliveries"].push({
+      id: "whd_test_1",
+      agentId: alpha.agent_id,
+      messageId: null,
+      url: "https://example.com/hook",
+      event: "webhook.test",
+      success: 1,
+      httpStatus: 200,
+      latencyMs: 42,
+      error: null,
+      attempts: 1,
+      createdAt: new Date(),
+    });
+
+    const result = await client.webhookDeliveries();
+    expect(result.count).toBe(1);
+    expect(result.deliveries[0]).toMatchObject({
+      id: "whd_test_1",
+      url: "https://example.com/hook",
+      event: "webhook.test",
+      success: true,
+      http_status: 200,
+      latency_ms: 42,
+    });
+  });
+
+  it("webhookDeliveries respects limit parameter", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    for (let i = 0; i < 5; i++) {
+      testState["webhook_deliveries"].push({
+        id: `whd_limit_${i}`,
+        agentId: alpha.agent_id,
+        messageId: null,
+        url: "https://example.com/hook",
+        event: "webhook.test",
+        success: 1,
+        httpStatus: 200,
+        latencyMs: 10,
+        error: null,
+        attempts: 1,
+        createdAt: new Date(Date.now() + i),
+      });
+    }
+
+    const result = await client.webhookDeliveries({ limit: 2 });
+    expect(result.count).toBe(2);
+  });
+
   it("presence returns 400 when not in a workspace", async () => {
     const alpha = await createClient().register({ name: "solo" });
     const client = createClient(alpha.secret);
@@ -3516,6 +3660,16 @@ class SelectQuery {
         const left = (a as SharedDocumentVersionRow).version;
         const right = (b as SharedDocumentVersionRow).version;
         return this.orderDirection === "desc" ? right - left : left - right;
+      });
+    }
+
+    if (this.table === "webhook_deliveries") {
+      rows.sort((a, b) => {
+        const left = (a as WebhookDeliveryRow).createdAt.getTime();
+        const right = (b as WebhookDeliveryRow).createdAt.getTime();
+        const dir = this.orderDirection === "desc" ? -1 : 1;
+        if (left !== right) return dir * (left - right);
+        return dir * ((a as WebhookDeliveryRow).id < (b as WebhookDeliveryRow).id ? -1 : 1);
       });
     }
 
@@ -3747,6 +3901,24 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "webhook_deliveries") {
+      const row: WebhookDeliveryRow = {
+        id: nextId("whd"),
+        agentId: this.insertValues.agentId as string,
+        messageId: (this.insertValues.messageId as string | undefined) ?? null,
+        url: this.insertValues.url as string,
+        event: this.insertValues.event as string,
+        success: this.insertValues.success as number,
+        httpStatus: (this.insertValues.httpStatus as number | undefined) ?? null,
+        latencyMs: (this.insertValues.latencyMs as number | undefined) ?? null,
+        error: (this.insertValues.error as string | undefined) ?? null,
+        attempts: (this.insertValues.attempts as number | undefined) ?? 1,
+        createdAt: new Date(),
+      };
+      testState["webhook_deliveries"].push(row);
+      return row;
+    }
+
     const row: MessageRow = {
       id: nextId("message"),
       fromAgent: this.insertValues.fromAgent as string,
@@ -3843,7 +4015,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow> {
   return testState[table];
 }
 
@@ -3873,7 +4045,8 @@ function getTableName(table: unknown): TableName {
     name === "audit_events" ||
     name === "rate_limits" ||
     name === "subscriptions" ||
-    name === "reactions"
+    name === "reactions" ||
+    name === "webhook_deliveries"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -4009,4 +4182,8 @@ const columnToProperty: Record<string, string> = {
   stripe_subscription_id: "stripeSubscriptionId",
   current_period_start: "currentPeriodStart",
   current_period_end: "currentPeriodEnd",
+  http_status: "httpStatus",
+  latency_ms: "latencyMs",
+  start_date: "startDate",
+  depends_on: "dependsOn",
 };

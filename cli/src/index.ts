@@ -953,15 +953,44 @@ server.tool(
 );
 
 server.tool(
-  "trunk_webhook_test",
-  "Send a test ping to your configured webhook URL to verify it's reachable.",
-  {},
-  async () => {
+  "trunk_webhook",
+  "Manage webhook configuration. Actions: status (view config), set (configure URL), remove (clear URL), rotate_secret (new signing secret), deliveries (recent delivery log), test (send test ping).",
+  {
+    action: z.enum(["status", "set", "remove", "rotate_secret", "deliveries", "test"]).describe("Action to perform"),
+    url: z.string().optional().describe("Webhook URL (required for 'set' action)"),
+    limit: z.number().optional().describe("Max deliveries to return (for 'deliveries' action, default 20)"),
+  },
+  async ({ action, url, limit: deliveryLimit }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
-    const result = await relay("/agents/me/webhook/test", { method: "POST", secret: config.secret });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    if (action === "status") {
+      const result = await relay("/agents/me/webhook", { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "set") {
+      if (!url) return { content: [{ type: "text", text: "Error: url is required for 'set' action" }], isError: true };
+      const result = await relay("/agents/me/webhook", { method: "PUT", secret: config.secret, body: { url } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "remove") {
+      const result = await relay("/agents/me/webhook", { method: "DELETE", secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "rotate_secret") {
+      const result = await relay("/agents/me/webhook/rotate-secret", { method: "POST", secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "deliveries") {
+      const query = deliveryLimit ? `?limit=${deliveryLimit}` : "";
+      const result = await relay(`/agents/me/webhook/deliveries${query}`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "test") {
+      const result = await relay("/agents/me/webhook/test", { method: "POST", secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    return { content: [{ type: "text", text: "Error: Unknown action" }], isError: true };
   }
 );
 

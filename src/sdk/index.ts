@@ -55,7 +55,37 @@ export type WebhookTestResponse = {
   ok: boolean;
   status?: number;
   webhook_url: string;
+  latency_ms?: number;
   message: string;
+};
+
+export type WebhookConfigResponse = {
+  url: string | null;
+  secret_hint: string | null;
+  configured: boolean;
+};
+
+export type WebhookRotateSecretResponse = {
+  webhook_secret: string;
+  message: string;
+};
+
+export type WebhookDelivery = {
+  id: string;
+  message_id: string | null;
+  url: string;
+  event: string;
+  success: boolean;
+  http_status: number | null;
+  latency_ms: number | null;
+  error: string | null;
+  attempts: number;
+  created_at: string | Date;
+};
+
+export type WebhookDeliveriesResponse = {
+  deliveries: WebhookDelivery[];
+  count: number;
 };
 
 export type PairRequest = {
@@ -468,6 +498,29 @@ export class TrunkClient {
 
   rotateSecret(): Promise<RotateSecretResponse> {
     return this.request("/agents/me/rotate-secret", { method: "POST" });
+  }
+
+  webhookConfig(): Promise<WebhookConfigResponse> {
+    return this.request("/agents/me/webhook");
+  }
+
+  updateWebhook(url: string): Promise<WebhookConfigResponse> {
+    return this.request("/agents/me/webhook", { method: "PUT", body: { url } });
+  }
+
+  removeWebhook(): Promise<AckResponse> {
+    return this.request("/agents/me/webhook", { method: "DELETE" });
+  }
+
+  rotateWebhookSecret(): Promise<WebhookRotateSecretResponse> {
+    return this.request("/agents/me/webhook/rotate-secret", { method: "POST" });
+  }
+
+  webhookDeliveries(options: { limit?: number } = {}): Promise<WebhookDeliveriesResponse> {
+    const search = new URLSearchParams();
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    const query = search.toString();
+    return this.request(`/agents/me/webhook/deliveries${query ? `?${query}` : ""}`);
   }
 
   testWebhook(): Promise<WebhookTestResponse> {
