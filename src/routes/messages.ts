@@ -838,6 +838,124 @@ app.post("/ack-bulk", async (c) => {
   return c.json({ ok: true, acked });
 });
 
+// Bulk mark messages as read (without processing/acking)
+app.post("/read-bulk", async (c) => {
+  const agentId = c.get("agentId");
+  const body = await c.req.json<{ message_ids: string[] }>();
+
+  if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
+    return c.json({ error: "message_ids array is required" }, 400);
+  }
+  if (body.message_ids.length > 100) {
+    return c.json({ error: "Cannot mark more than 100 messages at once" }, 400);
+  }
+
+  let marked = 0;
+  for (const messageId of body.message_ids) {
+    const [msg] = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.id, messageId), eq(messages.toAgent, agentId)))
+      .limit(1);
+
+    if (msg && !msg.readAt) {
+      await db
+        .update(messages)
+        .set({ readAt: new Date() })
+        .where(eq(messages.id, messageId));
+      marked++;
+    }
+  }
+
+  await audit(agentId, "message.read_bulk", "message", null, { count: marked });
+  return c.json({ ok: true, marked });
+});
+
+// Bulk delete messages (soft-delete, sender only)
+app.post("/delete-bulk", async (c) => {
+  const agentId = c.get("agentId");
+  const body = await c.req.json<{ message_ids: string[] }>();
+
+  if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
+    return c.json({ error: "message_ids array is required" }, 400);
+  }
+  if (body.message_ids.length > 100) {
+    return c.json({ error: "Cannot delete more than 100 messages at once" }, 400);
+  }
+
+  let deleted = 0;
+  for (const messageId of body.message_ids) {
+    const [msg] = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agentId)))
+      .limit(1);
+
+    if (msg && msg.status !== "deleted") {
+      await db
+        .update(messages)
+        .set({ status: "deleted", deletedAt: new Date() })
+        .where(eq(messages.id, messageId));
+      deleted++;
+    }
+  }
+
+  await audit(agentId, "message.delete_bulk", "message", null, { count: deleted });
+  return c.json({ ok: true, deleted });
+});
+
+// Bulk add label to messages
+app.post("/label-bulk", async (c) => {
+  const agentId = c.get("agentId");
+  const body = await c.req.json<{ message_ids: string[]; label: string }>();
+
+  if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
+    return c.json({ error: "message_ids array is required" }, 400);
+  }
+  if (!body.label || typeof body.label !== "string") {
+    return c.json({ error: "label is required" }, 400);
+  }
+  if (body.message_ids.length > 100) {
+    return c.json({ error: "Cannot label more than 100 messages at once" }, 400);
+  }
+
+  let labeled = 0;
+  for (const messageId of body.message_ids) {
+    const [msg] = await db
+      .select()
+      .from(messages)
+      .where(and(
+        eq(messages.id, messageId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      ))
+      .limit(1);
+
+    if (msg) {
+      const existing = await db
+        .select()
+        .from(messageLabels)
+        .where(and(
+          eq(messageLabels.messageId, messageId),
+          eq(messageLabels.agentId, agentId),
+          eq(messageLabels.label, body.label)
+        ))
+        .limit(1);
+
+      if (existing.length === 0) {
+        await db.insert(messageLabels).values({
+          messageId,
+          agentId,
+          label: body.label,
+        });
+        labeled++;
+      }
+    }
+  }
+
+  await audit(agentId, "message.label_bulk", "message", null, { count: labeled, label: body.label });
+  return c.json({ ok: true, labeled });
+});
+
 // Mark a message as read (without processing/acking)
 app.post("/:id/read", async (c) => {
   const agentId = c.get("agentId");

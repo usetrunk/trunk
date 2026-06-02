@@ -689,6 +689,134 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_read_bulk",
+    "Mark multiple messages as read without processing. Useful for marking messages as seen without acknowledging.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_ids: z.array(z.string()).describe("Array of message IDs to mark as read (max 100)"),
+    },
+    async ({ secret, message_ids }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      let marked = 0;
+      for (const messageId of message_ids.slice(0, 100)) {
+        const [msg] = await db
+          .select()
+          .from(messages)
+          .where(and(eq(messages.id, messageId), eq(messages.toAgent, agent.id)))
+          .limit(1);
+
+        if (msg && !msg.readAt) {
+          await db
+            .update(messages)
+            .set({ readAt: new Date() })
+            .where(eq(messages.id, messageId));
+          marked++;
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, marked, requested: message_ids.length }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_delete_bulk",
+    "Soft-delete multiple messages at once. Only the sender of each message can delete it.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_ids: z.array(z.string()).describe("Array of message IDs to delete (max 100)"),
+    },
+    async ({ secret, message_ids }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      let deleted = 0;
+      for (const messageId of message_ids.slice(0, 100)) {
+        const [msg] = await db
+          .select()
+          .from(messages)
+          .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agent.id)))
+          .limit(1);
+
+        if (msg && msg.status !== "deleted") {
+          await db
+            .update(messages)
+            .set({ status: "deleted", deletedAt: new Date() })
+            .where(eq(messages.id, messageId));
+          deleted++;
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, deleted, requested: message_ids.length }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_label_bulk",
+    "Add a label to multiple messages at once. You must be sender or recipient of each message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_ids: z.array(z.string()).describe("Array of message IDs to label (max 100)"),
+      label: z.string().describe("Label to add to all specified messages"),
+    },
+    async ({ secret, message_ids, label }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      let labeled = 0;
+      for (const messageId of message_ids.slice(0, 100)) {
+        const [msg] = await db
+          .select()
+          .from(messages)
+          .where(and(
+            eq(messages.id, messageId),
+            or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))
+          ))
+          .limit(1);
+
+        if (msg) {
+          const existing = await db
+            .select()
+            .from(messageLabels)
+            .where(and(
+              eq(messageLabels.messageId, messageId),
+              eq(messageLabels.agentId, agent.id),
+              eq(messageLabels.label, label)
+            ))
+            .limit(1);
+
+          if (existing.length === 0) {
+            await db.insert(messageLabels).values({
+              messageId,
+              agentId: agent.id,
+              label,
+            });
+            labeled++;
+          }
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, labeled, requested: message_ids.length, label }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_edit_message",
     "Edit a sent message's payload. Only the original sender can edit. Returns the updated message.",
     {

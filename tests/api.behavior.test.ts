@@ -1958,6 +1958,135 @@ describe("Hono API behavior", () => {
     await expect(client.ackBulk([])).rejects.toMatchObject({ status: 400 });
   });
 
+  // --- Bulk read tests ---
+
+  it("bulk reads multiple messages at once", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+    const m2 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg2" } });
+    const m3 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg3" } });
+
+    const result = await betaClient.readBulk([m1.id, m2.id, m3.id]);
+
+    expect(result).toMatchObject({ ok: true, marked: 3 });
+    // Messages should still be in inbox (read but not processed)
+    const inbox = await betaClient.inbox();
+    expect(inbox.messages.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("bulk read skips already-read messages", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+
+    await betaClient.readBulk([m1.id]);
+    const result = await betaClient.readBulk([m1.id]);
+    expect(result).toMatchObject({ ok: true, marked: 0 });
+  });
+
+  it("bulk read skips messages not addressed to agent", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "to beta" } });
+
+    const result = await alphaClient.readBulk([m1.id]);
+    expect(result).toMatchObject({ ok: true, marked: 0 });
+  });
+
+  it("rejects bulk read with empty array", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.readBulk([])).rejects.toMatchObject({ status: 400 });
+  });
+
+  // --- Bulk delete tests ---
+
+  it("bulk deletes multiple messages at once", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+    const m2 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg2" } });
+
+    const result = await alphaClient.deleteBulk([m1.id, m2.id]);
+
+    expect(result).toMatchObject({ ok: true, deleted: 2 });
+    // Deleted messages should not appear in inbox
+    const inbox = await betaClient.inbox();
+    expect(inbox.messages).toHaveLength(0);
+  });
+
+  it("bulk delete only works for sender", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+
+    // Recipient cannot delete
+    const result = await betaClient.deleteBulk([m1.id]);
+    expect(result).toMatchObject({ ok: true, deleted: 0 });
+
+    // Sender can delete
+    const senderResult = await alphaClient.deleteBulk([m1.id]);
+    expect(senderResult).toMatchObject({ ok: true, deleted: 1 });
+  });
+
+  it("rejects bulk delete with empty array", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.deleteBulk([])).rejects.toMatchObject({ status: 400 });
+  });
+
+  // --- Bulk label tests ---
+
+  it("bulk labels multiple messages at once", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+    const m2 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg2" } });
+
+    const result = await betaClient.labelBulk([m1.id, m2.id], "important");
+
+    expect(result).toMatchObject({ ok: true, labeled: 2 });
+  });
+
+  it("bulk label skips already-labeled messages", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+
+    await betaClient.labelBulk([m1.id], "urgent");
+    const result = await betaClient.labelBulk([m1.id], "urgent");
+    expect(result).toMatchObject({ ok: true, labeled: 0 });
+  });
+
+  it("bulk label rejects non-participant messages", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+
+    // Create a third agent who is not a participant
+    const gamma = await createClient().register({ name: "gamma" });
+    const gammaClient = createClient(gamma.secret);
+    const result = await gammaClient.labelBulk([m1.id], "spam");
+    expect(result).toMatchObject({ ok: true, labeled: 0 });
+  });
+
+  it("rejects bulk label with empty array", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.labelBulk([], "test")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects bulk label without label", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.labelBulk(["some-id"], "")).rejects.toMatchObject({ status: 400 });
+  });
+
   // --- Message edit tests ---
 
   it("sender can edit a message payload", async () => {

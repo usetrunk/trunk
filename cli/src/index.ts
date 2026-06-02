@@ -415,6 +415,67 @@ server.tool(
 );
 
 server.tool(
+  "trunk_read_bulk",
+  "Mark multiple messages as read without processing. Useful for marking messages as seen without acknowledging.",
+  {
+    message_ids: z.array(z.string()).describe("Array of message IDs to mark as read (max 100)"),
+  },
+  async ({ message_ids }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/messages/read-bulk", {
+      method: "POST",
+      body: { message_ids },
+      secret: config.secret,
+    });
+
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_delete_bulk",
+  "Soft-delete multiple messages at once. Only the sender of each message can delete it.",
+  {
+    message_ids: z.array(z.string()).describe("Array of message IDs to delete (max 100)"),
+  },
+  async ({ message_ids }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/messages/delete-bulk", {
+      method: "POST",
+      body: { message_ids },
+      secret: config.secret,
+    });
+
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_label_bulk",
+  "Add a label to multiple messages at once. You must be sender or recipient of each message.",
+  {
+    message_ids: z.array(z.string()).describe("Array of message IDs to label (max 100)"),
+    label: z.string().describe("Label to add to all specified messages"),
+  },
+  async ({ message_ids, label }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/messages/label-bulk", {
+      method: "POST",
+      body: { message_ids, label },
+      secret: config.secret,
+    });
+
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_delete_message",
   "Soft-delete a sent message. Only the original sender can delete.",
   { message_id: z.string().describe("ID of the message to delete") },

@@ -741,6 +741,18 @@ export class TrunkClient {
     return this.request("/messages/ack-bulk", { method: "POST", body: { message_ids: messageIds } });
   }
 
+  readBulk(messageIds: string[]): Promise<{ ok: true; marked: number }> {
+    return this.request("/messages/read-bulk", { method: "POST", body: { message_ids: messageIds } });
+  }
+
+  deleteBulk(messageIds: string[]): Promise<{ ok: true; deleted: number }> {
+    return this.request("/messages/delete-bulk", { method: "POST", body: { message_ids: messageIds } });
+  }
+
+  labelBulk(messageIds: string[], label: string): Promise<{ ok: true; labeled: number }> {
+    return this.request("/messages/label-bulk", { method: "POST", body: { message_ids: messageIds, label } });
+  }
+
   reply(messageId: string, input: Omit<SendMessageRequest, "to" | "thread_id">): Promise<MessageReceipt> {
     return this.request(`/messages/${encodeURIComponent(messageId)}/reply`, {
       method: "POST",
