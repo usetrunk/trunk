@@ -269,6 +269,77 @@ app.get("/inbox/stats", async (c) => {
   });
 });
 
+// List threads the agent participates in (as sender or recipient)
+app.get("/threads", async (c) => {
+  const agentId = c.get("agentId");
+  const limitParam = parseInt(c.req.query("limit") || "20", 10);
+  const limit = Math.min(Math.max(1, limitParam), 50);
+  const cursorParam = c.req.query("cursor");
+
+  // Get all non-deleted messages where agent is sender or recipient
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+    )
+    .orderBy(desc(messages.createdAt));
+
+  const visible = rows.filter((r) => r.status !== "deleted" && r.threadId);
+
+  // Group by thread
+  const threadMap = new Map<string, typeof visible>();
+  for (const msg of visible) {
+    const tid = msg.threadId!;
+    if (!threadMap.has(tid)) threadMap.set(tid, []);
+    threadMap.get(tid)!.push(msg);
+  }
+
+  // Build thread summaries sorted by latest activity (newest first)
+  const threadSummaries = Array.from(threadMap.entries())
+    .map(([threadId, msgs]) => {
+      msgs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      const latest = msgs[0];
+      const unread = msgs.filter((m) => m.toAgent === agentId && (m.status === "pending" || m.status === "delivered")).length;
+      const participantIds = new Set<string>();
+      for (const m of msgs) {
+        participantIds.add(m.fromAgent);
+        participantIds.add(m.toAgent);
+      }
+      return {
+        thread_id: threadId,
+        message_count: msgs.length,
+        unread_count: unread,
+        participants: Array.from(participantIds),
+        last_message: {
+          id: latest.id,
+          from: latest.fromAgent,
+          type: latest.type,
+          preview: typeof latest.payload?.content === "string"
+            ? latest.payload.content.slice(0, 120)
+            : null,
+          created_at: latest.createdAt,
+        },
+        last_activity: latest.createdAt,
+      };
+    })
+    .sort((a, b) => new Date(b.last_activity).getTime() - new Date(a.last_activity).getTime());
+
+  // Apply cursor pagination
+  let startIdx = 0;
+  if (cursorParam) {
+    const idx = threadSummaries.findIndex((t) => t.thread_id === cursorParam);
+    if (idx !== -1) startIdx = idx + 1;
+  }
+
+  const page = threadSummaries.slice(startIdx, startIdx + limit + 1);
+  const has_more = page.length > limit;
+  const items = has_more ? page.slice(0, limit) : page;
+  const next_cursor = has_more && items.length > 0 ? items[items.length - 1].thread_id : null;
+
+  return c.json({ threads: items, next_cursor, has_more });
+});
+
 // Get sent messages (outbox)
 app.get("/sent", async (c) => {
   const agentId = c.get("agentId");

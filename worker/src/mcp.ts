@@ -884,6 +884,24 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_threads",
+    "List threads you participate in, sorted by latest activity. Returns thread ID, message count, unread count, participants, and a preview of the last message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      limit: z.number().optional().describe("Max threads to return (default 20, max 50)"),
+      cursor: z.string().optional().describe("Thread ID cursor from previous response for pagination"),
+    },
+    async ({ secret, limit, cursor }) => {
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", String(limit));
+      if (cursor) params.set("cursor", cursor);
+      const query = params.toString();
+      const result = await relay(`/messages/threads${query ? `?${query}` : ""}`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_audit_log",
     "Query your audit log. Returns a paginated list of actions you've performed (message sends, contact pairs, fact updates, etc.). Filter by action, target type, target ID, or date range.",
     {

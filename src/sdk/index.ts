@@ -443,6 +443,30 @@ export type AckResponse = {
   ok: true;
 };
 
+export type ThreadListItem = {
+  thread_id: string;
+  message_count: number;
+  unread_count: number;
+  participants: string[];
+  last_message: {
+    id: string;
+    from: string;
+    type: string;
+    preview: string | null;
+    created_at: string | Date;
+  };
+  last_activity: string | Date;
+};
+
+export type ThreadListOptions = {
+  limit?: number;
+  cursor?: string;
+};
+
+export type ThreadListResponse = {
+  threads: ThreadListItem[];
+};
+
 export type AuditEvent = {
   id: string;
   action: string;
@@ -852,6 +876,14 @@ export class TrunkClient {
 
   deleteDocument(contactId: string, docId: string): Promise<AckResponse> {
     return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
+  }
+
+  listThreads(options: ThreadListOptions = {}): Promise<PaginatedResponse<ThreadListResponse>> {
+    const search = new URLSearchParams();
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
+    const query = search.toString();
+    return this.request(`/messages/threads${query ? `?${query}` : ""}`);
   }
 
   auditLog(options: AuditLogOptions = {}): Promise<PaginatedResponse<AuditLogResponse>> {

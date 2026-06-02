@@ -3714,6 +3714,127 @@ describe("Hono API behavior", () => {
     const unauthenticated = createClient("bad-secret");
     await expect(unauthenticated.auditLog()).rejects.toMatchObject({ status: 401 });
   });
+
+  // --- Thread listing ---
+
+  it("listThreads returns threads the agent participates in", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create messages in two different threads
+    const msg1 = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "thread one" },
+    });
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "thread two" },
+    });
+
+    const result = await alphaClient.listThreads();
+    expect(result.threads.length).toBe(2);
+    expect(result.threads[0]).toHaveProperty("thread_id");
+    expect(result.threads[0]).toHaveProperty("message_count");
+    expect(result.threads[0]).toHaveProperty("unread_count");
+    expect(result.threads[0]).toHaveProperty("participants");
+    expect(result.threads[0]).toHaveProperty("last_message");
+    expect(result.threads[0]).toHaveProperty("last_activity");
+  });
+
+  it("listThreads shows unread count for inbox messages", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Alpha sends to beta — beta has unread
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "hello" },
+    });
+
+    // Beta sees 1 unread
+    const betaThreads = await betaClient.listThreads();
+    expect(betaThreads.threads.length).toBe(1);
+    expect(betaThreads.threads[0].unread_count).toBe(1);
+
+    // Alpha sees 0 unread (they sent it)
+    const alphaThreads = await alphaClient.listThreads();
+    expect(alphaThreads.threads[0].unread_count).toBe(0);
+  });
+
+  it("listThreads includes preview from last message content", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "preview text here" },
+    });
+
+    const result = await alphaClient.listThreads();
+    expect(result.threads[0].last_message.preview).toBe("preview text here");
+  });
+
+  it("listThreads respects limit and paginates", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create 3 separate threads
+    for (let i = 0; i < 3; i++) {
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: `thread ${i}` },
+      });
+    }
+
+    const page1 = await alphaClient.listThreads({ limit: 2 });
+    expect(page1.threads.length).toBe(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    const page2 = await alphaClient.listThreads({ limit: 2, cursor: page1.next_cursor! });
+    expect(page2.threads.length).toBe(1);
+    expect(page2.has_more).toBe(false);
+
+    // No overlap
+    const p1Ids = new Set(page1.threads.map((t) => t.thread_id));
+    expect(page2.threads.every((t) => !p1Ids.has(t.thread_id))).toBe(true);
+  });
+
+  it("listThreads returns empty for agent with no messages", async () => {
+    const alpha = await createClient().register({ name: "lonely" });
+    const client = createClient(alpha.secret);
+
+    const result = await client.listThreads();
+    expect(result.threads).toEqual([]);
+    expect(result.has_more).toBe(false);
+  });
+
+  it("listThreads groups messages by thread_id", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send and reply in same thread
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "question" },
+    });
+    await betaClient.reply(msg.id, {
+      type: "ack",
+      payload: { content: "answer" },
+    });
+
+    // Alpha should see 1 thread with 2 messages
+    const result = await alphaClient.listThreads();
+    const thread = result.threads.find((t) => t.thread_id === msg.thread_id);
+    expect(thread).toBeDefined();
+    expect(thread!.message_count).toBe(2);
+  });
 });
 
 async function registerPair(): Promise<{

@@ -2178,6 +2178,82 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_threads",
+    "List threads you participate in, sorted by latest activity. Returns thread ID, message count, unread count, participants, and a preview of the last message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      limit: z.number().optional().describe("Max threads to return (default 20, max 50)"),
+      cursor: z.string().optional().describe("Thread ID cursor from previous response for pagination"),
+    },
+    async ({ secret, limit: maxItems, cursor }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const conditions = [or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))];
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(and(...conditions))
+        .orderBy(desc(messages.createdAt));
+
+      const visible = rows.filter((r: any) => r.status !== "deleted" && r.threadId);
+
+      const threadMap = new Map<string, typeof visible>();
+      for (const msg of visible) {
+        const tid = (msg as any).threadId!;
+        if (!threadMap.has(tid)) threadMap.set(tid, []);
+        threadMap.get(tid)!.push(msg);
+      }
+
+      const threadSummaries = Array.from(threadMap.entries())
+        .map(([threadId, msgs]) => {
+          msgs.sort((a: any, b: any) => b.createdAt.getTime() - a.createdAt.getTime());
+          const latest = msgs[0] as any;
+          const unread = msgs.filter((m: any) => m.toAgent === agent.id && (m.status === "pending" || m.status === "delivered")).length;
+          const participantIds = new Set<string>();
+          for (const m of msgs) {
+            participantIds.add((m as any).fromAgent);
+            participantIds.add((m as any).toAgent);
+          }
+          return {
+            thread_id: threadId,
+            message_count: msgs.length,
+            unread_count: unread,
+            participants: Array.from(participantIds),
+            last_message: {
+              id: latest.id,
+              from: latest.fromAgent,
+              type: latest.type,
+              preview: typeof latest.payload?.content === "string" ? latest.payload.content.slice(0, 120) : null,
+              created_at: latest.createdAt,
+            },
+            last_activity: latest.createdAt,
+          };
+        })
+        .sort((a, b) => new Date(b.last_activity).getTime() - new Date(a.last_activity).getTime());
+
+      const limit = Math.min(Math.max(1, maxItems ?? 20), 50);
+      let startIdx = 0;
+      if (cursor) {
+        const idx = threadSummaries.findIndex((t) => t.thread_id === cursor);
+        if (idx !== -1) startIdx = idx + 1;
+      }
+
+      const page = threadSummaries.slice(startIdx, startIdx + limit + 1);
+      const has_more = page.length > limit;
+      const items = has_more ? page.slice(0, limit) : page;
+      const next_cursor = has_more && items.length > 0 ? items[items.length - 1].thread_id : null;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ threads: items, next_cursor, has_more }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_audit_log",
     "Query your audit log. Returns a paginated list of actions you've performed (message sends, contact pairs, fact updates, etc.). Filter by action, target type, target ID, or date range.",
     {
