@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, workspaces, workspaceContacts, blockedContacts } from "../db/schema.js";
+import { agents, contacts, workspaces, workspaceContacts, blockedContacts, contactNotes } from "../db/schema.js";
 import { eq, or, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -352,6 +352,68 @@ app.delete("/:agentId/block", async (c) => {
     .returning();
   if (deleted.length === 0) return c.json({ error: "Not blocked" }, 404);
   await audit(myId, "contact.unblock", "agent", targetId);
+  return c.json({ ok: true });
+});
+
+// Add or update a private note about a contact
+app.put("/:agentId/notes", async (c) => {
+  const myId = c.get("agentId");
+  const targetId = c.req.param("agentId");
+  const body = await c.req.json<{ content: string }>();
+  if (!body.content || typeof body.content !== "string") {
+    return c.json({ error: "content is required" }, 400);
+  }
+
+  // Check for existing note
+  const existing = await db
+    .select()
+    .from(contactNotes)
+    .where(and(eq(contactNotes.agentId, myId), eq(contactNotes.contactAgentId, targetId)));
+
+  if (existing.length > 0) {
+    const [updated] = await db
+      .update(contactNotes)
+      .set({ content: body.content, updatedAt: new Date() })
+      .where(and(eq(contactNotes.agentId, myId), eq(contactNotes.contactAgentId, targetId)))
+      .returning();
+    await audit(myId, "contact.note_update", "agent", targetId);
+    return c.json({ id: updated.id, contact_id: targetId, content: updated.content, updated_at: updated.updatedAt });
+  }
+
+  const [row] = await db.insert(contactNotes).values({
+    agentId: myId,
+    contactAgentId: targetId,
+    content: body.content,
+  }).returning();
+  await audit(myId, "contact.note_create", "agent", targetId);
+  return c.json({ id: row.id, contact_id: targetId, content: row.content, created_at: row.createdAt }, 201);
+});
+
+// Get note about a contact
+app.get("/:agentId/notes", async (c) => {
+  const myId = c.get("agentId");
+  const targetId = c.req.param("agentId");
+
+  const [note] = await db
+    .select()
+    .from(contactNotes)
+    .where(and(eq(contactNotes.agentId, myId), eq(contactNotes.contactAgentId, targetId)));
+
+  if (!note) return c.json({ contact_id: targetId, content: null });
+  return c.json({ id: note.id, contact_id: targetId, content: note.content, created_at: note.createdAt, updated_at: note.updatedAt });
+});
+
+// Delete note about a contact
+app.delete("/:agentId/notes", async (c) => {
+  const myId = c.get("agentId");
+  const targetId = c.req.param("agentId");
+
+  const deleted = await db
+    .delete(contactNotes)
+    .where(and(eq(contactNotes.agentId, myId), eq(contactNotes.contactAgentId, targetId)))
+    .returning();
+  if (deleted.length === 0) return c.json({ error: "No note found" }, 404);
+  await audit(myId, "contact.note_delete", "agent", targetId);
   return c.json({ ok: true });
 });
 

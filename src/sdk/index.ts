@@ -497,6 +497,14 @@ export type LabelListResponse = {
   labels: LabelSummary[];
 };
 
+export type ContactNote = {
+  id?: string;
+  contact_id: string;
+  content: string | null;
+  created_at?: string | Date;
+  updated_at?: string | Date;
+};
+
 export type BlockedContact = {
   agent_id: string;
   name: string | null;
@@ -917,6 +925,18 @@ export class TrunkClient {
     if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/messages/threads${query ? `?${query}` : ""}`);
+  }
+
+  contactNote(agentId: string): Promise<ContactNote> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/notes`);
+  }
+
+  setContactNote(agentId: string, content: string): Promise<ContactNote> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/notes`, { method: "PUT", body: { content } });
+  }
+
+  deleteContactNote(agentId: string): Promise<AckResponse> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/notes`, { method: "DELETE" });
   }
 
   blockContact(agentId: string, reason?: string): Promise<{ ok: true; id?: string; blocked_at?: string; already_blocked?: boolean }> {

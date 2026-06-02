@@ -930,6 +930,46 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_contact_note",
+    "Get your private note about a contact.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+    },
+    async ({ secret, contact_id }) => {
+      const result = await relay(`/contacts/${encodeURIComponent(contact_id)}/notes`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_set_contact_note",
+    "Set or update your private note about a contact. Notes are only visible to you.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      content: z.string().describe("Note content"),
+    },
+    async ({ secret, contact_id, content }) => {
+      const result = await relay(`/contacts/${encodeURIComponent(contact_id)}/notes`, { method: "PUT", secret, body: { content } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_delete_contact_note",
+    "Delete your private note about a contact.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+    },
+    async ({ secret, contact_id }) => {
+      const result = await relay(`/contacts/${encodeURIComponent(contact_id)}/notes`, { method: "DELETE", secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_block_contact",
     "Block an agent from sending you messages. Blocking is one-directional.",
     {

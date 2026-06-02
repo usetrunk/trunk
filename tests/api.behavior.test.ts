@@ -201,6 +201,15 @@ type BlockedContactRow = {
   createdAt: Date;
 };
 
+type ContactNoteRow = {
+  id: string;
+  agentId: string;
+  contactAgentId: string;
+  content: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -219,7 +228,8 @@ type TableName =
   | "reactions"
   | "webhook_deliveries"
   | "message_labels"
-  | "blocked_contacts";
+  | "blocked_contacts"
+  | "contact_notes";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -240,6 +250,7 @@ const testState = vi.hoisted(() => ({
   "webhook_deliveries": [] as WebhookDeliveryRow[],
   "message_labels": [] as MessageLabelRow[],
   "blocked_contacts": [] as BlockedContactRow[],
+  "contact_notes": [] as ContactNoteRow[],
   idCounter: 0,
 }));
 
@@ -272,6 +283,7 @@ describe("Hono API behavior", () => {
     testState["webhook_deliveries"].length = 0;
     testState["message_labels"].length = 0;
     testState["blocked_contacts"].length = 0;
+    testState["contact_notes"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -4077,6 +4089,54 @@ describe("Hono API behavior", () => {
     const { alpha, betaClient } = await registerPair();
     await expect(betaClient.unblockContact(alpha.agent_id)).rejects.toThrow(TrunkApiError);
   });
+
+  // ── Contact Notes ──
+  it("can set, get, and update a contact note", async () => {
+    const { alphaClient, beta } = await registerPair();
+
+    // Set a note
+    const created = await alphaClient.setContactNote(beta.agent_id, "Good collaborator, prefers short messages");
+    expect(created.contact_id).toBe(beta.agent_id);
+    expect(created.content).toBe("Good collaborator, prefers short messages");
+
+    // Get the note
+    const note = await alphaClient.contactNote(beta.agent_id);
+    expect(note.content).toBe("Good collaborator, prefers short messages");
+
+    // Update the note
+    const updated = await alphaClient.setContactNote(beta.agent_id, "Updated note");
+    expect(updated.content).toBe("Updated note");
+
+    // Verify update persisted
+    const readBack = await alphaClient.contactNote(beta.agent_id);
+    expect(readBack.content).toBe("Updated note");
+  });
+
+  it("returns null content for a contact without notes", async () => {
+    const { alphaClient, beta } = await registerPair();
+    const note = await alphaClient.contactNote(beta.agent_id);
+    expect(note.content).toBeNull();
+  });
+
+  it("can delete a contact note", async () => {
+    const { alphaClient, beta } = await registerPair();
+    await alphaClient.setContactNote(beta.agent_id, "temp note");
+    await alphaClient.deleteContactNote(beta.agent_id);
+    const note = await alphaClient.contactNote(beta.agent_id);
+    expect(note.content).toBeNull();
+  });
+
+  it("contact notes are private to each agent", async () => {
+    const { alphaClient, beta, betaClient, alpha } = await registerPair();
+    await alphaClient.setContactNote(beta.agent_id, "alpha's note about beta");
+    await betaClient.setContactNote(alpha.agent_id, "beta's note about alpha");
+
+    const alphaNote = await alphaClient.contactNote(beta.agent_id);
+    expect(alphaNote.content).toBe("alpha's note about beta");
+
+    const betaNote = await betaClient.contactNote(alpha.agent_id);
+    expect(betaNote.content).toBe("beta's note about alpha");
+  });
 });
 
 async function registerPair(): Promise<{
@@ -4535,6 +4595,19 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "contact_notes") {
+      const row: ContactNoteRow = {
+        id: nextId("note"),
+        agentId: this.insertValues.agentId as string,
+        contactAgentId: this.insertValues.contactAgentId as string,
+        content: this.insertValues.content as string,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      testState["contact_notes"].push(row);
+      return row;
+    }
+
     if (this.table === "blocked_contacts") {
       const row: BlockedContactRow = {
         id: nextId("block"),
@@ -4662,7 +4735,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow> {
   return testState[table];
 }
 
@@ -4695,7 +4768,8 @@ function getTableName(table: unknown): TableName {
     name === "reactions" ||
     name === "webhook_deliveries" ||
     name === "message_labels" ||
-    name === "blocked_contacts"
+    name === "blocked_contacts" ||
+    name === "contact_notes"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -4855,4 +4929,5 @@ const columnToProperty: Record<string, string> = {
   start_date: "startDate",
   depends_on: "dependsOn",
   blocked_agent_id: "blockedAgentId",
+  contact_agent_id: "contactAgentId",
 };

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -2314,6 +2314,72 @@ export function createTrunkMcpServer() {
           }, null, 2),
         }],
       };
+    }
+  );
+
+  server.tool(
+    "trunk_contact_note",
+    "Get your private note about a contact. Returns null content if no note exists.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+    },
+    async ({ secret, contact_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [note] = await db.select().from(contactNotes)
+        .where(and(eq(contactNotes.agentId, agent.id), eq(contactNotes.contactAgentId, contact_id)));
+
+      if (!note) return { content: [{ type: "text", text: JSON.stringify({ contact_id, content: null }, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ id: note.id, contact_id, content: note.content, created_at: note.createdAt, updated_at: note.updatedAt }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_set_contact_note",
+    "Set or update your private note about a contact. Notes are only visible to you.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      content: z.string().describe("Note content"),
+    },
+    async ({ secret, contact_id, content: noteContent }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const existing = await db.select().from(contactNotes)
+        .where(and(eq(contactNotes.agentId, agent.id), eq(contactNotes.contactAgentId, contact_id)));
+
+      if (existing.length > 0) {
+        const [updated] = await db.update(contactNotes)
+          .set({ content: noteContent, updatedAt: new Date() })
+          .where(and(eq(contactNotes.agentId, agent.id), eq(contactNotes.contactAgentId, contact_id)))
+          .returning();
+        return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, contact_id, content: updated.content, updated_at: updated.updatedAt }, null, 2) }] };
+      }
+
+      const [row] = await db.insert(contactNotes).values({ agentId: agent.id, contactAgentId: contact_id, content: noteContent }).returning();
+      return { content: [{ type: "text", text: JSON.stringify({ id: row.id, contact_id, content: row.content, created_at: row.createdAt }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_delete_contact_note",
+    "Delete your private note about a contact.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+    },
+    async ({ secret, contact_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const deleted = await db.delete(contactNotes)
+        .where(and(eq(contactNotes.agentId, agent.id), eq(contactNotes.contactAgentId, contact_id)))
+        .returning();
+      if (deleted.length === 0) return errorResult("No note found");
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }] };
     }
   );
 
