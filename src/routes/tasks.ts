@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { tasks, roomMembers } from "../db/schema.js";
-import { eq, and, desc, lt, or } from "drizzle-orm";
+import { tasks, roomMembers, agents } from "../db/schema.js";
+import { eq, and, desc, lt, or, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
@@ -303,7 +303,89 @@ app.patch("/:scopeId/:taskId", async (c) => {
 
   if (!updated) return c.json({ error: "Task not found" }, 404);
 
+  // When a task is marked done, auto-unblock downstream tasks
+  if (body.status === "done") {
+    const allScopeTasks = await db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.scope, updated.scope));
+
+    const doneIds = new Set(allScopeTasks.filter(t => t.status === "done").map(t => t.id));
+
+    for (const t of allScopeTasks) {
+      const deps = (t.dependsOn as string[]) || [];
+      if (deps.includes(taskId) && t.status === "blocked") {
+        if (deps.every(d => doneIds.has(d))) {
+          await db
+            .update(tasks)
+            .set({ status: "open", updatedAt: new Date() })
+            .where(eq(tasks.id, t.id));
+        }
+      }
+    }
+  }
+
   return c.json(taskToJson(updated));
+});
+
+// Gantt data endpoint — returns tasks with dependency info for visualization
+app.get("/gantt/workspace/:workspaceId", async (c) => {
+  const agentId = c.get("agentId");
+  const workspaceId = c.req.param("workspaceId");
+
+  const hasAccess = await verifyWorkspaceAccess(agentId, workspaceId);
+  if (!hasAccess) return c.json({ error: "Not a workspace member" }, 403);
+
+  const scope = `workspace:${workspaceId}`;
+  const allTasks = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.scope, scope))
+    .orderBy(tasks.sequence, tasks.createdAt);
+
+  const ownerIds = [...new Set(allTasks.map(t => t.owner).filter(Boolean))] as string[];
+  const ownerRows = ownerIds.length > 0
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, ownerIds))
+    : [];
+  const ownerNames = Object.fromEntries(ownerRows.map(a => [a.id, a.name]));
+
+  const doneIds = new Set(allTasks.filter(t => t.status === "done").map(t => t.id));
+
+  const ganttTasks = allTasks.map(t => {
+    const deps = (t.dependsOn as string[]) || [];
+    const blockedBy = deps.filter(d => !doneIds.has(d));
+
+    return {
+      ...taskToJson(t),
+      owner_name: t.owner ? ownerNames[t.owner] || t.owner.slice(0, 8) : null,
+      deps_met: blockedBy.length === 0,
+      blocked_by: blockedBy,
+    };
+  });
+
+  const grouped: Record<string, typeof ganttTasks> = {};
+  const ungrouped: typeof ganttTasks = [];
+  for (const t of ganttTasks) {
+    if (t.group) {
+      if (!grouped[t.group]) grouped[t.group] = [];
+      grouped[t.group].push(t);
+    } else {
+      ungrouped.push(t);
+    }
+  }
+
+  return c.json({
+    tasks: ganttTasks,
+    groups: grouped,
+    ungrouped,
+    summary: {
+      total: allTasks.length,
+      done: allTasks.filter(t => t.status === "done").length,
+      in_progress: allTasks.filter(t => t.status === "in-progress").length,
+      blocked: allTasks.filter(t => t.status === "blocked").length,
+      open: allTasks.filter(t => t.status === "open").length,
+    },
+  });
 });
 
 // Delete a task (works for contact, room, and workspace scoped tasks)

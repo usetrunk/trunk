@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { html } from "hono/html";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, roomMembers, rooms, tasks } from "../db/schema.js";
-import { and, eq, or, desc } from "drizzle-orm";
+import { agents, contacts, messages, roomMembers, rooms, tasks, workspaceContacts, workspaces } from "../db/schema.js";
+import { and, eq, or, desc, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -422,6 +422,421 @@ app.get("/inbox", async (c) => {
           </div>
         `;
       })}
+  </div>
+</body>
+</html>`);
+});
+
+// Gantt chart view — visual project timeline
+app.get("/gantt", async (c) => {
+  const agent = c.get("agent");
+  const agentId = c.get("agentId");
+  const secret = c.req.query("secret") || "";
+
+  // Find workspaces this agent belongs to
+  const wsMemberships = await db
+    .select()
+    .from(workspaceContacts)
+    .where(eq(workspaceContacts.agentId, agentId));
+
+  const wsIds = wsMemberships.map(m => m.workspaceId);
+  const wsRows = wsIds.length > 0
+    ? await db.select().from(workspaces).where(or(...wsIds.map(id => eq(workspaces.id, id))))
+    : [];
+
+  // Get all workspace-scoped tasks
+  const allTasks = wsIds.length > 0
+    ? await db
+        .select()
+        .from(tasks)
+        .where(or(...wsIds.map(id => eq(tasks.scope, `workspace:${id}`))))
+        .orderBy(tasks.sequence, tasks.createdAt)
+    : [];
+
+  // Resolve owner names
+  const ownerIds = [...new Set(allTasks.map(t => t.owner).filter(Boolean))] as string[];
+  const ownerRows = ownerIds.length > 0
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...ownerIds.map(id => eq(agents.id, id))))
+    : [];
+  const ownerNames = new Map(ownerRows.map(a => [a.id, a.name]));
+
+  const doneIds = new Set(allTasks.filter(t => t.status === "done").map(t => t.id));
+
+  // Group tasks by module
+  const groupMap = new Map<string, typeof allTasks>();
+  const ungrouped: typeof allTasks = [];
+  for (const t of allTasks) {
+    if (t.group) {
+      if (!groupMap.has(t.group)) groupMap.set(t.group, []);
+      groupMap.get(t.group)!.push(t);
+    } else {
+      ungrouped.push(t);
+    }
+  }
+
+  // Summary stats
+  const totalTasks = allTasks.length;
+  const doneTasks = allTasks.filter(t => t.status === "done").length;
+  const inProgressTasks = allTasks.filter(t => t.status === "in-progress").length;
+  const blockedTasks = allTasks.filter(t => t.status === "blocked").length;
+  const openTasks = allTasks.filter(t => t.status === "open").length;
+  const overallProgress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+  // Date range for the timeline
+  const now = new Date();
+  const dates: string[] = [];
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + i);
+    dates.push(d.toISOString().slice(0, 10));
+  }
+  const today = now.toISOString().slice(0, 10);
+
+  function statusColor(status: string) {
+    switch (status) {
+      case "done": return "var(--good)";
+      case "in-progress": return "var(--accent)";
+      case "blocked": return "var(--danger)";
+      default: return "var(--muted)";
+    }
+  }
+
+  function priorityIcon(priority: string) {
+    switch (priority) {
+      case "critical": return "!!!";
+      case "high": return "!!";
+      case "low": return "";
+      default: return "";
+    }
+  }
+
+  function renderTaskRow(t: typeof allTasks[0]) {
+    const deps = (t.dependsOn as string[]) || [];
+    const blockedBy = deps.filter(d => !doneIds.has(d));
+    const isBlocked = blockedBy.length > 0;
+    const owner = t.owner ? ownerNames.get(t.owner) || t.owner.slice(0, 8) : "unassigned";
+    const start = t.startDate || t.createdAt.toISOString().slice(0, 10);
+    const est = t.estimate || 1;
+
+    // Calculate bar position and width relative to the timeline
+    const startIdx = Math.max(0, dates.indexOf(start));
+    const barStart = startIdx > 0 ? startIdx : 0;
+    const barWidth = Math.min(est, dates.length - barStart);
+
+    return html`
+      <div class="gantt-row">
+        <div class="gantt-label">
+          <div class="gantt-task-title">
+            <span class="gantt-status" style="color:${statusColor(t.status)}">${t.status === "done" ? "✓" : t.status === "in-progress" ? "▶" : t.status === "blocked" ? "✕" : "○"}</span>
+            <span class="gantt-title-text" title="${t.title}">${t.title}</span>
+            ${priorityIcon(t.priority) ? html`<span class="gantt-priority">${priorityIcon(t.priority)}</span>` : ""}
+          </div>
+          <div class="gantt-meta">
+            <span class="gantt-owner">${owner}</span>
+            ${t.due ? html`<span class="gantt-due">due ${t.due}</span>` : ""}
+            ${isBlocked ? html`<span class="gantt-blocked">blocked by ${blockedBy.length}</span>` : ""}
+          </div>
+        </div>
+        <div class="gantt-timeline">
+          ${dates.map((d, i) => {
+            const isBar = i >= barStart && i < barStart + barWidth;
+            const isToday = d === today;
+            return html`<div class="gantt-cell ${isToday ? "today" : ""} ${isBar ? `bar ${t.status}` : ""}">${isBar && i === barStart ? "" : ""}</div>`;
+          })}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderGroup(name: string, groupTasks: typeof allTasks) {
+    const done = groupTasks.filter(t => t.status === "done").length;
+    const total = groupTasks.length;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+    return html`
+      <div class="gantt-group">
+        <div class="gantt-group-header">
+          <div class="gantt-group-title">
+            <span class="gantt-group-name">${name}</span>
+            <span class="gantt-group-progress">${done}/${total} (${pct}%)</span>
+          </div>
+          <div class="gantt-progress-bar">
+            <div class="gantt-progress-fill" style="width:${pct}%"></div>
+          </div>
+        </div>
+        ${groupTasks.map(t => renderTaskRow(t))}
+      </div>
+    `;
+  }
+
+  return c.html(html`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gantt — Trunk</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      color-scheme: dark;
+      --bg: #080807;
+      --panel: #11110f;
+      --line: #282820;
+      --muted: #8d8a7d;
+      --text: #f4f0e6;
+      --accent: #d5ff5f;
+      --accent-2: #64d2ff;
+      --danger: #ff7b72;
+      --good: #7ee787;
+    }
+    body {
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .gantt-shell { max-width: 100vw; overflow-x: auto; padding: 1.5rem; }
+
+    .gantt-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .gantt-header-left { display: flex; align-items: center; gap: 1rem; }
+    .gantt-header-left a { color: var(--accent-2); text-decoration: none; font-size: 0.85rem; }
+    .gantt-header-left h1 { font-size: 1.5rem; }
+
+    .gantt-stats {
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+    }
+    .gantt-stat {
+      text-align: center;
+    }
+    .gantt-stat-value {
+      font-size: 1.4rem;
+      font-weight: 700;
+    }
+    .gantt-stat-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .gantt-overall {
+      width: 200px;
+      height: 8px;
+      background: #1a1a18;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .gantt-overall-fill {
+      height: 100%;
+      background: var(--good);
+      border-radius: 4px;
+      transition: width 0.3s;
+    }
+
+    .gantt-group { margin-bottom: 1.5rem; }
+    .gantt-group-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .gantt-group-title {
+      min-width: 280px;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .gantt-group-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--accent-2);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .gantt-group-progress {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .gantt-progress-bar {
+      flex: 1;
+      height: 4px;
+      background: #1a1a18;
+      border-radius: 2px;
+      overflow: hidden;
+      max-width: 200px;
+    }
+    .gantt-progress-fill {
+      height: 100%;
+      background: var(--good);
+      border-radius: 2px;
+    }
+
+    .gantt-row {
+      display: flex;
+      align-items: stretch;
+      border-bottom: 1px solid #1a1a18;
+    }
+    .gantt-row:hover { background: rgba(255,255,255,0.02); }
+    .gantt-label {
+      min-width: 280px;
+      max-width: 280px;
+      padding: 0.5rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.2rem;
+      border-right: 1px solid var(--line);
+    }
+    .gantt-task-title {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .gantt-status { font-size: 0.75rem; }
+    .gantt-title-text {
+      font-size: 0.82rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 200px;
+    }
+    .gantt-priority {
+      font-size: 0.65rem;
+      color: var(--danger);
+      font-weight: 700;
+    }
+    .gantt-meta {
+      display: flex;
+      gap: 0.5rem;
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+    .gantt-owner { color: #a7a193; }
+    .gantt-due { color: var(--accent-2); }
+    .gantt-blocked { color: var(--danger); }
+
+    .gantt-timeline {
+      display: flex;
+      flex: 1;
+      min-width: 0;
+    }
+    .gantt-cell {
+      min-width: 28px;
+      max-width: 28px;
+      height: 100%;
+      min-height: 42px;
+      border-right: 1px solid #141412;
+      position: relative;
+    }
+    .gantt-cell.today {
+      background: rgba(213, 255, 95, 0.06);
+      border-right-color: rgba(213, 255, 95, 0.15);
+    }
+    .gantt-cell.bar {
+      position: relative;
+    }
+    .gantt-cell.bar::after {
+      content: '';
+      position: absolute;
+      top: 25%;
+      bottom: 25%;
+      left: 0;
+      right: 0;
+      border-radius: 3px;
+    }
+    .gantt-cell.bar.open::after { background: var(--muted); opacity: 0.4; }
+    .gantt-cell.bar.in-progress::after { background: var(--accent); opacity: 0.7; }
+    .gantt-cell.bar.done::after { background: var(--good); opacity: 0.5; }
+    .gantt-cell.bar.blocked::after { background: var(--danger); opacity: 0.4; }
+
+    .gantt-date-header {
+      display: flex;
+      min-width: 280px;
+      margin-left: 280px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 0.5rem;
+    }
+    .gantt-date {
+      min-width: 28px;
+      max-width: 28px;
+      text-align: center;
+      font-size: 0.6rem;
+      color: var(--muted);
+      padding: 0.25rem 0;
+    }
+    .gantt-date.today { color: var(--accent); font-weight: 700; }
+    .gantt-date.weekend { color: #4a4840; }
+
+    .gantt-empty {
+      text-align: center;
+      padding: 3rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .auto-refresh { font-size: 0.75rem; color: var(--muted); }
+  </style>
+  <script>setTimeout(() => location.reload(), 30000);</script>
+</head>
+<body>
+  <div class="gantt-shell">
+    <div class="gantt-header">
+      <div class="gantt-header-left">
+        <a href="/dashboard?secret=${secret}">← dashboard</a>
+        <h1>Project timeline</h1>
+        <span class="auto-refresh">auto-refreshes every 30s</span>
+      </div>
+      <div class="gantt-stats">
+        <div class="gantt-stat">
+          <div class="gantt-stat-value" style="color:var(--good)">${doneTasks}</div>
+          <div class="gantt-stat-label">done</div>
+        </div>
+        <div class="gantt-stat">
+          <div class="gantt-stat-value" style="color:var(--accent)">${inProgressTasks}</div>
+          <div class="gantt-stat-label">active</div>
+        </div>
+        <div class="gantt-stat">
+          <div class="gantt-stat-value" style="color:var(--danger)">${blockedTasks}</div>
+          <div class="gantt-stat-label">blocked</div>
+        </div>
+        <div class="gantt-stat">
+          <div class="gantt-stat-value">${openTasks}</div>
+          <div class="gantt-stat-label">open</div>
+        </div>
+        <div>
+          <div class="gantt-overall">
+            <div class="gantt-overall-fill" style="width:${overallProgress}%"></div>
+          </div>
+          <div class="gantt-stat-label" style="margin-top:0.25rem">${overallProgress}% complete</div>
+        </div>
+      </div>
+    </div>
+
+    ${totalTasks === 0
+      ? html`<div class="gantt-empty">No tasks yet. Create workspace tasks with groups to see them here.</div>`
+      : html`
+        <div class="gantt-date-header">
+          ${dates.map(d => {
+            const dt = new Date(d + "T00:00:00");
+            const day = dt.getDay();
+            const isWeekend = day === 0 || day === 6;
+            const isToday = d === today;
+            const label = dt.getDate().toString();
+            return html`<div class="gantt-date ${isToday ? "today" : ""} ${isWeekend ? "weekend" : ""}">${label}</div>`;
+          })}
+        </div>
+
+        ${Array.from(groupMap.entries()).map(([name, groupTasks]) => renderGroup(name, groupTasks))}
+        ${ungrouped.length > 0 ? renderGroup("ungrouped", ungrouped) : ""}
+      `}
   </div>
 </body>
 </html>`);
