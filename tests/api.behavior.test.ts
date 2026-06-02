@@ -956,6 +956,54 @@ describe("Hono API behavior", () => {
     expect(updateRes.status).toBe(403);
   });
 
+  // --- SDK room method tests ---
+
+  it("SDK createRoom + joinRoom + listRooms round-trip", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "SDK Room Test" });
+    expect(room.name).toBe("SDK Room Test");
+    expect(typeof room.id).toBe("string");
+    expect(typeof room.pairing_code).toBe("string");
+
+    const joined = await betaClient.joinRoom({ code: room.pairing_code });
+    expect(joined.joined).toBe(true);
+    expect(joined.room_id).toBe(room.id);
+
+    const alphaRooms = await alphaClient.listRooms();
+    expect(alphaRooms.rooms.some(r => r.id === room.id)).toBe(true);
+
+    const betaRooms = await betaClient.listRooms();
+    expect(betaRooms.rooms.some(r => r.id === room.id)).toBe(true);
+  });
+
+  it("SDK roomMembers returns all members with roles", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "Members Room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const members = await alphaClient.roomMembers(room.id);
+    expect(members.members).toHaveLength(2);
+    const ids = members.members.map(m => m.id);
+    expect(ids).toContain(alpha.agent_id);
+    expect(ids).toContain(beta.agent_id);
+
+    const creator = members.members.find(m => m.id === alpha.agent_id);
+    expect(creator?.role).toBe("creator");
+    const member = members.members.find(m => m.id === beta.agent_id);
+    expect(member?.role).toBe("member");
+  });
+
+  it("SDK joinRoom idempotent for existing member", async () => {
+    const { alphaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "Double Join" });
+    const second = await alphaClient.joinRoom({ code: room.pairing_code });
+    expect(second.joined).toBe(true);
+    expect(second.already_member).toBe(true);
+  });
+
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
@@ -1632,7 +1680,7 @@ async function registerPair(): Promise<{
   };
 }
 
-// Raw task helpers (SDK doesn't have task methods yet)
+// Raw task helpers (used by legacy tests — SDK methods available via TrunkClient)
 function createTaskRaw(secret: string, contactId: string, body: Record<string, unknown>) {
   return app.request("/tasks", {
     method: "POST",

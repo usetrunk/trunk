@@ -192,6 +192,46 @@ export type TaskListOptions = {
   owner?: string;
 };
 
+export type CreateRoomRequest = {
+  name: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type RoomResponse = {
+  id: string;
+  name: string;
+  pairing_code: string;
+  created_by?: string;
+  created_at?: string | Date;
+};
+
+export type JoinRoomRequest = {
+  code: string;
+};
+
+export type JoinRoomResponse = {
+  joined: boolean;
+  already_member?: boolean;
+  room_id: string;
+  name: string;
+};
+
+export type RoomListResponse = {
+  rooms: Array<RoomResponse & { role?: string }>;
+};
+
+export type RoomMember = {
+  id: string;
+  name: string;
+  owner?: string | null;
+  role?: string;
+  joined_at?: string | Date;
+};
+
+export type RoomMembersResponse = {
+  members: RoomMember[];
+};
+
 export type InboxOptions = {
   status?: string;
   limit?: number;
@@ -379,6 +419,22 @@ export class TrunkClient {
       method: "PATCH",
       body: input,
     });
+  }
+
+  createRoom(input: CreateRoomRequest): Promise<RoomResponse> {
+    return this.request("/rooms", { method: "POST", body: input });
+  }
+
+  joinRoom(input: JoinRoomRequest): Promise<JoinRoomResponse> {
+    return this.request("/rooms/join", { method: "POST", body: input });
+  }
+
+  listRooms(): Promise<RoomListResponse> {
+    return this.request("/rooms");
+  }
+
+  roomMembers(roomId: string): Promise<RoomMembersResponse> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/members`);
   }
 
   private async request<T>(
