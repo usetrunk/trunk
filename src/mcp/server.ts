@@ -456,11 +456,12 @@ export function createTrunkMcpServer() {
       room_id: z.string().optional().describe("Room ID (room-scoped task)"),
       workspace_id: z.string().optional().describe("Workspace ID (workspace-scoped task)"),
       description: z.string().optional().describe("Task description / details"),
+      priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("Task priority (default: medium)"),
       owner: z.string().optional().describe("Agent ID of who's responsible"),
       due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
       context_ref: z.string().optional().describe("Reference to a thread or message"),
     },
-    async ({ secret, title, contact_id, room_id, workspace_id, description, owner, due, context_ref }) => {
+    async ({ secret, title, contact_id, room_id, workspace_id, description, priority, owner, due, context_ref }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
       if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
@@ -482,7 +483,8 @@ export function createTrunkMcpServer() {
       }
 
       const [task] = await db.insert(tasks).values({
-        scope, title, description, owner: owner || contact_id || undefined,
+        scope, title, description, priority: priority || "medium",
+        owner: owner || contact_id || undefined,
         createdBy: agent.id, due, contextRef: context_ref,
       }).returning();
 
@@ -541,12 +543,13 @@ export function createTrunkMcpServer() {
       workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
       task_id: z.string().describe("Task ID to update"),
       status: z.string().optional().describe("New status: open, in-progress, done, blocked"),
+      priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("Update the priority"),
       owner: z.string().optional().describe("Reassign to a different agent"),
       title: z.string().optional().describe("Update the title"),
       description: z.string().optional().describe("Update the description"),
       due: z.string().optional().describe("Update due date (YYYY-MM-DD)"),
     },
-    async ({ secret, contact_id, room_id, workspace_id, task_id, status, owner, title, description, due }) => {
+    async ({ secret, contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -563,13 +566,14 @@ export function createTrunkMcpServer() {
       if (title !== undefined) updates.title = title;
       if (description !== undefined) updates.description = description;
       if (status !== undefined) updates.status = status;
+      if (priority !== undefined) updates.priority = priority;
       if (owner !== undefined) updates.owner = owner;
       if (due !== undefined) updates.due = due;
 
       const [updated] = await db.update(tasks).set(updates).where(eq(tasks.id, task_id)).returning();
       if (!updated) return errorResult("Task not found");
 
-      return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, title: updated.title, status: updated.status, owner: updated.owner, due: updated.due, updated_at: updated.updatedAt }, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, title: updated.title, status: updated.status, priority: updated.priority, owner: updated.owner, due: updated.due, updated_at: updated.updatedAt }, null, 2) }] };
     }
   );
 

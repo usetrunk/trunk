@@ -51,6 +51,7 @@ type TaskRow = {
   title: string;
   description: string | null;
   status: string;
+  priority: string;
   owner: string | null;
   createdBy: string;
   due: string | null;
@@ -630,6 +631,46 @@ describe("Hono API behavior", () => {
     const doneTasks = await doneRes.json();
     expect(doneTasks.tasks).toHaveLength(1);
     expect(doneTasks.tasks[0].title).toBe("Done task");
+  });
+
+  // --- Priority tests ---
+
+  it("defaults task priority to medium when not specified", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, { title: "No priority set" });
+    expect(res.status).toBe(201);
+    const task = await res.json();
+    expect(task.priority).toBe("medium");
+  });
+
+  it("creates a task with explicit priority", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Critical bug",
+      priority: "critical",
+    });
+    expect(res.status).toBe(201);
+    const task = await res.json();
+    expect(task.priority).toBe("critical");
+  });
+
+  it("updates task priority", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Escalate me" });
+    const task = await createRes.json();
+    expect(task.priority).toBe("medium");
+
+    const updateRes = await updateTaskRaw(beta.secret, alpha.agent_id, task.id, {
+      priority: "high",
+    });
+    const updated = await updateRes.json();
+    expect(updated.priority).toBe("high");
   });
 
   // --- Room tests ---
@@ -1748,6 +1789,7 @@ class InsertQuery {
         title: this.insertValues.title as string,
         description: (this.insertValues.description as string | undefined) ?? null,
         status: (this.insertValues.status as string | undefined) ?? "open",
+        priority: (this.insertValues.priority as string | undefined) ?? "medium",
         owner: (this.insertValues.owner as string | undefined) ?? null,
         createdBy: this.insertValues.createdBy as string,
         due: (this.insertValues.due as string | undefined) ?? null,

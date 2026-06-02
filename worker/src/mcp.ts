@@ -156,12 +156,13 @@ export function createMcpServer() {
       room_id: z.string().optional().describe("Room ID (room-scoped task)"),
       workspace_id: z.string().optional().describe("Workspace ID (workspace-scoped task)"),
       description: z.string().optional().describe("Task description"),
+      priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("Task priority (default: medium)"),
       owner: z.string().optional().describe("Agent ID of who's responsible"),
       due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
       context_ref: z.string().optional().describe("Reference to a thread or message"),
     },
-    async ({ secret, title, contact_id, room_id, workspace_id, description, owner, due, context_ref }) => {
-      const result = await relay("/tasks", { method: "POST", secret, body: { contact_id, room_id, workspace_id, title, description, owner, due, context_ref } });
+    async ({ secret, title, contact_id, room_id, workspace_id, description, priority, owner, due, context_ref }) => {
+      const result = await relay("/tasks", { method: "POST", secret, body: { contact_id, room_id, workspace_id, title, description, priority, owner, due, context_ref } });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -205,15 +206,17 @@ export function createMcpServer() {
       workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
       task_id: z.string().describe("Task ID to update"),
       status: z.string().optional().describe("New status: open, in-progress, done, blocked"),
+      priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("Update the priority"),
       owner: z.string().optional().describe("Reassign to a different agent"),
       title: z.string().optional().describe("Update the title"),
       description: z.string().optional().describe("Update the description"),
       due: z.string().optional().describe("Update due date (YYYY-MM-DD)"),
     },
-    async ({ secret, contact_id, room_id, workspace_id, task_id, status, owner, title, description, due }) => {
+    async ({ secret, contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due }) => {
       const scopeId = contact_id || room_id || workspace_id;
       const body: Record<string, unknown> = {};
       if (status !== undefined) body.status = status;
+      if (priority !== undefined) body.priority = priority;
       if (owner !== undefined) body.owner = owner;
       if (title !== undefined) body.title = title;
       if (description !== undefined) body.description = description;
