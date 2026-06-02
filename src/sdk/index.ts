@@ -443,6 +443,29 @@ export type AckResponse = {
   ok: true;
 };
 
+export type AuditEvent = {
+  id: string;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string | Date;
+};
+
+export type AuditLogOptions = {
+  action?: string;
+  target_type?: string;
+  target_id?: string;
+  after?: string;
+  before?: string;
+  limit?: number;
+  cursor?: string;
+};
+
+export type AuditLogResponse = {
+  events: AuditEvent[];
+};
+
 export type TrunkClientOptions = {
   baseUrl: string;
   secret?: string;
@@ -829,6 +852,19 @@ export class TrunkClient {
 
   deleteDocument(contactId: string, docId: string): Promise<AckResponse> {
     return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
+  }
+
+  auditLog(options: AuditLogOptions = {}): Promise<PaginatedResponse<AuditLogResponse>> {
+    const search = new URLSearchParams();
+    if (options.action) search.set("action", options.action);
+    if (options.target_type) search.set("target_type", options.target_type);
+    if (options.target_id) search.set("target_id", options.target_id);
+    if (options.after) search.set("after", options.after);
+    if (options.before) search.set("before", options.before);
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
+    const query = search.toString();
+    return this.request(`/audit-events${query ? `?${query}` : ""}`);
   }
 
   private async request<T>(

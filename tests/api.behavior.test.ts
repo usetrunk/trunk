@@ -3606,6 +3606,114 @@ describe("Hono API behavior", () => {
       })
     ).rejects.toMatchObject({ status: 400, message: "scheduled_at must be a valid ISO 8601 date" });
   });
+
+  // --- Audit log ---
+
+  it("auditLog returns events for the authenticated agent", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    // Pairing creates audit events
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.auditLog();
+    expect(result.events.length).toBeGreaterThan(0);
+    expect(result.events[0]).toHaveProperty("id");
+    expect(result.events[0]).toHaveProperty("action");
+    expect(result.events[0]).toHaveProperty("target_type");
+    expect(result.events[0]).toHaveProperty("created_at");
+  });
+
+  it("auditLog filters by action", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send a message to generate a message.send audit event
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "hello" },
+    });
+
+    const result = await alphaClient.auditLog({ action: "message.send" });
+    expect(result.events.length).toBeGreaterThan(0);
+    expect(result.events.every((e) => e.action === "message.send")).toBe(true);
+  });
+
+  it("auditLog filters by target_type", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.auditLog({ target_type: "agent" });
+    expect(result.events.length).toBeGreaterThan(0);
+    expect(result.events.every((e) => e.target_type === "agent")).toBe(true);
+  });
+
+  it("auditLog returns empty for unmatched filter", async () => {
+    const { alphaClient } = await registerPair();
+
+    const result = await alphaClient.auditLog({ action: "nonexistent.action" });
+    expect(result.events).toEqual([]);
+  });
+
+  it("auditLog respects limit parameter", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send multiple messages to generate events
+    for (let i = 0; i < 3; i++) {
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: `msg ${i}` },
+      });
+    }
+
+    const result = await alphaClient.auditLog({ limit: 2 });
+    expect(result.events.length).toBe(2);
+    expect(result.has_more).toBe(true);
+    expect(result.next_cursor).toBeTruthy();
+  });
+
+  it("auditLog paginates with cursor", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 3; i++) {
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: `msg ${i}` },
+      });
+    }
+
+    const page1 = await alphaClient.auditLog({ limit: 2 });
+    expect(page1.next_cursor).toBeTruthy();
+
+    const page2 = await alphaClient.auditLog({ limit: 2, cursor: page1.next_cursor! });
+    // Page 2 should have different events than page 1
+    const page1Ids = new Set(page1.events.map((e) => e.id));
+    expect(page2.events.every((e) => !page1Ids.has(e.id))).toBe(true);
+  });
+
+  it("auditLog does not leak events from other agents", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Alpha sends a message
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "hello" },
+    });
+
+    // Beta's audit log should NOT contain alpha's send events
+    const betaResult = await betaClient.auditLog({ action: "message.send" });
+    expect(betaResult.events).toEqual([]);
+  });
+
+  it("auditLog requires authentication", async () => {
+    const unauthenticated = createClient("bad-secret");
+    await expect(unauthenticated.auditLog()).rejects.toMatchObject({ status: 401 });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -3811,6 +3919,16 @@ class SelectQuery {
         const dir = this.orderDirection === "desc" ? -1 : 1;
         if (left !== right) return dir * (left - right);
         return dir * ((a as WebhookDeliveryRow).id < (b as WebhookDeliveryRow).id ? -1 : 1);
+      });
+    }
+
+    if (this.table === "audit_events") {
+      rows.sort((a, b) => {
+        const left = (a as AuditEventRow).createdAt.getTime();
+        const right = (b as AuditEventRow).createdAt.getTime();
+        const dir = this.orderDirection === "desc" ? -1 : 1;
+        if (left !== right) return dir * (left - right);
+        return dir * ((a as AuditEventRow).id < (b as AuditEventRow).id ? -1 : 1);
       });
     }
 
@@ -4224,6 +4342,24 @@ function evaluateCondition(condition: SQL | undefined, row: unknown): boolean {
     if (rowVal instanceof Date && paramVal instanceof Date) return rowVal.getTime() < paramVal.getTime();
     if (typeof rowVal === "string" && typeof paramVal === "string") return rowVal < paramVal;
     if (typeof rowVal === "number" && typeof paramVal === "number") return rowVal < paramVal;
+    return false;
+  }
+
+  if (chunks.some((chunk) => isStringChunk(chunk, " >= "))) {
+    const rowVal = getRowValue(row, column.name);
+    const paramVal = param.value;
+    if (rowVal instanceof Date && paramVal instanceof Date) return rowVal.getTime() >= paramVal.getTime();
+    if (typeof rowVal === "string" && typeof paramVal === "string") return rowVal >= paramVal;
+    if (typeof rowVal === "number" && typeof paramVal === "number") return rowVal >= paramVal;
+    return false;
+  }
+
+  if (chunks.some((chunk) => isStringChunk(chunk, " <= "))) {
+    const rowVal = getRowValue(row, column.name);
+    const paramVal = param.value;
+    if (rowVal instanceof Date && paramVal instanceof Date) return rowVal.getTime() <= paramVal.getTime();
+    if (typeof rowVal === "string" && typeof paramVal === "string") return rowVal <= paramVal;
+    if (typeof rowVal === "number" && typeof paramVal === "number") return rowVal <= paramVal;
     return false;
   }
 

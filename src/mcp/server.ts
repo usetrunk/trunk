@@ -1,9 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
-import { eq, or, and, desc, lt } from "drizzle-orm";
+import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
@@ -2174,6 +2174,70 @@ export function createTrunkMcpServer() {
       }
 
       return errorResult("Unknown action");
+    }
+  );
+
+  server.tool(
+    "trunk_audit_log",
+    "Query your audit log. Returns a paginated list of actions you've performed (message sends, contact pairs, fact updates, etc.). Filter by action, target type, target ID, or date range.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.string().optional().describe("Filter by action (e.g. 'message.send', 'contact.pair', 'fact.upsert')"),
+      target_type: z.string().optional().describe("Filter by target type (e.g. 'message', 'agent', 'workspace', 'shared_fact')"),
+      target_id: z.string().optional().describe("Filter by target ID"),
+      after: z.string().optional().describe("Only events after this ISO 8601 date"),
+      before: z.string().optional().describe("Only events before this ISO 8601 date"),
+      limit: z.number().optional().describe("Max events to return (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from previous response"),
+    },
+    async ({ secret, action, target_type, target_id, after, before, limit: maxItems, cursor }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const pagination = parsePaginationQuery({ limit: maxItems !== undefined ? String(maxItems) : undefined, cursor: cursor ?? undefined });
+
+      const conditions = [eq(auditEvents.actorAgent, agent.id)];
+      if (action) conditions.push(eq(auditEvents.action, action));
+      if (target_type) conditions.push(eq(auditEvents.targetType, target_type));
+      if (target_id) conditions.push(eq(auditEvents.targetId, target_id));
+      if (after) {
+        const d = new Date(after);
+        if (!isNaN(d.getTime())) conditions.push(gte(auditEvents.createdAt, d));
+      }
+      if (before) {
+        const d = new Date(before);
+        if (!isNaN(d.getTime())) conditions.push(lte(auditEvents.createdAt, d));
+      }
+      if (pagination.cursor) {
+        conditions.push(lt(auditEvents.createdAt, pagination.cursor.createdAt));
+      }
+
+      const rows = await db
+        .select()
+        .from(auditEvents)
+        .where(and(...conditions))
+        .orderBy(desc(auditEvents.createdAt))
+        .limit(pagination.limit + 1);
+
+      const paginated = paginateResults(rows, pagination.limit);
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            events: paginated.items.map((e) => ({
+              id: e.id,
+              action: e.action,
+              target_type: e.targetType,
+              target_id: e.targetId,
+              metadata: e.metadata,
+              created_at: e.createdAt,
+            })),
+            next_cursor: paginated.next_cursor,
+            has_more: paginated.has_more,
+          }, null, 2),
+        }],
+      };
     }
   );
 

@@ -883,6 +883,34 @@ export function createMcpServer() {
     }
   );
 
+  server.tool(
+    "trunk_audit_log",
+    "Query your audit log. Returns a paginated list of actions you've performed (message sends, contact pairs, fact updates, etc.). Filter by action, target type, target ID, or date range.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.string().optional().describe("Filter by action (e.g. 'message.send', 'contact.pair', 'fact.upsert')"),
+      target_type: z.string().optional().describe("Filter by target type (e.g. 'message', 'agent', 'workspace', 'shared_fact')"),
+      target_id: z.string().optional().describe("Filter by target ID"),
+      after: z.string().optional().describe("Only events after this ISO 8601 date"),
+      before: z.string().optional().describe("Only events before this ISO 8601 date"),
+      limit: z.number().optional().describe("Max events to return (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from previous response"),
+    },
+    async ({ secret, action, target_type, target_id, after, before, limit, cursor }) => {
+      const params = new URLSearchParams();
+      if (action) params.set("action", action);
+      if (target_type) params.set("target_type", target_type);
+      if (target_id) params.set("target_id", target_id);
+      if (after) params.set("after", after);
+      if (before) params.set("before", before);
+      if (limit !== undefined) params.set("limit", String(limit));
+      if (cursor) params.set("cursor", cursor);
+      const query = params.toString();
+      const result = await relay(`/audit-events${query ? `?${query}` : ""}`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
