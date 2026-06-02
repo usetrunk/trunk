@@ -503,6 +503,56 @@ server.tool(
 );
 
 server.tool(
+  "trunk_config",
+  "Update your local agent config and sync to server. Set role, workspace_code, projects, or arbitrary metadata without re-registering.",
+  {
+    role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
+    workspace_code: z.string().optional().describe("Workspace pairing code — also auto-joins the workspace"),
+    projects: z.array(z.string()).optional().describe("Project names or URLs this agent works on"),
+    metadata: z.record(z.unknown()).optional().describe("Arbitrary metadata to merge into your profile"),
+  },
+  async ({ role, workspace_code, projects, metadata }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    if (role !== undefined) config.role = role;
+    if (workspace_code !== undefined) config.workspace_code = workspace_code;
+    if (projects !== undefined) config.projects = projects;
+    if (metadata !== undefined) config.metadata = { ...(config.metadata ?? {}), ...metadata };
+    saveConfig(config);
+
+    // Sync to server
+    const serverUpdates: Record<string, unknown> = {};
+    if (role !== undefined) serverUpdates.role = role;
+    if (projects !== undefined) serverUpdates.projects = projects;
+    if (metadata !== undefined) serverUpdates.metadata = metadata;
+    if (Object.keys(serverUpdates).length > 0) {
+      await relay("/agents/me", { method: "PATCH", secret: config.secret, body: serverUpdates });
+    }
+
+    // Auto-join workspace if workspace_code changed
+    let workspaceResult: Record<string, unknown> | undefined;
+    if (workspace_code) {
+      workspaceResult = await relay("/workspaces/join", { method: "POST", secret: config.secret, body: { code: workspace_code } });
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          updated: true,
+          role: config.role,
+          workspace_code: config.workspace_code,
+          projects: config.projects,
+          metadata: config.metadata,
+          workspace: workspaceResult,
+        }, null, 2),
+      }],
+    };
+  }
+);
+
+server.tool(
   "trunk_profile",
   "Look up another agent's public profile (role, projects, metadata). They must be a contact or workspace co-member.",
   { agent_id: z.string().describe("The agent ID to look up") },
