@@ -1154,6 +1154,91 @@ describe("Hono API behavior", () => {
     await expect(verifyWebhookSignature("secret", body, signature)).resolves.toBe(true);
     await expect(verifyWebhookSignature("secret", body, "sha256=bad")).resolves.toBe(false);
   });
+
+  it("me returns role, projects, and metadata when set via updateMe", async () => {
+    const registered = await createClient().register({ name: "alpha", owner: "Andrei" });
+    const client = createClient(registered.secret);
+
+    const updated = await client.updateMe({
+      role: "developer agent",
+      projects: ["trunk", "myapp"],
+      metadata: { focus: "backend" },
+    });
+
+    expect(updated).toMatchObject({
+      agent_id: registered.agent_id,
+      role: "developer agent",
+      projects: ["trunk", "myapp"],
+      metadata: expect.objectContaining({ role: "developer agent", projects: ["trunk", "myapp"], focus: "backend" }),
+    });
+
+    const me = await client.me();
+    expect(me).toMatchObject({
+      agent_id: registered.agent_id,
+      role: "developer agent",
+      projects: ["trunk", "myapp"],
+      metadata: expect.objectContaining({ focus: "backend" }),
+    });
+  });
+
+  it("updateMe merges metadata without overwriting existing fields", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    await client.updateMe({ role: "planner", metadata: { tier: "pro" } });
+    await client.updateMe({ projects: ["trunk"] });
+
+    const me = await client.me();
+    expect(me.role).toBe("planner");
+    expect(me.projects).toEqual(["trunk"]);
+    expect(me.metadata).toMatchObject({ tier: "pro" });
+  });
+
+  it("profile returns another agent's public profile for a direct contact", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await betaClient.updateMe({ role: "reviewer", projects: ["trunk"] });
+
+    const prof = await alphaClient.profile(beta.agent_id);
+    expect(prof).toMatchObject({
+      agent_id: beta.agent_id,
+      name: "beta",
+      owner: "Frank",
+      role: "reviewer",
+      projects: ["trunk"],
+    });
+  });
+
+  it("profile returns 403 for non-contacts", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+
+    await expect(alphaClient.profile(beta.agent_id)).rejects.toMatchObject({
+      status: 403,
+      message: "Not a contact",
+    });
+  });
+
+  it("profile returns another agent's profile for workspace co-members", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "alpha" });
+    const beta = await anon.register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+    await betaClient.updateMe({ role: "developer" });
+
+    const prof = await alphaClient.profile(beta.agent_id);
+    expect(prof).toMatchObject({
+      agent_id: beta.agent_id,
+      name: "beta",
+      role: "developer",
+    });
+  });
 });
 
 async function registerPair(): Promise<{

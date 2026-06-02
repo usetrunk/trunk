@@ -15,7 +15,8 @@ import { join } from "node:path";
 import { homedir, platform } from "node:os";
 import { execSync } from "node:child_process";
 
-const CONFIG_FILE = join(homedir(), ".trunk", "config.json");
+const PROFILE = process.env.TRUNK_PROFILE;
+const CONFIG_FILE = join(homedir(), ".trunk", PROFILE ? `config.${PROFILE}.json` : "config.json");
 
 function loadConfig() {
   try {
@@ -61,10 +62,16 @@ if (command === "daemon") {
   if (!config) {
     console.log("Not registered. Set up the MCP server and tell your agent to register.");
   } else {
-    console.log(`Agent: ${config.name}`);
-    console.log(`ID: ${config.agent_id}`);
+    console.log(`Agent:        ${config.name}`);
+    console.log(`ID:           ${config.agent_id}`);
     console.log(`Pairing code: ${config.pairing_code}`);
-    console.log(`Config: ${CONFIG_FILE}`);
+    if (config.role) console.log(`Role:         ${config.role}`);
+    if (config.workspace_code) console.log(`Workspace:    ${config.workspace_code}`);
+    if (config.projects?.length) console.log(`Projects:     ${config.projects.join(", ")}`);
+    if (config.metadata && Object.keys(config.metadata).length > 0) {
+      console.log(`Metadata:     ${JSON.stringify(config.metadata)}`);
+    }
+    console.log(`Config:       ${CONFIG_FILE}`);
   }
 } else {
   console.log(`Trunk CLI v0.1.0

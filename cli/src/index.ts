@@ -20,6 +20,10 @@ type Config = {
   secret: string;
   pairing_code: string;
   name: string;
+  role?: string;
+  workspace_code?: string;
+  projects?: string[];
+  metadata?: Record<string, unknown>;
 };
 
 function loadConfig(): Config | null {
@@ -101,19 +105,60 @@ const server = new McpServer({ name: "trunk", version: "0.1.0" });
 server.tool(
   "trunk_register",
   "Register a new agent with Trunk. Stores credentials locally in ~/.trunk/config.json.",
-  { name: z.string().describe("Display name for your agent"), owner: z.string().optional().describe("Your name") },
-  async ({ name, owner }) => {
+  {
+    name: z.string().describe("Display name for your agent"),
+    owner: z.string().optional().describe("Your name"),
+    role: z.string().optional().describe("Your role or job description (e.g. 'developer agent', 'planner')"),
+    workspace_code: z.string().optional().describe("Workspace pairing code to auto-join on registration"),
+    projects: z.array(z.string()).optional().describe("Project names or URLs this agent works on"),
+    metadata: z.record(z.unknown()).optional().describe("Arbitrary metadata to attach to your profile"),
+  },
+  async ({ name, owner, role, workspace_code, projects, metadata }) => {
     const existing = loadConfig();
     if (existing) {
-      return { content: [{ type: "text", text: JSON.stringify({ already_registered: true, agent_id: existing.agent_id, pairing_code: existing.pairing_code, name: existing.name }, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ already_registered: true, agent_id: existing.agent_id, pairing_code: existing.pairing_code, name: existing.name, role: existing.role, workspace_code: existing.workspace_code, projects: existing.projects }, null, 2) }] };
     }
 
     const result = await relay("/agents/register", { method: "POST", body: { name, owner } });
-    const config: Config = { agent_id: result.agent_id, secret: result.secret, pairing_code: result.pairing_code, name };
+    const config: Config = {
+      agent_id: result.agent_id,
+      secret: result.secret,
+      pairing_code: result.pairing_code,
+      name,
+      role,
+      workspace_code,
+      projects,
+      metadata,
+    };
     saveConfig(config);
     connectWebSocket(config);
 
-    return { content: [{ type: "text", text: JSON.stringify({ registered: true, agent_id: result.agent_id, pairing_code: result.pairing_code, instructions: "Share your pairing_code with contacts." }, null, 2) }] };
+    // Sync profile fields to server if provided
+    if (role !== undefined || projects !== undefined || metadata !== undefined) {
+      await relay("/agents/me", { method: "PATCH", secret: result.secret, body: { role, projects, metadata } });
+    }
+
+    // Auto-join workspace if workspace_code provided
+    let workspaceResult: Record<string, unknown> | undefined;
+    if (workspace_code) {
+      workspaceResult = await relay("/workspaces/join", { method: "POST", secret: result.secret, body: { code: workspace_code } });
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          registered: true,
+          agent_id: result.agent_id,
+          pairing_code: result.pairing_code,
+          role,
+          workspace_code,
+          projects,
+          workspace: workspaceResult,
+          instructions: "Share your pairing_code with contacts.",
+        }, null, 2),
+      }],
+    };
   }
 );
 
@@ -441,18 +486,32 @@ server.tool(
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Not registered. Call trunk_register to get started." }] };
 
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          agent_id: config.agent_id,
-          name: config.name,
-          pairing_code: config.pairing_code,
-          push_connected: ws?.readyState === WebSocket.OPEN,
-          pending_notifications: pendingNotifications.length,
-        }, null, 2),
-      }],
+    const status: Record<string, unknown> = {
+      agent_id: config.agent_id,
+      name: config.name,
+      pairing_code: config.pairing_code,
+      push_connected: ws?.readyState === WebSocket.OPEN,
+      pending_notifications: pendingNotifications.length,
     };
+    if (config.role !== undefined) status.role = config.role;
+    if (config.workspace_code !== undefined) status.workspace_code = config.workspace_code;
+    if (config.projects !== undefined) status.projects = config.projects;
+    if (config.metadata !== undefined) status.metadata = config.metadata;
+
+    return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_profile",
+  "Look up another agent's public profile (role, projects, metadata). They must be a contact or workspace co-member.",
+  { agent_id: z.string().describe("The agent ID to look up") },
+  async ({ agent_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/agents/${agent_id}`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
 

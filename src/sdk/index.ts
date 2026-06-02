@@ -32,6 +32,9 @@ export type AgentProfile = {
   owner?: string | null;
   pairing_code?: string;
   webhook_url?: string | null;
+  role?: string;
+  projects?: string[];
+  metadata?: Record<string, unknown>;
   created_at?: string | Date;
 };
 
@@ -39,6 +42,9 @@ export type UpdateMeRequest = {
   name?: string;
   owner?: string;
   webhook_url?: string;
+  role?: string;
+  projects?: string[];
+  metadata?: Record<string, unknown>;
 };
 
 export type RotateSecretResponse = {
@@ -202,6 +208,10 @@ export class TrunkClient {
 
   rotateSecret(): Promise<RotateSecretResponse> {
     return this.request("/agents/me/rotate-secret", { method: "POST" });
+  }
+
+  profile(agentId: string): Promise<AgentProfile> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}`);
   }
 
   pair(input: PairRequest): Promise<PairResponse> {
