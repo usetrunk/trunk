@@ -1,10 +1,11 @@
 import { Hono } from "hono";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, lt, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { sharedDocuments, sharedDocumentVersions } from "../db/schema.js";
 import { authMiddleware } from "../lib/auth.js";
 import { contactScope, verifyContactAccess } from "../lib/context.js";
 import { audit } from "../lib/audit.js";
+import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -58,18 +59,34 @@ app.post("/:contactId", async (c) => {
 app.get("/:contactId", async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
 
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
 
   const scope = contactScope(agentId, contactId);
+  const conditions = [eq(sharedDocuments.scope, scope)];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(sharedDocuments.createdAt, cursor.createdAt),
+        and(eq(sharedDocuments.createdAt, cursor.createdAt), lt(sharedDocuments.id, cursor.id))
+      )!
+    );
+  }
+
   const docs = await db
     .select()
     .from(sharedDocuments)
-    .where(eq(sharedDocuments.scope, scope))
-    .orderBy(desc(sharedDocuments.updatedAt));
+    .where(and(...conditions))
+    .orderBy(desc(sharedDocuments.createdAt), desc(sharedDocuments.id))
+    .limit(limit + 1);
 
+  const page = paginateResults(docs, limit);
   return c.json({
-    documents: docs.map(d => ({
+    documents: page.items.map(d => ({
       id: d.id,
       name: d.name,
       content_type: d.contentType,
@@ -77,6 +94,8 @@ app.get("/:contactId", async (c) => {
       last_edited_by: d.lastEditedBy,
       updated_at: d.updatedAt,
     })),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 

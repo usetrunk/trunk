@@ -109,10 +109,18 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_inbox",
-    "Check for new messages. Returns all pending (unread) messages.",
-    { secret: z.string().describe("Your agent secret") },
-    async ({ secret }) => {
-      const result = await relay("/messages/inbox", { secret });
+    "Check for new messages. Returns pending (unread) messages with cursor pagination.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
+    },
+    async ({ secret, limit, cursor }) => {
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", String(limit));
+      if (cursor) params.set("cursor", cursor);
+      const query = params.toString();
+      const result = await relay(`/messages/inbox${query ? `?${query}` : ""}`, { secret });
       const msgs = result.messages || [];
       if (msgs.length === 0) {
         return { content: [{ type: "text", text: "No new messages." }] };
@@ -133,18 +141,20 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_sent",
-    "View messages you have sent (outbox). Filter by recipient or message type.",
+    "View messages you have sent (outbox). Filter by recipient or message type. Supports cursor pagination.",
     {
       secret: z.string().describe("Your agent secret"),
       to: z.string().optional().describe("Filter by recipient agent ID"),
       type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
       limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
     },
-    async ({ secret, to, type, limit }) => {
+    async ({ secret, to, type, limit, cursor }) => {
       const params = new URLSearchParams();
       if (to) params.set("to", to);
       if (type) params.set("type", type);
       if (limit !== undefined) params.set("limit", String(limit));
+      if (cursor) params.set("cursor", cursor);
       const query = params.toString();
 
       const result = await relay(`/messages/sent${query ? `?${query}` : ""}`, { secret });
@@ -158,7 +168,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_search",
-    "Search your messages by content, type, contact, and date range.",
+    "Search your messages by content, type, contact, and date range. Supports cursor pagination.",
     {
       secret: z.string().describe("Your agent secret"),
       q: z.string().optional().describe("Text to search for in message content"),
@@ -167,8 +177,9 @@ export function createMcpServer() {
       after: z.string().optional().describe("Only messages after this ISO date"),
       before: z.string().optional().describe("Only messages before this ISO date"),
       limit: z.number().optional().describe("Max results (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
     },
-    async ({ secret, q, type, contact, after, before, limit }) => {
+    async ({ secret, q, type, contact, after, before, limit, cursor }) => {
       const search = new URLSearchParams();
       if (q) search.set("q", q);
       if (type) search.set("type", type);
@@ -176,6 +187,7 @@ export function createMcpServer() {
       if (after) search.set("after", after);
       if (before) search.set("before", before);
       if (limit !== undefined) search.set("limit", String(limit));
+      if (cursor) search.set("cursor", cursor);
       const query = search.toString();
 
       const result = await relay(`/messages/search${query ? `?${query}` : ""}`, { secret });
@@ -349,7 +361,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_task_list",
-    "List tasks for a contact, room, or workspace.",
+    "List tasks for a contact, room, or workspace. Supports cursor pagination.",
     {
       secret: z.string().describe("Your agent secret"),
       contact_id: z.string().optional().describe("Agent ID of the contact"),
@@ -358,13 +370,17 @@ export function createMcpServer() {
       status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
       owner: z.string().optional().describe("Filter by owner agent ID"),
       group: z.string().optional().describe("Filter by group/epic"),
+      limit: z.number().optional().describe("Max tasks to return (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
     },
-    async ({ secret, contact_id, room_id, workspace_id, status, owner, group }) => {
+    async ({ secret, contact_id, room_id, workspace_id, status, owner, group, limit, cursor }) => {
       let path: string;
       const params = new URLSearchParams();
       if (status) params.set("status", status);
       if (owner) params.set("owner", owner);
       if (group) params.set("group", group);
+      if (limit !== undefined) params.set("limit", String(limit));
+      if (cursor) params.set("cursor", cursor);
       const query = params.toString();
       if (workspace_id) {
         path = `/tasks/workspace/${workspace_id}${query ? `?${query}` : ""}`;
@@ -542,7 +558,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_document",
-    "Manage shared documents with a contact. Actions: create, list, get, update, delete.",
+    "Manage shared documents with a contact. Actions: create, list, get, update, delete. List action supports cursor pagination.",
     {
       secret: z.string().describe("Your agent secret"),
       action: z.enum(["create", "list", "get", "update", "delete"]).describe("Action to perform"),
@@ -551,8 +567,10 @@ export function createMcpServer() {
       name: z.string().optional().describe("Document name (for create)"),
       body: z.string().optional().describe("Document body (for create, update)"),
       content_type: z.string().optional().describe("Content type (for create, default: text/markdown)"),
+      limit: z.number().optional().describe("Max documents to return for list action (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor for list action"),
     },
-    async ({ secret, action, contact_id, doc_id, name, body, content_type }) => {
+    async ({ secret, action, contact_id, doc_id, name, body, content_type, limit, cursor }) => {
       if (action === "create") {
         if (!name || !body) return { content: [{ type: "text", text: "Error: name and body are required for create" }], isError: true };
         const result = await relay(`/documents/${contact_id}`, { method: "POST", secret, body: { name, body, content_type } });
@@ -560,7 +578,11 @@ export function createMcpServer() {
       }
 
       if (action === "list") {
-        const result = await relay(`/documents/${contact_id}`, { secret });
+        const params = new URLSearchParams();
+        if (limit !== undefined) params.set("limit", String(limit));
+        if (cursor) params.set("cursor", cursor);
+        const query = params.toString();
+        const result = await relay(`/documents/${contact_id}${query ? `?${query}` : ""}`, { secret });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 

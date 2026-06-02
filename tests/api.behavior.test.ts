@@ -2623,6 +2623,132 @@ describe("Hono API behavior", () => {
 
     await expect(alphaClient.deleteDocument(beta.agent_id, "non-existent-id")).rejects.toMatchObject({ status: 404 });
   });
+
+  // --- Pagination ---
+
+  it("inbox returns has_more and next_cursor when limit < total messages", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send 5 messages from beta to alpha
+    for (let i = 0; i < 5; i++) {
+      await betaClient.send({ to: alpha.agent_id, type: "update", payload: { content: `msg-${i}` } });
+    }
+
+    const page1 = await alphaClient.inbox({ limit: 2 });
+    expect(page1.messages).toHaveLength(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    // Fetch next page
+    const page2 = await alphaClient.inbox({ limit: 2, cursor: page1.next_cursor! });
+    expect(page2.messages).toHaveLength(2);
+    expect(page2.has_more).toBe(true);
+    expect(page2.next_cursor).toBeTruthy();
+
+    // No overlap between pages
+    const page1Ids = new Set(page1.messages.map(m => m.id));
+    for (const m of page2.messages) {
+      expect(page1Ids.has(m.id)).toBe(false);
+    }
+
+    // Fetch last page
+    const page3 = await alphaClient.inbox({ limit: 2, cursor: page2.next_cursor! });
+    expect(page3.messages).toHaveLength(1);
+    expect(page3.has_more).toBe(false);
+    expect(page3.next_cursor).toBeNull();
+  });
+
+  it("inbox with no cursor returns first page with pagination metadata", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await betaClient.send({ to: alpha.agent_id, type: "update", payload: { content: "hello" } });
+
+    const result = await alphaClient.inbox();
+    expect(result.messages.length).toBeGreaterThanOrEqual(1);
+    expect(result.has_more).toBe(false);
+    expect(result.next_cursor).toBeNull();
+  });
+
+  it("sent endpoint supports cursor pagination", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 3; i++) {
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: `sent-${i}` } });
+    }
+
+    const page1 = await alphaClient.sent({ limit: 2 });
+    expect(page1.messages).toHaveLength(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    const page2 = await alphaClient.sent({ limit: 2, cursor: page1.next_cursor! });
+    expect(page2.messages).toHaveLength(1);
+    expect(page2.has_more).toBe(false);
+  });
+
+  it("search endpoint supports cursor pagination", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 4; i++) {
+      await betaClient.send({ to: alpha.agent_id, type: "update", payload: { content: `search-${i}` } });
+    }
+
+    const page1 = await alphaClient.search({ limit: 2 });
+    expect(page1.messages).toHaveLength(2);
+    expect(page1.has_more).toBe(true);
+
+    const page2 = await alphaClient.search({ limit: 2, cursor: page1.next_cursor! });
+    expect(page2.messages).toHaveLength(2);
+    expect(page2.has_more).toBe(false);
+  });
+
+  it("task list supports cursor pagination", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 4; i++) {
+      await alphaClient.createTask({ contact_id: beta.agent_id, title: `task-${i}` });
+    }
+
+    const page1 = await alphaClient.listTasks(beta.agent_id, { limit: 2 });
+    expect(page1.tasks).toHaveLength(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    const page2 = await alphaClient.listTasks(beta.agent_id, { limit: 2, cursor: page1.next_cursor! });
+    expect(page2.tasks).toHaveLength(2);
+    expect(page2.has_more).toBe(false);
+    expect(page2.next_cursor).toBeNull();
+
+    // Verify no overlap
+    const page1Ids = new Set(page1.tasks.map(t => t.id));
+    for (const t of page2.tasks) {
+      expect(page1Ids.has(t.id)).toBe(false);
+    }
+  });
+
+  it("document list supports cursor pagination", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 3; i++) {
+      await alphaClient.createDocument(beta.agent_id, { name: `doc-${i}`, body: `body-${i}` });
+    }
+
+    const page1 = await alphaClient.listDocuments(beta.agent_id, { limit: 2 });
+    expect(page1.documents).toHaveLength(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    const page2 = await alphaClient.listDocuments(beta.agent_id, { limit: 2, cursor: page1.next_cursor! });
+    expect(page2.documents).toHaveLength(1);
+    expect(page2.has_more).toBe(false);
+    expect(page2.next_cursor).toBeNull();
+  });
 });
 
 async function registerPair(): Promise<{
@@ -2787,15 +2913,29 @@ class SelectQuery {
       rows.sort((a, b) => {
         const left = (a as MessageRow).createdAt.getTime();
         const right = (b as MessageRow).createdAt.getTime();
-        return this.orderDirection === "desc" ? right - left : left - right;
+        const dir = this.orderDirection === "desc" ? -1 : 1;
+        if (left !== right) return dir * (left - right);
+        return dir * ((a as MessageRow).id < (b as MessageRow).id ? -1 : 1);
       });
     }
 
     if (this.table === "shared_documents") {
       rows.sort((a, b) => {
-        const left = (a as SharedDocumentRow).updatedAt.getTime();
-        const right = (b as SharedDocumentRow).updatedAt.getTime();
-        return this.orderDirection === "desc" ? right - left : left - right;
+        const left = (a as SharedDocumentRow).createdAt.getTime();
+        const right = (b as SharedDocumentRow).createdAt.getTime();
+        const dir = this.orderDirection === "desc" ? -1 : 1;
+        if (left !== right) return dir * (left - right);
+        return dir * ((a as SharedDocumentRow).id < (b as SharedDocumentRow).id ? -1 : 1);
+      });
+    }
+
+    if (this.table === "tasks") {
+      rows.sort((a, b) => {
+        const left = (a as TaskRow).createdAt.getTime();
+        const right = (b as TaskRow).createdAt.getTime();
+        const dir = this.orderDirection === "desc" ? -1 : 1;
+        if (left !== right) return dir * (left - right);
+        return dir * ((a as TaskRow).id < (b as TaskRow).id ? -1 : 1);
       });
     }
 
@@ -3173,7 +3313,22 @@ function evaluateCondition(condition: SQL | undefined, row: unknown): boolean {
   if (!column || !param) {
     return sqlChildren.every((chunk) => evaluateCondition(chunk, row));
   }
-  return getRowValue(row, column.name) === param.value;
+
+  // Detect comparison operator from string chunks
+  if (chunks.some((chunk) => isStringChunk(chunk, " < "))) {
+    const rowVal = getRowValue(row, column.name);
+    const paramVal = param.value;
+    if (rowVal instanceof Date && paramVal instanceof Date) return rowVal.getTime() < paramVal.getTime();
+    if (typeof rowVal === "string" && typeof paramVal === "string") return rowVal < paramVal;
+    if (typeof rowVal === "number" && typeof paramVal === "number") return rowVal < paramVal;
+    return false;
+  }
+
+  const rowVal = getRowValue(row, column.name);
+  const paramVal = param.value;
+  // Date equality: compare by time value since === checks reference identity
+  if (rowVal instanceof Date && paramVal instanceof Date) return rowVal.getTime() === paramVal.getTime();
+  return rowVal === paramVal;
 }
 
 function getQueryChunks(condition: SQL): unknown[] {

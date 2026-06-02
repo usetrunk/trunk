@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces } from "../db/schema.js";
-import { eq, or, and, desc } from "drizzle-orm";
+import { eq, or, and, desc, lt } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
+import { parsePaginationQuery, paginateResults, type PaginationParams } from "../lib/pagination.js";
 import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit } from "../lib/rate-limit.js";
@@ -189,19 +190,35 @@ app.post("/", async (c) => {
 app.get("/inbox", async (c) => {
   const agentId = c.get("agentId");
   const status = c.req.query("status");
-  const limit = Math.min(parseInt(c.req.query("limit") || "50"), 100);
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
+
+  const conditions = [eq(messages.toAgent, agentId)];
+  if (status) conditions.push(eq(messages.status, status));
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(messages.createdAt, cursor.createdAt),
+        and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id))
+      )!
+    );
+  }
 
   const rows = await db
     .select()
     .from(messages)
-    .where(status ? and(eq(messages.toAgent, agentId), eq(messages.status, status)) : eq(messages.toAgent, agentId))
-    .orderBy(desc(messages.createdAt))
-    .limit(limit);
+    .where(and(...conditions))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(limit + 1);
 
   const visible = status
     ? rows.filter((row) => row.status !== "deleted")
     : rows.filter((row) => row.status === "pending" || row.status === "delivered");
-  return c.json({ messages: visible.slice(0, limit) });
+
+  const page = paginateResults(visible, limit);
+  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
 // Get inbox stats (unread count + breakdown by type)
@@ -236,21 +253,33 @@ app.get("/sent", async (c) => {
   const agentId = c.get("agentId");
   const toFilter = c.req.query("to");
   const typeFilter = c.req.query("type");
-  const limit = Math.min(parseInt(c.req.query("limit") || "50"), 100);
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
 
   const conditions = [eq(messages.fromAgent, agentId)];
   if (toFilter) conditions.push(eq(messages.toAgent, toFilter));
   if (typeFilter) conditions.push(eq(messages.type, typeFilter));
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(messages.createdAt, cursor.createdAt),
+        and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id))
+      )!
+    );
+  }
 
   const rows = await db
     .select()
     .from(messages)
     .where(and(...conditions))
-    .orderBy(desc(messages.createdAt))
-    .limit(limit);
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(limit + 1);
 
   const visible = rows.filter((row) => row.status !== "deleted");
-  return c.json({ messages: visible });
+  const page = paginateResults(visible, limit);
+  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
 // Search messages by content, type, contact, and date range
@@ -261,11 +290,14 @@ app.get("/search", async (c) => {
   const contact = c.req.query("contact");
   const after = c.req.query("after");
   const before = c.req.query("before");
-  const limit = Math.min(parseInt(c.req.query("limit") || "50"), 100);
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
 
   // Build DB-level conditions for indexed fields
-  const conditions = [
-    or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId)),
+  const conditions: ReturnType<typeof eq>[] = [
+    or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))!,
   ];
   if (type) {
     conditions.push(eq(messages.type, type));
@@ -274,16 +306,24 @@ app.get("/search", async (c) => {
     conditions.push(or(
       and(eq(messages.fromAgent, agentId), eq(messages.toAgent, contact)),
       and(eq(messages.fromAgent, contact), eq(messages.toAgent, agentId)),
-    ));
+    )!);
+  }
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(messages.createdAt, cursor.createdAt),
+        and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id))
+      )!
+    );
   }
 
   // Fetch a larger set when JS filtering is needed
-  const fetchLimit = (q || after || before) ? 500 : limit;
+  const fetchLimit = (q || after || before) ? 500 : limit + 1;
   const rows = await db
     .select()
     .from(messages)
     .where(and(...conditions))
-    .orderBy(desc(messages.createdAt))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(fetchLimit);
 
   // JS-level filtering for text search and date range
@@ -303,7 +343,8 @@ app.get("/search", async (c) => {
     filtered = filtered.filter((row) => row.createdAt <= beforeDate);
   }
 
-  return c.json({ messages: filtered.slice(0, limit) });
+  const page = paginateResults(filtered, limit);
+  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
 app.post("/purge-expired", async (c) => {

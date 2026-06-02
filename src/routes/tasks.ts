@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { tasks, roomMembers } from "../db/schema.js";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, lt, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
+import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -123,29 +124,41 @@ app.get("/:contactId", async (c) => {
   const status = c.req.query("status");
   const ownerFilter = c.req.query("owner");
   const groupFilter = c.req.query("group");
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
 
   const hasAccess = await verifyAccess(agentId, contactId);
   if (!hasAccess) return c.json({ error: "Not a contact" }, 403);
 
   const scope = contactScope(agentId, contactId);
+  const conditions = [eq(tasks.scope, scope)];
+  if (status) conditions.push(eq(tasks.status, status));
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(tasks.createdAt, cursor.createdAt),
+        and(eq(tasks.createdAt, cursor.createdAt), lt(tasks.id, cursor.id))
+      )!
+    );
+  }
 
-  let query = db
+  const rows = await db
     .select()
     .from(tasks)
-    .where(
-      status
-        ? and(eq(tasks.scope, scope), eq(tasks.status, status))
-        : eq(tasks.scope, scope)
-    )
-    .orderBy(desc(tasks.createdAt));
-
-  const rows = await query;
+    .where(and(...conditions))
+    .orderBy(desc(tasks.createdAt), desc(tasks.id))
+    .limit(limit + 1);
 
   let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
   if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
 
+  const page = paginateResults(filtered, limit);
   return c.json({
-    tasks: filtered.map(taskToJson),
+    tasks: page.items.map(taskToJson),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 
@@ -156,26 +169,41 @@ app.get("/room/:roomId", async (c) => {
   const status = c.req.query("status");
   const ownerFilter = c.req.query("owner");
   const groupFilter = c.req.query("group");
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
 
   const hasAccess = await verifyRoomAccess(agentId, roomId);
   if (!hasAccess) return c.json({ error: "Not a room member" }, 403);
 
   const scope = `room:${roomId}`;
+  const conditions = [eq(tasks.scope, scope)];
+  if (status) conditions.push(eq(tasks.status, status));
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(tasks.createdAt, cursor.createdAt),
+        and(eq(tasks.createdAt, cursor.createdAt), lt(tasks.id, cursor.id))
+      )!
+    );
+  }
+
   const rows = await db
     .select()
     .from(tasks)
-    .where(
-      status
-        ? and(eq(tasks.scope, scope), eq(tasks.status, status))
-        : eq(tasks.scope, scope)
-    )
-    .orderBy(desc(tasks.createdAt));
+    .where(and(...conditions))
+    .orderBy(desc(tasks.createdAt), desc(tasks.id))
+    .limit(limit + 1);
 
   let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
   if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
 
+  const page = paginateResults(filtered, limit);
   return c.json({
-    tasks: filtered.map(taskToJson),
+    tasks: page.items.map(taskToJson),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 
@@ -186,26 +214,41 @@ app.get("/workspace/:workspaceId", async (c) => {
   const status = c.req.query("status");
   const ownerFilter = c.req.query("owner");
   const groupFilter = c.req.query("group");
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
 
   const hasAccess = await verifyWorkspaceAccess(agentId, workspaceId);
   if (!hasAccess) return c.json({ error: "Not a workspace member" }, 403);
 
   const scope = `workspace:${workspaceId}`;
+  const conditions = [eq(tasks.scope, scope)];
+  if (status) conditions.push(eq(tasks.status, status));
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(tasks.createdAt, cursor.createdAt),
+        and(eq(tasks.createdAt, cursor.createdAt), lt(tasks.id, cursor.id))
+      )!
+    );
+  }
+
   const rows = await db
     .select()
     .from(tasks)
-    .where(
-      status
-        ? and(eq(tasks.scope, scope), eq(tasks.status, status))
-        : eq(tasks.scope, scope)
-    )
-    .orderBy(desc(tasks.createdAt));
+    .where(and(...conditions))
+    .orderBy(desc(tasks.createdAt), desc(tasks.id))
+    .limit(limit + 1);
 
   let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
   if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
 
+  const page = paginateResults(filtered, limit);
   return c.json({
-    tasks: filtered.map(taskToJson),
+    tasks: page.items.map(taskToJson),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 

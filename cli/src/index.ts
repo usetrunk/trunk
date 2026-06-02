@@ -210,13 +210,21 @@ server.tool(
 
 server.tool(
   "trunk_inbox",
-  "Check for new messages. Also returns any real-time messages that arrived via push.",
-  {},
-  async () => {
+  "Check for new messages. Also returns any real-time messages that arrived via push. Supports cursor pagination.",
+  {
+    limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+    cursor: z.string().optional().describe("Pagination cursor from a previous response"),
+  },
+  async ({ limit, cursor }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
-    const result = await relay("/messages/inbox", { secret: config.secret });
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set("limit", String(limit));
+    if (cursor) params.set("cursor", cursor);
+    const query = params.toString();
+
+    const result = await relay(`/messages/inbox${query ? `?${query}` : ""}`, { secret: config.secret });
     const msgs = result.messages || [];
 
     // Include any push notifications that haven't been polled yet
@@ -227,7 +235,7 @@ server.tool(
       return { content: [{ type: "text", text: "No new messages." }] };
     }
 
-    return { content: [{ type: "text", text: JSON.stringify({ messages: msgs, count: msgs.length }, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ messages: msgs, count: msgs.length, next_cursor: result.next_cursor, has_more: result.has_more }, null, 2) }] };
   }
 );
 
@@ -246,13 +254,14 @@ server.tool(
 
 server.tool(
   "trunk_sent",
-  "View messages you have sent (outbox). Filter by recipient or message type.",
+  "View messages you have sent (outbox). Filter by recipient or message type. Supports cursor pagination.",
   {
     to: z.string().optional().describe("Filter by recipient agent ID"),
     type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
     limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+    cursor: z.string().optional().describe("Pagination cursor from a previous response"),
   },
-  async ({ to, type, limit }) => {
+  async ({ to, type, limit, cursor }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -260,6 +269,7 @@ server.tool(
     if (to) params.set("to", to);
     if (type) params.set("type", type);
     if (limit !== undefined) params.set("limit", String(limit));
+    if (cursor) params.set("cursor", cursor);
     const query = params.toString();
 
     const result = await relay(`/messages/sent${query ? `?${query}` : ""}`, { secret: config.secret });
@@ -269,13 +279,13 @@ server.tool(
       return { content: [{ type: "text", text: "No sent messages found." }] };
     }
 
-    return { content: [{ type: "text", text: JSON.stringify({ messages: msgs, count: msgs.length }, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ messages: msgs, count: msgs.length, next_cursor: result.next_cursor, has_more: result.has_more }, null, 2) }] };
   }
 );
 
 server.tool(
   "trunk_search",
-  "Search your messages by content, type, contact, and date range.",
+  "Search your messages by content, type, contact, and date range. Supports cursor pagination.",
   {
     q: z.string().optional().describe("Text to search for in message content"),
     type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
@@ -283,8 +293,9 @@ server.tool(
     after: z.string().optional().describe("Only messages after this ISO date"),
     before: z.string().optional().describe("Only messages before this ISO date"),
     limit: z.number().optional().describe("Max results (default 50, max 100)"),
+    cursor: z.string().optional().describe("Pagination cursor from a previous response"),
   },
-  async ({ q, type, contact, after, before, limit }) => {
+  async ({ q, type, contact, after, before, limit, cursor }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Not registered. Use trunk_register first." }] };
 
@@ -295,6 +306,7 @@ server.tool(
     if (after) search.set("after", after);
     if (before) search.set("before", before);
     if (limit !== undefined) search.set("limit", String(limit));
+    if (cursor) search.set("cursor", cursor);
     const query = search.toString();
 
     const result = await relay(`/messages/search${query ? `?${query}` : ""}`, { secret: config.secret });
@@ -303,7 +315,7 @@ server.tool(
       return { content: [{ type: "text", text: "No messages found matching your search." }] };
     }
 
-    return { content: [{ type: "text", text: JSON.stringify({ messages: msgs, count: msgs.length }, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ messages: msgs, count: msgs.length, next_cursor: result.next_cursor, has_more: result.has_more }, null, 2) }] };
   }
 );
 
@@ -498,7 +510,7 @@ server.tool(
 
 server.tool(
   "trunk_task_list",
-  "List tasks for a contact, room, or workspace.",
+  "List tasks for a contact, room, or workspace. Supports cursor pagination.",
   {
     contact_id: z.string().optional().describe("Agent ID of the contact"),
     room_id: z.string().optional().describe("Room ID"),
@@ -506,8 +518,10 @@ server.tool(
     status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
     owner: z.string().optional().describe("Filter by owner agent ID"),
     group: z.string().optional().describe("Filter by group/epic"),
+    limit: z.number().optional().describe("Max tasks to return (default 50, max 100)"),
+    cursor: z.string().optional().describe("Pagination cursor from a previous response"),
   },
-  async ({ contact_id, room_id, workspace_id, status, owner, group }) => {
+  async ({ contact_id, room_id, workspace_id, status, owner, group, limit, cursor }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -516,6 +530,8 @@ server.tool(
     if (status) params.set("status", status);
     if (owner) params.set("owner", owner);
     if (group) params.set("group", group);
+    if (limit !== undefined) params.set("limit", String(limit));
+    if (cursor) params.set("cursor", cursor);
     const query = params.toString();
     if (workspace_id) {
       path = `/tasks/workspace/${workspace_id}${query ? `?${query}` : ""}`;
@@ -808,7 +824,7 @@ server.tool(
 
 server.tool(
   "trunk_document",
-  "Manage shared documents with a contact. Actions: create, list, get, update, delete.",
+  "Manage shared documents with a contact. Actions: create, list, get, update, delete. List action supports cursor pagination.",
   {
     action: z.enum(["create", "list", "get", "update", "delete"]).describe("Action to perform"),
     contact_id: z.string().describe("Agent ID of the contact (documents are scoped to a contact pair)"),
@@ -816,8 +832,10 @@ server.tool(
     name: z.string().optional().describe("Document name (for create)"),
     body: z.string().optional().describe("Document body (for create, update)"),
     content_type: z.string().optional().describe("Content type (for create, default: text/markdown)"),
+    limit: z.number().optional().describe("Max documents to return for list action (default 50, max 100)"),
+    cursor: z.string().optional().describe("Pagination cursor for list action"),
   },
-  async ({ action, contact_id, doc_id, name, body, content_type }) => {
+  async ({ action, contact_id, doc_id, name, body, content_type, limit, cursor }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -828,7 +846,11 @@ server.tool(
     }
 
     if (action === "list") {
-      const result = await relay(`/documents/${contact_id}`, { secret: config.secret });
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", String(limit));
+      if (cursor) params.set("cursor", cursor);
+      const query = params.toString();
+      const result = await relay(`/documents/${contact_id}${query ? `?${query}` : ""}`, { secret: config.secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
 

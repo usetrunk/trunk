@@ -206,6 +206,8 @@ export type TaskListOptions = {
   status?: string;
   owner?: string;
   group?: string;
+  limit?: number;
+  cursor?: string;
 };
 
 export type CreateRoomRequest = {
@@ -313,12 +315,14 @@ export type PortalResponse = {
 export type InboxOptions = {
   status?: string;
   limit?: number;
+  cursor?: string;
 };
 
 export type SentOptions = {
   to?: string;
   type?: string;
   limit?: number;
+  cursor?: string;
 };
 
 export type SearchOptions = {
@@ -328,6 +332,12 @@ export type SearchOptions = {
   after?: string;
   before?: string;
   limit?: number;
+  cursor?: string;
+};
+
+export type PaginatedResponse<T> = T & {
+  next_cursor: string | null;
+  has_more: boolean;
 };
 
 export type MessagesResponse = {
@@ -455,10 +465,11 @@ export class TrunkClient {
     return this.request("/messages", { method: "POST", body: input });
   }
 
-  inbox(options: InboxOptions = {}): Promise<MessagesResponse> {
+  inbox(options: InboxOptions = {}): Promise<PaginatedResponse<MessagesResponse>> {
     const search = new URLSearchParams();
     if (options.status) search.set("status", options.status);
     if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/messages/inbox${query ? `?${query}` : ""}`);
   }
@@ -467,16 +478,17 @@ export class TrunkClient {
     return this.request("/messages/inbox/stats");
   }
 
-  sent(options: SentOptions = {}): Promise<MessagesResponse> {
+  sent(options: SentOptions = {}): Promise<PaginatedResponse<MessagesResponse>> {
     const search = new URLSearchParams();
     if (options.to) search.set("to", options.to);
     if (options.type) search.set("type", options.type);
     if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/messages/sent${query ? `?${query}` : ""}`);
   }
 
-  search(options: SearchOptions = {}): Promise<MessagesResponse> {
+  search(options: SearchOptions = {}): Promise<PaginatedResponse<MessagesResponse>> {
     const search = new URLSearchParams();
     if (options.q) search.set("q", options.q);
     if (options.type) search.set("type", options.type);
@@ -484,6 +496,7 @@ export class TrunkClient {
     if (options.after) search.set("after", options.after);
     if (options.before) search.set("before", options.before);
     if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/messages/search${query ? `?${query}` : ""}`);
   }
@@ -544,29 +557,35 @@ export class TrunkClient {
     return this.request("/tasks", { method: "POST", body: input });
   }
 
-  listTasks(contactId: string, options: TaskListOptions = {}): Promise<TaskListResponse> {
+  listTasks(contactId: string, options: TaskListOptions = {}): Promise<PaginatedResponse<TaskListResponse>> {
     const search = new URLSearchParams();
     if (options.status) search.set("status", options.status);
     if (options.owner) search.set("owner", options.owner);
     if (options.group) search.set("group", options.group);
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/tasks/${encodeURIComponent(contactId)}${query ? `?${query}` : ""}`);
   }
 
-  listRoomTasks(roomId: string, options: TaskListOptions = {}): Promise<TaskListResponse> {
+  listRoomTasks(roomId: string, options: TaskListOptions = {}): Promise<PaginatedResponse<TaskListResponse>> {
     const search = new URLSearchParams();
     if (options.status) search.set("status", options.status);
     if (options.owner) search.set("owner", options.owner);
     if (options.group) search.set("group", options.group);
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/tasks/room/${encodeURIComponent(roomId)}${query ? `?${query}` : ""}`);
   }
 
-  listWorkspaceTasks(workspaceId: string, options: TaskListOptions = {}): Promise<TaskListResponse> {
+  listWorkspaceTasks(workspaceId: string, options: TaskListOptions = {}): Promise<PaginatedResponse<TaskListResponse>> {
     const search = new URLSearchParams();
     if (options.status) search.set("status", options.status);
     if (options.owner) search.set("owner", options.owner);
     if (options.group) search.set("group", options.group);
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/tasks/workspace/${encodeURIComponent(workspaceId)}${query ? `?${query}` : ""}`);
   }
@@ -620,8 +639,12 @@ export class TrunkClient {
     return this.request(`/documents/${encodeURIComponent(contactId)}`, { method: "POST", body: input });
   }
 
-  listDocuments(contactId: string): Promise<DocumentListResponse> {
-    return this.request(`/documents/${encodeURIComponent(contactId)}`);
+  listDocuments(contactId: string, options: { limit?: number; cursor?: string } = {}): Promise<PaginatedResponse<DocumentListResponse>> {
+    const search = new URLSearchParams();
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
+    const query = search.toString();
+    return this.request(`/documents/${encodeURIComponent(contactId)}${query ? `?${query}` : ""}`);
   }
 
   getDocument(contactId: string, docId: string): Promise<DocumentResponse> {

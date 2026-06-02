@@ -3,10 +3,11 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
-import { eq, or, and, desc } from "drizzle-orm";
+import { eq, or, and, desc, lt } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
+import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 
 export function createTrunkMcpServer() {
   const server = new McpServer({
@@ -195,32 +196,53 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_inbox",
-    "Check for new messages. Returns all pending (unread) messages.",
-    { secret: z.string().describe("Your agent secret") },
-    async ({ secret }) => {
+    "Check for new messages. Returns pending (unread) messages with cursor-based pagination.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
+    },
+    async ({ secret, limit: limitParam, cursor: cursorParam }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
+
+      const { limit, cursor } = parsePaginationQuery({
+        limit: limitParam !== undefined ? String(limitParam) : undefined,
+        cursor: cursorParam,
+      });
+
+      const conditions = [eq(messages.toAgent, agent.id), eq(messages.status, "pending")];
+      if (cursor) {
+        conditions.push(
+          or(
+            lt(messages.createdAt, cursor.createdAt),
+            and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id))
+          )!
+        );
+      }
 
       const rows = await db
         .select()
         .from(messages)
-        .where(and(eq(messages.toAgent, agent.id), eq(messages.status, "pending")))
-        .orderBy(desc(messages.createdAt))
-        .limit(50);
+        .where(and(...conditions))
+        .orderBy(desc(messages.createdAt), desc(messages.id))
+        .limit(limit + 1);
 
-      if (rows.length === 0) {
+      const page = paginateResults(rows, limit);
+
+      if (page.items.length === 0) {
         return { content: [{ type: "text", text: "No new messages." }] };
       }
 
       // Resolve sender names
-      const senderIds = [...new Set(rows.map((r) => r.fromAgent))];
+      const senderIds = [...new Set(page.items.map((r) => r.fromAgent))];
       const senders = await db
         .select({ id: agents.id, name: agents.name })
         .from(agents)
         .where(or(...senderIds.map((id) => eq(agents.id, id))));
       const senderMap = Object.fromEntries(senders.map((s) => [s.id, s.name]));
 
-      const formatted = rows.map((m) => ({
+      const formatted = page.items.map((m) => ({
         id: m.id,
         from: senderMap[m.fromAgent] || m.fromAgent,
         thread_id: m.threadId,
@@ -232,7 +254,7 @@ export function createTrunkMcpServer() {
       return {
         content: [{
           type: "text",
-          text: JSON.stringify({ messages: formatted, count: rows.length }, null, 2),
+          text: JSON.stringify({ messages: formatted, count: page.items.length, next_cursor: page.next_cursor, has_more: page.has_more }, null, 2),
         }],
       };
     }
@@ -269,43 +291,58 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_sent",
-    "View messages you have sent (outbox). Filter by recipient or message type.",
+    "View messages you have sent (outbox). Filter by recipient or message type. Supports cursor pagination.",
     {
       secret: z.string().describe("Your agent secret"),
       to: z.string().optional().describe("Filter by recipient agent ID"),
       type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
       limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
     },
-    async ({ secret, to, type, limit }) => {
+    async ({ secret, to, type, limit: limitParam, cursor: cursorParam }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
+
+      const { limit, cursor } = parsePaginationQuery({
+        limit: limitParam !== undefined ? String(limitParam) : undefined,
+        cursor: cursorParam,
+      });
 
       const conditions = [eq(messages.fromAgent, agent.id)];
       if (to) conditions.push(eq(messages.toAgent, to));
       if (type) conditions.push(eq(messages.type, type));
+      if (cursor) {
+        conditions.push(
+          or(
+            lt(messages.createdAt, cursor.createdAt),
+            and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id))
+          )!
+        );
+      }
 
       const rows = await db
         .select()
         .from(messages)
         .where(and(...conditions))
-        .orderBy(desc(messages.createdAt))
-        .limit(Math.min(limit ?? 50, 100));
+        .orderBy(desc(messages.createdAt), desc(messages.id))
+        .limit(limit + 1);
 
       const visible = rows.filter((r) => r.status !== "deleted");
+      const page = paginateResults(visible, limit);
 
-      if (visible.length === 0) {
+      if (page.items.length === 0) {
         return { content: [{ type: "text", text: "No sent messages found." }] };
       }
 
       // Resolve recipient names
-      const recipientIds = [...new Set(visible.map((r) => r.toAgent))];
+      const recipientIds = [...new Set(page.items.map((r) => r.toAgent))];
       const recipients = await db
         .select({ id: agents.id, name: agents.name })
         .from(agents)
         .where(or(...recipientIds.map((id) => eq(agents.id, id))));
       const recipientMap = Object.fromEntries(recipients.map((r) => [r.id, r.name]));
 
-      const formatted = visible.map((m) => ({
+      const formatted = page.items.map((m) => ({
         id: m.id,
         to: recipientMap[m.toAgent] || m.toAgent,
         thread_id: m.threadId,
@@ -318,7 +355,7 @@ export function createTrunkMcpServer() {
       return {
         content: [{
           type: "text",
-          text: JSON.stringify({ messages: formatted, count: visible.length }, null, 2),
+          text: JSON.stringify({ messages: formatted, count: page.items.length, next_cursor: page.next_cursor, has_more: page.has_more }, null, 2),
         }],
       };
     }
@@ -326,7 +363,7 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_search",
-    "Search your messages by content, type, contact, and date range.",
+    "Search your messages by content, type, contact, and date range. Supports cursor pagination.",
     {
       secret: z.string().describe("Your agent secret"),
       q: z.string().optional().describe("Text to search for in message content"),
@@ -335,13 +372,19 @@ export function createTrunkMcpServer() {
       after: z.string().optional().describe("Only messages after this ISO date"),
       before: z.string().optional().describe("Only messages before this ISO date"),
       limit: z.number().optional().describe("Max results (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
     },
-    async ({ secret, q, type, contact, after, before, limit }) => {
+    async ({ secret, q, type, contact, after, before, limit: limitParam, cursor: cursorParam }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
-      const conditions = [
-        or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id)),
+      const { limit, cursor } = parsePaginationQuery({
+        limit: limitParam !== undefined ? String(limitParam) : undefined,
+        cursor: cursorParam,
+      });
+
+      const conditions: ReturnType<typeof eq>[] = [
+        or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))!,
       ];
       if (type) {
         conditions.push(eq(messages.type, type));
@@ -350,16 +393,23 @@ export function createTrunkMcpServer() {
         conditions.push(or(
           and(eq(messages.fromAgent, agent.id), eq(messages.toAgent, contact)),
           and(eq(messages.fromAgent, contact), eq(messages.toAgent, agent.id)),
-        ));
+        )!);
+      }
+      if (cursor) {
+        conditions.push(
+          or(
+            lt(messages.createdAt, cursor.createdAt),
+            and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id))
+          )!
+        );
       }
 
-      const maxLimit = Math.min(limit ?? 50, 100);
-      const fetchLimit = (q || after || before) ? 500 : maxLimit;
+      const fetchLimit = (q || after || before) ? 500 : limit + 1;
       const rows = await db
         .select()
         .from(messages)
         .where(and(...conditions))
-        .orderBy(desc(messages.createdAt))
+        .orderBy(desc(messages.createdAt), desc(messages.id))
         .limit(fetchLimit);
 
       let visible = rows.filter((r) => r.status !== "deleted");
@@ -378,21 +428,22 @@ export function createTrunkMcpServer() {
         const beforeDate = new Date(before);
         visible = visible.filter((r) => r.createdAt <= beforeDate);
       }
-      visible = visible.slice(0, maxLimit);
 
-      if (visible.length === 0) {
+      const page = paginateResults(visible, limit);
+
+      if (page.items.length === 0) {
         return { content: [{ type: "text", text: "No messages found matching your search." }] };
       }
 
       // Resolve agent names
-      const agentIds = [...new Set(visible.flatMap((m) => [m.fromAgent, m.toAgent]))];
+      const agentIds = [...new Set(page.items.flatMap((m) => [m.fromAgent, m.toAgent]))];
       const agentList = await db
         .select({ id: agents.id, name: agents.name })
         .from(agents)
         .where(or(...agentIds.map((id) => eq(agents.id, id))));
       const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
 
-      const formatted = visible.map((m) => ({
+      const formatted = page.items.map((m) => ({
         id: m.id,
         from: nameMap[m.fromAgent] || m.fromAgent,
         to: nameMap[m.toAgent] || m.toAgent,
@@ -406,7 +457,7 @@ export function createTrunkMcpServer() {
       return {
         content: [{
           type: "text",
-          text: JSON.stringify({ messages: formatted, count: visible.length }, null, 2),
+          text: JSON.stringify({ messages: formatted, count: page.items.length, next_cursor: page.next_cursor, has_more: page.has_more }, null, 2),
         }],
       };
     }
@@ -963,7 +1014,7 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_task_list",
-    "List tasks for a contact, room, or workspace.",
+    "List tasks for a contact, room, or workspace. Supports cursor pagination.",
     {
       secret: z.string().describe("Your agent secret"),
       contact_id: z.string().optional().describe("Agent ID of the contact"),
@@ -972,11 +1023,18 @@ export function createTrunkMcpServer() {
       status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
       owner: z.string().optional().describe("Filter by owner agent ID"),
       group: z.string().optional().describe("Filter by group/epic"),
+      limit: z.number().optional().describe("Max tasks to return (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
     },
-    async ({ secret, contact_id, room_id, workspace_id, status, owner, group }) => {
+    async ({ secret, contact_id, room_id, workspace_id, status, owner, group, limit: limitParam, cursor: cursorParam }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
       if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
+
+      const { limit, cursor } = parsePaginationQuery({
+        limit: limitParam !== undefined ? String(limitParam) : undefined,
+        cursor: cursorParam,
+      });
 
       let scope: string;
       if (workspace_id) {
@@ -994,13 +1052,26 @@ export function createTrunkMcpServer() {
         scope = `contact:${[agent.id, contact_id!].sort().join("-")}`;
       }
 
+      const conditions = [eq(tasks.scope, scope)];
+      if (status) conditions.push(eq(tasks.status, status));
+      if (cursor) {
+        conditions.push(
+          or(
+            lt(tasks.createdAt, cursor.createdAt),
+            and(eq(tasks.createdAt, cursor.createdAt), lt(tasks.id, cursor.id))
+          )!
+        );
+      }
+
       let rows = await db.select().from(tasks)
-        .where(status ? and(eq(tasks.scope, scope), eq(tasks.status, status)) : eq(tasks.scope, scope))
-        .orderBy(desc(tasks.createdAt));
+        .where(and(...conditions))
+        .orderBy(desc(tasks.createdAt), desc(tasks.id))
+        .limit(limit + 1);
       if (owner) rows = rows.filter(t => t.owner === owner);
       if (group) rows = rows.filter(t => t.group === group);
 
-      return { content: [{ type: "text", text: JSON.stringify({ tasks: rows.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, owner: t.owner, due: t.due, start_date: t.startDate, group: t.group, depends_on: t.dependsOn, sequence: t.sequence, estimate: t.estimate, created_at: t.createdAt, updated_at: t.updatedAt })) }, null, 2) }] };
+      const page = paginateResults(rows, limit);
+      return { content: [{ type: "text", text: JSON.stringify({ tasks: page.items.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, owner: t.owner, due: t.due, start_date: t.startDate, group: t.group, depends_on: t.dependsOn, sequence: t.sequence, estimate: t.estimate, created_at: t.createdAt, updated_at: t.updatedAt })), next_cursor: page.next_cursor, has_more: page.has_more }, null, 2) }] };
     }
   );
 
@@ -1264,7 +1335,7 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_document",
-    "Manage shared documents with a contact. Actions: create, list, get, update, delete.",
+    "Manage shared documents with a contact. Actions: create, list, get, update, delete. List action supports cursor pagination.",
     {
       secret: z.string().describe("Your agent secret"),
       action: z.enum(["create", "list", "get", "update", "delete"]).describe("Action to perform"),
@@ -1273,8 +1344,10 @@ export function createTrunkMcpServer() {
       name: z.string().optional().describe("Document name (for create)"),
       body: z.string().optional().describe("Document body (for create, update)"),
       content_type: z.string().optional().describe("Content type (for create, default: text/markdown)"),
+      limit: z.number().optional().describe("Max documents to return for list action (default 50, max 100)"),
+      cursor: z.string().optional().describe("Pagination cursor for list action"),
     },
-    async ({ secret, action, contact_id, doc_id, name, body, content_type }) => {
+    async ({ secret, action, contact_id, doc_id, name, body, content_type, limit: limitParam, cursor: cursorParam }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -1293,8 +1366,22 @@ export function createTrunkMcpServer() {
       }
 
       if (action === "list") {
-        const docs = await db.select().from(sharedDocuments).where(eq(sharedDocuments.scope, scope)).orderBy(desc(sharedDocuments.updatedAt));
-        return { content: [{ type: "text", text: JSON.stringify({ documents: docs.map(d => ({ id: d.id, name: d.name, content_type: d.contentType, version: d.version, last_edited_by: d.lastEditedBy, updated_at: d.updatedAt })) }, null, 2) }] };
+        const { limit, cursor } = parsePaginationQuery({
+          limit: limitParam !== undefined ? String(limitParam) : undefined,
+          cursor: cursorParam,
+        });
+        const listConditions = [eq(sharedDocuments.scope, scope)];
+        if (cursor) {
+          listConditions.push(
+            or(
+              lt(sharedDocuments.createdAt, cursor.createdAt),
+              and(eq(sharedDocuments.createdAt, cursor.createdAt), lt(sharedDocuments.id, cursor.id))
+            )!
+          );
+        }
+        const docs = await db.select().from(sharedDocuments).where(and(...listConditions)).orderBy(desc(sharedDocuments.createdAt), desc(sharedDocuments.id)).limit(limit + 1);
+        const page = paginateResults(docs, limit);
+        return { content: [{ type: "text", text: JSON.stringify({ documents: page.items.map(d => ({ id: d.id, name: d.name, content_type: d.contentType, version: d.version, last_edited_by: d.lastEditedBy, updated_at: d.updatedAt })), next_cursor: page.next_cursor, has_more: page.has_more }, null, 2) }] };
       }
 
       if (action === "get") {
