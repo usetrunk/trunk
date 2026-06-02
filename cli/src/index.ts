@@ -1108,6 +1108,7 @@ server.tool(
     action: z.enum(["create", "list", "get", "update", "delete"]).describe("Action to perform"),
     contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped documents)"),
     room_id: z.string().optional().describe("Room ID (for room-scoped documents)"),
+    workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped documents)"),
     doc_id: z.string().optional().describe("Document ID (for get, update, delete)"),
     name: z.string().optional().describe("Document name (for create)"),
     body: z.string().optional().describe("Document body (for create, update)"),
@@ -1115,12 +1116,12 @@ server.tool(
     limit: z.number().optional().describe("Max documents to return for list action (default 50, max 100)"),
     cursor: z.string().optional().describe("Pagination cursor for list action"),
   },
-  async ({ action, contact_id, room_id, doc_id, name, body, content_type, limit, cursor }) => {
+  async ({ action, contact_id, room_id, workspace_id, doc_id, name, body, content_type, limit, cursor }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
-    const scopePath = room_id ? `room/${room_id}` : contact_id;
-    if (!scopePath) return { content: [{ type: "text", text: "Error: contact_id or room_id is required" }], isError: true };
+    const scopePath = workspace_id ? `workspace/${workspace_id}` : room_id ? `room/${room_id}` : contact_id;
+    if (!scopePath) return { content: [{ type: "text", text: "Error: contact_id, room_id, or workspace_id is required" }], isError: true };
 
     if (action === "create") {
       if (!name || !body) return { content: [{ type: "text", text: "Error: name and body are required for create" }], isError: true };
@@ -1167,15 +1168,16 @@ server.tool(
   {
     contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped docs)"),
     room_id: z.string().optional().describe("Room ID (for room-scoped docs)"),
+    workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped docs)"),
     doc_id: z.string().describe("Document ID"),
     version: z.number().optional().describe("Specific version to retrieve (omit for full history)"),
   },
-  async ({ contact_id, room_id, doc_id, version }) => {
+  async ({ contact_id, room_id, workspace_id, doc_id, version }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
-    const scopePath = room_id ? `room/${room_id}` : contact_id;
-    if (!scopePath) return { content: [{ type: "text", text: "Error: contact_id or room_id is required" }], isError: true };
+    const scopePath = workspace_id ? `workspace/${workspace_id}` : room_id ? `room/${room_id}` : contact_id;
+    if (!scopePath) return { content: [{ type: "text", text: "Error: contact_id, room_id, or workspace_id is required" }], isError: true };
 
     if (version !== undefined) {
       const result = await relay(`/documents/${encodeURIComponent(scopePath)}/${encodeURIComponent(doc_id)}/versions/${version}`, { secret: config.secret });
@@ -1211,15 +1213,16 @@ server.tool(
     action: z.enum(["list", "get", "put", "delete"]).describe("Action to perform"),
     contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped facts)"),
     room_id: z.string().optional().describe("Room ID (for room-scoped facts)"),
+    workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped facts)"),
     key: z.string().optional().describe("Fact key (required for get/put/delete, not needed for list)"),
     value: z.unknown().optional().describe("Fact value (for put)"),
   },
-  async ({ action, contact_id, room_id, key, value }) => {
+  async ({ action, contact_id, room_id, workspace_id, key, value }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
-    const scopePath = room_id ? `room/${room_id}` : contact_id;
-    if (!scopePath) return { content: [{ type: "text", text: "Error: contact_id or room_id is required" }], isError: true };
+    const scopePath = workspace_id ? `workspace/${workspace_id}` : room_id ? `room/${room_id}` : contact_id;
+    if (!scopePath) return { content: [{ type: "text", text: "Error: contact_id, room_id, or workspace_id is required" }], isError: true };
 
     if (action === "list") {
       const result = await relay(`/context/${scopePath}/facts`, { secret: config.secret });

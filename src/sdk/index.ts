@@ -859,6 +859,27 @@ export class TrunkClient {
     return this.request(`/context/room/${encodeURIComponent(roomId)}/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
   }
 
+  // Workspace-scoped fact methods
+  listWorkspaceFacts(workspaceId: string): Promise<{ facts: Array<{ key: string; value: unknown; version: number; updated_by: string; updated_at: string }> }> {
+    return this.request(`/context/workspace/${encodeURIComponent(workspaceId)}/facts`);
+  }
+
+  getWorkspaceFact(workspaceId: string, key: string): Promise<{ key: string; value: unknown; version: number; updated_by: string; updated_at?: string | Date }> {
+    return this.request(`/context/workspace/${encodeURIComponent(workspaceId)}/facts/${encodeURIComponent(key)}`);
+  }
+
+  putWorkspaceFact(workspaceId: string, key: string, value: unknown, options: { ifMatch?: string | number } = {}): Promise<{ key: string; value: unknown; version: number; updated_by: string }> {
+    return this.request(`/context/workspace/${encodeURIComponent(workspaceId)}/facts/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: { value },
+      ifMatch: options.ifMatch === undefined ? undefined : String(options.ifMatch),
+    });
+  }
+
+  deleteWorkspaceFact(workspaceId: string, key: string): Promise<AckResponse> {
+    return this.request(`/context/workspace/${encodeURIComponent(workspaceId)}/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
+  }
+
   editMessage(messageId: string, payload: Record<string, unknown>): Promise<{ id: string; thread_id: string; payload: Record<string, unknown>; edited_at: string; status: string }> {
     return this.request(`/messages/${encodeURIComponent(messageId)}`, { method: "PATCH", body: { payload } });
   }
@@ -1056,6 +1077,31 @@ export class TrunkClient {
 
   deleteRoomDocument(roomId: string, docId: string): Promise<AckResponse> {
     return this.request(`/documents/room/${encodeURIComponent(roomId)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
+  }
+
+  // Workspace-scoped document methods
+  createWorkspaceDocument(workspaceId: string, input: CreateDocumentRequest): Promise<DocumentResponse> {
+    return this.request(`/documents/workspace/${encodeURIComponent(workspaceId)}`, { method: "POST", body: input });
+  }
+
+  listWorkspaceDocuments(workspaceId: string, options: { limit?: number; cursor?: string } = {}): Promise<PaginatedResponse<DocumentListResponse>> {
+    const search = new URLSearchParams();
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
+    const query = search.toString();
+    return this.request(`/documents/workspace/${encodeURIComponent(workspaceId)}${query ? `?${query}` : ""}`);
+  }
+
+  getWorkspaceDocument(workspaceId: string, docId: string): Promise<DocumentResponse> {
+    return this.request(`/documents/workspace/${encodeURIComponent(workspaceId)}/${encodeURIComponent(docId)}`);
+  }
+
+  updateWorkspaceDocument(workspaceId: string, docId: string, input: UpdateDocumentRequest): Promise<DocumentResponse> {
+    return this.request(`/documents/workspace/${encodeURIComponent(workspaceId)}/${encodeURIComponent(docId)}`, { method: "PUT", body: input });
+  }
+
+  deleteWorkspaceDocument(workspaceId: string, docId: string): Promise<AckResponse> {
+    return this.request(`/documents/workspace/${encodeURIComponent(workspaceId)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
   }
 
   listThreads(options: ThreadListOptions = {}): Promise<PaginatedResponse<ThreadListResponse>> {

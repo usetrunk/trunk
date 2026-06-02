@@ -10,6 +10,10 @@ export function roomScope(roomId: string): string {
   return `room:${roomId}`;
 }
 
+export function workspaceScope(workspaceId: string): string {
+  return `workspace:${workspaceId}`;
+}
+
 export async function verifyRoomAccess(agentId: string, roomId: string): Promise<boolean> {
   const rows = await db
     .select()

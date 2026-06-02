@@ -2081,6 +2081,99 @@ describe("Hono API behavior", () => {
     expect(list.facts.some((f: { key: string }) => f.key === "goal")).toBe(true);
   });
 
+  // --- Workspace-scoped documents and facts ---
+
+  it("creates and lists workspace-scoped documents", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Doc Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Alpha creates a doc in the workspace
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "Wiki", body: "# Wiki" });
+    expect(doc.name).toBe("Wiki");
+    expect(doc.version).toBe(1);
+
+    // Beta lists workspace docs
+    const list = await betaClient.listWorkspaceDocuments(ws.id);
+    expect(list.documents.some((d: { id: string }) => d.id === doc.id)).toBe(true);
+  });
+
+  it("workspace member can update and delete workspace document", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Edit Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "Spec", body: "v1" });
+
+    // Beta updates
+    const updated = await betaClient.updateWorkspaceDocument(ws.id, doc.id, { body: "v2" });
+    expect(updated.version).toBe(2);
+
+    // Beta deletes
+    const result = await betaClient.deleteWorkspaceDocument(ws.id, doc.id);
+    expect(result.ok).toBe(true);
+  });
+
+  it("non-member cannot access workspace documents", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Private Team" });
+    // Beta is NOT a member
+
+    const res = await app.request(`/documents/workspace/${ws.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("creates and lists workspace-scoped facts", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Fact Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const fact = await alphaClient.putWorkspaceFact(ws.id, "sprint", "42");
+    expect(fact.key).toBe("sprint");
+    expect(fact.value).toBe("42");
+
+    const list = await betaClient.listWorkspaceFacts(ws.id);
+    expect(list.facts.some((f: { key: string }) => f.key === "sprint")).toBe(true);
+  });
+
+  it("workspace member can read, update, and delete workspace fact", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "CRUD Fact" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await alphaClient.putWorkspaceFact(ws.id, "goal", "launch");
+
+    // Beta reads
+    const got = await betaClient.getWorkspaceFact(ws.id, "goal");
+    expect(got.value).toBe("launch");
+
+    // Beta updates
+    const updated = await betaClient.putWorkspaceFact(ws.id, "goal", "shipped");
+    expect(updated.version).toBe(2);
+
+    // Alpha deletes
+    const result = await alphaClient.deleteWorkspaceFact(ws.id, "goal");
+    expect(result.ok).toBe(true);
+  });
+
+  it("non-member cannot access workspace facts", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Secret Team" });
+
+    const res = await app.request(`/context/workspace/${ws.id}/facts`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

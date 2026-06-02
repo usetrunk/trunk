@@ -2122,12 +2122,13 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_document",
-    "Manage shared documents with a contact or room. Actions: create, list, get, update, delete. Provide contact_id for contact-scoped or room_id for room-scoped documents.",
+    "Manage shared documents with a contact, room, or workspace. Actions: create, list, get, update, delete. Provide contact_id, room_id, or workspace_id.",
     {
       secret: z.string().describe("Your agent secret"),
       action: z.enum(["create", "list", "get", "update", "delete"]).describe("Action to perform"),
       contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped documents)"),
       room_id: z.string().optional().describe("Room ID (for room-scoped documents)"),
+      workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped documents)"),
       doc_id: z.string().optional().describe("Document ID (for get, update, delete)"),
       name: z.string().optional().describe("Document name (for create)"),
       body: z.string().optional().describe("Document body (for create, update)"),
@@ -2135,14 +2136,17 @@ export function createTrunkMcpServer() {
       limit: z.number().optional().describe("Max documents to return for list action (default 50, max 100)"),
       cursor: z.string().optional().describe("Pagination cursor for list action"),
     },
-    async ({ secret, action, contact_id, room_id, doc_id, name, body, content_type, limit: limitParam, cursor: cursorParam }) => {
+    async ({ secret, action, contact_id, room_id, workspace_id, doc_id, name, body, content_type, limit: limitParam, cursor: cursorParam }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
-      if (!contact_id && !room_id) return errorResult("contact_id or room_id is required");
+      if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
 
       let scope: string;
-      if (room_id) {
+      if (workspace_id) {
+        if (!(await verifyWorkspaceAccess(agent.id, workspace_id))) return errorResult("Not a workspace member");
+        scope = `workspace:${workspace_id}`;
+      } else if (room_id) {
         const members = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
         if (members.length === 0) return errorResult("Not a room member");
         scope = `room:${room_id}`;
@@ -2215,20 +2219,23 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_document_versions",
-    "List version history or get a specific version of a shared document. Works with contact or room-scoped documents.",
+    "List version history or get a specific version of a shared document. Works with contact, room, or workspace-scoped documents.",
     {
       secret: z.string().describe("Your agent secret"),
       contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped docs)"),
       room_id: z.string().optional().describe("Room ID (for room-scoped docs)"),
+      workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped docs)"),
       doc_id: z.string().describe("Document ID"),
       version: z.number().optional().describe("Specific version to retrieve (omit for full history)"),
     },
-    async ({ secret, contact_id, room_id, doc_id, version }) => {
+    async ({ secret, contact_id, room_id, workspace_id, doc_id, version }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
-      if (!contact_id && !room_id) return errorResult("contact_id or room_id is required");
-      if (room_id) {
+      if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
+      if (workspace_id) {
+        if (!(await verifyWorkspaceAccess(agent.id, workspace_id))) return errorResult("Not a workspace member");
+      } else if (room_id) {
         const members = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
         if (members.length === 0) return errorResult("Not a room member");
       } else {
@@ -2337,23 +2344,27 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_fact",
-    "Manage shared facts (key-value context) with a contact or room. Actions: list, get, put, delete. Provide contact_id or room_id.",
+    "Manage shared facts (key-value context) with a contact, room, or workspace. Actions: list, get, put, delete. Provide contact_id, room_id, or workspace_id.",
     {
       secret: z.string().describe("Your agent secret"),
       action: z.enum(["list", "get", "put", "delete"]).describe("Action to perform"),
       contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped facts)"),
       room_id: z.string().optional().describe("Room ID (for room-scoped facts)"),
+      workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped facts)"),
       key: z.string().optional().describe("Fact key (required for get/put/delete, not needed for list)"),
       value: z.unknown().optional().describe("Fact value (for put)"),
     },
-    async ({ secret, action, contact_id, room_id, key, value }) => {
+    async ({ secret, action, contact_id, room_id, workspace_id, key, value }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
-      if (!contact_id && !room_id) return errorResult("contact_id or room_id is required");
+      if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
 
       let scope: string;
-      if (room_id) {
+      if (workspace_id) {
+        if (!(await verifyWorkspaceAccess(agent.id, workspace_id))) return errorResult("Not a workspace member");
+        scope = `workspace:${workspace_id}`;
+      } else if (room_id) {
         const members = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
         if (members.length === 0) return errorResult("Not a room member");
         scope = `room:${room_id}`;
