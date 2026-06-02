@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, webhookDeliveries } from "../db/schema.js";
-import { eq, desc } from "drizzle-orm";
+import { agents, webhookDeliveries, messages, contacts } from "../db/schema.js";
+import { eq, desc, or, and, gte } from "drizzle-orm";
 import { authMiddleware, generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
@@ -389,6 +389,94 @@ app.post("/me/webhook/test", authMiddleware, async (c) => {
     latency_ms: latencyMs,
     message: errorMsg ? `Webhook failed: ${errorMsg}` : "Webhook unreachable",
   }, httpStatus ? 200 : 502);
+});
+
+// Agent analytics — message volume, top contacts, response times
+app.get("/me/analytics", authMiddleware, async (c) => {
+  const agentId = c.get("agentId");
+  const daysParam = parseInt(c.req.query("days") || "7", 10);
+  const days = Math.min(Math.max(1, daysParam), 30);
+
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+
+  // Get all messages in the window
+  const sent = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.fromAgent, agentId), gte(messages.createdAt, since)));
+
+  const received = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.toAgent, agentId), gte(messages.createdAt, since)));
+
+  // Volume by day
+  const volumeByDay: Record<string, { sent: number; received: number }> = {};
+  for (const m of sent) {
+    const day = m.createdAt.toISOString().slice(0, 10);
+    if (!volumeByDay[day]) volumeByDay[day] = { sent: 0, received: 0 };
+    volumeByDay[day].sent++;
+  }
+  for (const m of received) {
+    const day = m.createdAt.toISOString().slice(0, 10);
+    if (!volumeByDay[day]) volumeByDay[day] = { sent: 0, received: 0 };
+    volumeByDay[day].received++;
+  }
+
+  // Top contacts by volume
+  const contactVolume: Record<string, { sent: number; received: number }> = {};
+  for (const m of sent) {
+    if (!contactVolume[m.toAgent]) contactVolume[m.toAgent] = { sent: 0, received: 0 };
+    contactVolume[m.toAgent].sent++;
+  }
+  for (const m of received) {
+    if (!contactVolume[m.fromAgent]) contactVolume[m.fromAgent] = { sent: 0, received: 0 };
+    contactVolume[m.fromAgent].received++;
+  }
+
+  const topContacts = Object.entries(contactVolume)
+    .map(([id, v]) => ({ agent_id: id, sent: v.sent, received: v.received, total: v.sent + v.received }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
+
+  // Message type breakdown
+  const byType: Record<string, number> = {};
+  for (const m of [...sent, ...received]) {
+    byType[m.type] = (byType[m.type] || 0) + 1;
+  }
+
+  // Response times (time between received message and our reply in same thread)
+  const responseTimes: number[] = [];
+  const receivedByThread: Record<string, Date> = {};
+  for (const m of received) {
+    if (m.threadId) {
+      receivedByThread[m.threadId] = m.createdAt;
+    }
+  }
+  for (const m of sent) {
+    if (m.threadId && receivedByThread[m.threadId]) {
+      const latency = m.createdAt.getTime() - receivedByThread[m.threadId].getTime();
+      if (latency > 0 && latency < 86400000) { // < 24h
+        responseTimes.push(latency);
+      }
+    }
+  }
+
+  const avgResponseMs = responseTimes.length > 0
+    ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
+    : null;
+
+  return c.json({
+    period_days: days,
+    total_sent: sent.length,
+    total_received: received.length,
+    volume_by_day: volumeByDay,
+    top_contacts: topContacts,
+    by_type: byType,
+    avg_response_ms: avgResponseMs,
+    response_count: responseTimes.length,
+  });
 });
 
 // Rotate secret

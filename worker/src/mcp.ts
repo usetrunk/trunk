@@ -705,6 +705,22 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_analytics",
+    "Get your communication analytics — message volume, top contacts, response times, and type breakdown.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      days: z.number().optional().describe("Number of days to analyze (default 7, max 30)"),
+    },
+    async ({ secret, days }) => {
+      const params = new URLSearchParams();
+      if (days !== undefined) params.set("days", String(days));
+      const query = params.toString();
+      const result = await relay(`/agents/me/analytics${query ? `?${query}` : ""}`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_config",
     "Update your agent profile on the server. Set role, projects, or arbitrary metadata without re-registering.",
     {

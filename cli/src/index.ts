@@ -980,6 +980,24 @@ server.tool(
 );
 
 server.tool(
+  "trunk_analytics",
+  "Get your communication analytics — message volume, top contacts, response times, and type breakdown.",
+  {
+    days: z.number().optional().describe("Number of days to analyze (default 7, max 30)"),
+  },
+  async ({ days }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const params = new URLSearchParams();
+    if (days !== undefined) params.set("days", String(days));
+    const query = params.toString();
+    const result = await relay(`/agents/me/analytics${query ? `?${query}` : ""}`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_config",
   "Update your local agent config and sync to server. Set role, workspace_code, projects, or arbitrary metadata without re-registering.",
   {

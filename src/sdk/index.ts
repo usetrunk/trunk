@@ -51,6 +51,17 @@ export type RotateSecretResponse = {
   secret: string;
 };
 
+export type AnalyticsResponse = {
+  period_days: number;
+  total_sent: number;
+  total_received: number;
+  volume_by_day: Record<string, { sent: number; received: number }>;
+  top_contacts: Array<{ agent_id: string; sent: number; received: number; total: number }>;
+  by_type: Record<string, number>;
+  avg_response_ms: number | null;
+  response_count: number;
+};
+
 export type WebhookTestResponse = {
   ok: boolean;
   status?: number;
@@ -649,6 +660,13 @@ export class TrunkClient {
 
   rotateSecret(): Promise<RotateSecretResponse> {
     return this.request("/agents/me/rotate-secret", { method: "POST" });
+  }
+
+  analytics(options: { days?: number } = {}): Promise<AnalyticsResponse> {
+    const search = new URLSearchParams();
+    if (options.days !== undefined) search.set("days", String(options.days));
+    const query = search.toString();
+    return this.request(`/agents/me/analytics${query ? `?${query}` : ""}`);
   }
 
   webhookConfig(): Promise<WebhookConfigResponse> {

@@ -5084,6 +5084,41 @@ describe("Hono API behavior", () => {
     expect(second.already_read).toBe(true);
   });
 
+  // ── Agent Analytics ──
+  it("returns analytics with message volume and top contacts", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send some messages
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "hello" } });
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "how?" } });
+    await betaClient.send({ to: alpha.agent_id, type: "ack", payload: { content: "fine" } });
+
+    const analytics = await alphaClient.analytics({ days: 7 });
+    expect(analytics.period_days).toBe(7);
+    expect(analytics.total_sent).toBe(2);
+    expect(analytics.total_received).toBe(1);
+    expect(analytics.top_contacts.length).toBeGreaterThan(0);
+    expect(analytics.top_contacts[0].agent_id).toBe(beta.agent_id);
+    expect(analytics.by_type).toBeDefined();
+  });
+
+  it("analytics returns empty data for new agent", async () => {
+    const { alphaClient } = await registerPair();
+
+    const analytics = await alphaClient.analytics();
+    expect(analytics.total_sent).toBe(0);
+    expect(analytics.total_received).toBe(0);
+    expect(analytics.top_contacts).toEqual([]);
+  });
+
+  it("analytics respects days parameter", async () => {
+    const { alphaClient } = await registerPair();
+
+    const analytics = await alphaClient.analytics({ days: 1 });
+    expect(analytics.period_days).toBe(1);
+  });
+
   // ── Agent Status Messages ──
   it("can set and clear a custom status text", async () => {
     const { alphaClient } = await registerPair();

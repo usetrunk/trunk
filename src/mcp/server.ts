@@ -1759,6 +1759,72 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_analytics",
+    "Get your communication analytics — message volume, top contacts, response times, and type breakdown.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      days: z.number().optional().describe("Number of days to analyze (default 7, max 30)"),
+    },
+    async ({ secret, days }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const params = new URLSearchParams();
+      if (days !== undefined) params.set("days", String(days));
+      const query = params.toString();
+
+      // Re-use the route logic by querying messages directly
+      const daysVal = Math.min(Math.max(1, days || 7), 30);
+      const since = new Date();
+      since.setDate(since.getDate() - daysVal);
+
+      const sent = await db.select().from(messages).where(and(eq(messages.fromAgent, agent.id), gte(messages.createdAt, since)));
+      const received = await db.select().from(messages).where(and(eq(messages.toAgent, agent.id), gte(messages.createdAt, since)));
+
+      const volumeByDay: Record<string, { sent: number; received: number }> = {};
+      for (const m of sent) {
+        const day = m.createdAt.toISOString().slice(0, 10);
+        if (!volumeByDay[day]) volumeByDay[day] = { sent: 0, received: 0 };
+        volumeByDay[day].sent++;
+      }
+      for (const m of received) {
+        const day = m.createdAt.toISOString().slice(0, 10);
+        if (!volumeByDay[day]) volumeByDay[day] = { sent: 0, received: 0 };
+        volumeByDay[day].received++;
+      }
+
+      const contactVolume: Record<string, { sent: number; received: number }> = {};
+      for (const m of sent) {
+        if (!contactVolume[m.toAgent]) contactVolume[m.toAgent] = { sent: 0, received: 0 };
+        contactVolume[m.toAgent].sent++;
+      }
+      for (const m of received) {
+        if (!contactVolume[m.fromAgent]) contactVolume[m.fromAgent] = { sent: 0, received: 0 };
+        contactVolume[m.fromAgent].received++;
+      }
+
+      const topContacts = Object.entries(contactVolume)
+        .map(([id, v]) => ({ agent_id: id, sent: v.sent, received: v.received, total: v.sent + v.received }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10);
+
+      const byType: Record<string, number> = {};
+      for (const m of [...sent, ...received]) {
+        byType[m.type] = (byType[m.type] || 0) + 1;
+      }
+
+      return { content: [{ type: "text", text: JSON.stringify({
+        period_days: daysVal,
+        total_sent: sent.length,
+        total_received: received.length,
+        volume_by_day: volumeByDay,
+        top_contacts: topContacts,
+        by_type: byType,
+      }, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_config",
     "Update your agent profile. Set role, projects, or arbitrary metadata without re-registering.",
     {
