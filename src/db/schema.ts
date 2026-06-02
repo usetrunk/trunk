@@ -19,6 +19,7 @@ export const agents = pgTable("agents", {
   webhookSecret: text("webhook_secret"),
   workspaceId: text("workspace_id").references(() => workspaces.id),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index("agents_workspace_idx").on(table.workspaceId),

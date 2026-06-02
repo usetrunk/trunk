@@ -610,6 +610,20 @@ export function createMcpServer() {
     }
   );
 
+  // --- Presence ---
+
+  server.tool(
+    "trunk_presence",
+    "Show which workspace members are online, away, or offline. Based on last API activity. Requires workspace membership.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const result = await relay("/agents/presence", { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   // --- Documents ---
 
   server.tool(

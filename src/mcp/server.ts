@@ -1480,6 +1480,72 @@ export function createTrunkMcpServer() {
     }
   );
 
+  // --- Presence ---
+
+  server.tool(
+    "trunk_presence",
+    "Show which workspace members are online, away, or offline. Based on last API activity. Requires workspace membership.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+      if (!agent.workspaceId) return errorResult("Not in a workspace");
+
+      const members = await db
+        .select({
+          id: agents.id,
+          name: agents.name,
+          owner: agents.owner,
+          lastSeenAt: agents.lastSeenAt,
+          metadata: agents.metadata,
+        })
+        .from(agents)
+        .where(eq(agents.workspaceId, agent.workspaceId));
+
+      const now = Date.now();
+      const ONLINE_THRESHOLD = 5 * 60 * 1000;
+      const AWAY_THRESHOLD = 30 * 60 * 1000;
+
+      const presence = members.map((m) => {
+        const lastSeen = m.lastSeenAt ? m.lastSeenAt.getTime() : 0;
+        const elapsed = now - lastSeen;
+        let status: string;
+        if (!m.lastSeenAt) {
+          status = "offline";
+        } else if (elapsed < ONLINE_THRESHOLD) {
+          status = "online";
+        } else if (elapsed < AWAY_THRESHOLD) {
+          status = "away";
+        } else {
+          status = "offline";
+        }
+
+        const meta = (m.metadata ?? {}) as Record<string, unknown>;
+        return {
+          agent_id: m.id,
+          name: m.name,
+          owner: m.owner,
+          role: meta.role as string | undefined,
+          status,
+          last_seen_at: m.lastSeenAt,
+        };
+      });
+
+      const online = presence.filter((p) => p.status === "online").length;
+      const away = presence.filter((p) => p.status === "away").length;
+      const offline = presence.filter((p) => p.status === "offline").length;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ workspace_id: agent.workspaceId, members: presence, online, away, offline }, null, 2),
+        }],
+      };
+    }
+  );
+
   // --- Billing ---
 
   server.tool(

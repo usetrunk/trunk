@@ -62,6 +62,12 @@ export const authMiddleware = createMiddleware<AgentVariables>(
 
     c.set("agentId", agent.id);
     c.set("agent", agent);
+
+    // Touch lastSeenAt for presence tracking
+    await db.update(agents)
+      .set({ lastSeenAt: new Date() })
+      .where(eq(agents.id, agent.id));
+
     await next();
   }
 );

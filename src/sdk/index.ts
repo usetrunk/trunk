@@ -98,6 +98,23 @@ export type WorkspaceMembersResponse = {
   members: Array<{ agent_id: string; name: string; owner?: string | null }>;
 };
 
+export type PresenceMember = {
+  agent_id: string;
+  name: string;
+  owner?: string | null;
+  role?: string;
+  status: "online" | "away" | "offline";
+  last_seen_at: string | Date | null;
+};
+
+export type PresenceResponse = {
+  workspace_id: string;
+  members: PresenceMember[];
+  online: number;
+  away: number;
+  offline: number;
+};
+
 export type Contact = {
   agent_id: string;
   name: string;
@@ -429,6 +446,10 @@ export class TrunkClient {
 
   profile(agentId: string): Promise<AgentProfile> {
     return this.request(`/agents/${encodeURIComponent(agentId)}`);
+  }
+
+  presence(): Promise<PresenceResponse> {
+    return this.request("/agents/presence");
   }
 
   pair(input: PairRequest): Promise<PairResponse> {

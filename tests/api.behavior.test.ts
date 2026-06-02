@@ -15,6 +15,7 @@ type AgentRow = {
   webhookSecret?: string | null;
   workspaceId?: string | null;
   metadata: Record<string, unknown>;
+  lastSeenAt: Date | null;
   createdAt: Date;
 };
 
@@ -3177,6 +3178,82 @@ describe("Hono API behavior", () => {
 
     await expect(alphaClient.reactions("nonexistent-id")).rejects.toMatchObject({ status: 404 });
   });
+
+  // --- Presence ---
+
+  it("presence returns workspace members with online/away/offline status", async () => {
+    const alpha = await createClient().register({ name: "alpha", owner: "Andrei" });
+    const beta = await createClient().register({ name: "beta", owner: "Frank" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    // Create workspace and join both agents
+    const ws = await alphaClient.createWorkspace({ name: "Test Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Both agents make API calls which will touch lastSeenAt
+    await alphaClient.me();
+    await betaClient.me();
+
+    const presence = await alphaClient.presence();
+
+    expect(presence.workspace_id).toBe(ws.id);
+    expect(presence.members).toHaveLength(2);
+    expect(presence.members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ agent_id: alpha.agent_id, name: "alpha", status: "online" }),
+        expect.objectContaining({ agent_id: beta.agent_id, name: "beta", status: "online" }),
+      ])
+    );
+    expect(presence.online).toBe(2);
+    expect(presence.away).toBe(0);
+    expect(presence.offline).toBe(0);
+  });
+
+  it("presence returns offline for agents that never made an API call", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Test Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Manually set beta's lastSeenAt to null (simulating never seen)
+    const betaRow = testState.agents.find(a => a.id === beta.agent_id);
+    if (betaRow) betaRow.lastSeenAt = null;
+
+    const presence = await alphaClient.presence();
+
+    const betaPresence = presence.members.find((m: any) => m.agent_id === beta.agent_id);
+    expect(betaPresence).toMatchObject({ status: "offline" });
+  });
+
+  it("presence returns away for agents with lastSeenAt between 5-30 minutes ago", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Test Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Set beta's lastSeenAt to 10 minutes ago
+    const betaRow = testState.agents.find(a => a.id === beta.agent_id);
+    if (betaRow) betaRow.lastSeenAt = new Date(Date.now() - 10 * 60 * 1000);
+
+    const presence = await alphaClient.presence();
+
+    const betaPresence = presence.members.find((m: any) => m.agent_id === beta.agent_id);
+    expect(betaPresence).toMatchObject({ status: "away" });
+  });
+
+  it("presence returns 400 when not in a workspace", async () => {
+    const alpha = await createClient().register({ name: "solo" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.presence()).rejects.toMatchObject({ status: 400 });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -3415,6 +3492,7 @@ class InsertQuery {
         webhookSecret: (this.insertValues.webhookSecret as string | undefined) ?? null,
         workspaceId: (this.insertValues.workspaceId as string | undefined) ?? null,
         metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        lastSeenAt: null,
         createdAt: new Date(),
       };
       testState.agents.push(row);
@@ -3853,6 +3931,8 @@ const columnToProperty: Record<string, string> = {
   last_edited_by: "lastEditedBy",
   document_id: "documentId",
   edited_by: "editedBy",
+  edited_at: "editedAt",
+  last_seen_at: "lastSeenAt",
   message_id: "messageId",
   stripe_customer_id: "stripeCustomerId",
   stripe_subscription_id: "stripeSubscriptionId",

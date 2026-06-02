@@ -895,6 +895,21 @@ server.tool(
   }
 );
 
+// --- Presence ---
+
+server.tool(
+  "trunk_presence",
+  "Show which workspace members are online, away, or offline. Based on last API activity.",
+  {},
+  async () => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/agents/presence", { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 // --- Documents ---
 
 server.tool(

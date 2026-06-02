@@ -112,6 +112,63 @@ app.patch("/me", authMiddleware, async (c) => {
   });
 });
 
+// Presence — show online/away/offline status for workspace co-members
+// NOTE: must be before /:id to avoid being caught by the param route
+app.get("/presence", authMiddleware, async (c) => {
+  const agent = c.get("agent");
+  if (!agent.workspaceId) {
+    return c.json({ error: "Not in a workspace" }, 400);
+  }
+
+  const members = await db
+    .select({
+      id: agents.id,
+      name: agents.name,
+      owner: agents.owner,
+      lastSeenAt: agents.lastSeenAt,
+      metadata: agents.metadata,
+    })
+    .from(agents)
+    .where(eq(agents.workspaceId, agent.workspaceId));
+
+  const now = Date.now();
+  const ONLINE_THRESHOLD = 5 * 60 * 1000;  // 5 minutes
+  const AWAY_THRESHOLD = 30 * 60 * 1000;   // 30 minutes
+
+  const presence = members.map((m) => {
+    const lastSeen = m.lastSeenAt ? m.lastSeenAt.getTime() : 0;
+    const elapsed = now - lastSeen;
+    let status: "online" | "away" | "offline";
+    if (!m.lastSeenAt) {
+      status = "offline";
+    } else if (elapsed < ONLINE_THRESHOLD) {
+      status = "online";
+    } else if (elapsed < AWAY_THRESHOLD) {
+      status = "away";
+    } else {
+      status = "offline";
+    }
+
+    const meta = (m.metadata ?? {}) as Record<string, unknown>;
+    return {
+      agent_id: m.id,
+      name: m.name,
+      owner: m.owner,
+      role: meta.role as string | undefined,
+      status,
+      last_seen_at: m.lastSeenAt,
+    };
+  });
+
+  return c.json({
+    workspace_id: agent.workspaceId,
+    members: presence,
+    online: presence.filter((p) => p.status === "online").length,
+    away: presence.filter((p) => p.status === "away").length,
+    offline: presence.filter((p) => p.status === "offline").length,
+  });
+});
+
 // Get another agent's public profile (caller must be a contact or workspace co-member)
 app.get("/:id", authMiddleware, async (c) => {
   const myId = c.get("agentId");
