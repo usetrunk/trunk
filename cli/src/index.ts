@@ -1139,13 +1139,14 @@ server.tool(
 
 server.tool(
   "trunk_webhook",
-  "Manage webhook configuration. Actions: status (view config), set (configure URL), remove (clear URL), rotate_secret (new signing secret), deliveries (recent delivery log), test (send test ping).",
+  "Manage webhook configuration. Actions: status (view config), set (configure URL), remove (clear URL), rotate_secret (new signing secret), deliveries (recent delivery log), test (send test ping), retry (re-deliver a failed webhook delivery).",
   {
-    action: z.enum(["status", "set", "remove", "rotate_secret", "deliveries", "test"]).describe("Action to perform"),
+    action: z.enum(["status", "set", "remove", "rotate_secret", "deliveries", "test", "retry"]).describe("Action to perform"),
     url: z.string().optional().describe("Webhook URL (required for 'set' action)"),
     limit: z.number().optional().describe("Max deliveries to return (for 'deliveries' action, default 20)"),
+    delivery_id: z.string().optional().describe("Delivery ID to retry (required for 'retry' action)"),
   },
-  async ({ action, url, limit: deliveryLimit }) => {
+  async ({ action, url, limit: deliveryLimit, delivery_id: retryDeliveryId }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -1173,6 +1174,11 @@ server.tool(
     }
     if (action === "test") {
       const result = await relay("/agents/me/webhook/test", { method: "POST", secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "retry") {
+      if (!retryDeliveryId) return { content: [{ type: "text", text: "Error: delivery_id is required for 'retry' action" }], isError: true };
+      const result = await relay(`/agents/me/webhook/deliveries/${encodeURIComponent(retryDeliveryId)}/retry`, { method: "POST", secret: config.secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     return { content: [{ type: "text", text: "Error: Unknown action" }], isError: true };

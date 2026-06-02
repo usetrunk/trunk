@@ -4755,6 +4755,173 @@ describe("Hono API behavior", () => {
     expect(result.count).toBe(2);
   });
 
+  // --- Webhook Delivery Retry ---
+
+  it("retryWebhookDelivery returns 404 for non-existent delivery", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+    await client.updateWebhook("https://example.com/hook");
+
+    await expect(client.retryWebhookDelivery("nonexistent-id")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("retryWebhookDelivery returns 409 for already-succeeded delivery", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+    await client.updateWebhook("https://example.com/hook");
+
+    testState["webhook_deliveries"].push({
+      id: "whd_success_1",
+      agentId: alpha.agent_id,
+      messageId: "msg_123",
+      url: "https://example.com/hook",
+      event: "message.received",
+      success: 1,
+      httpStatus: 200,
+      latencyMs: 50,
+      error: null,
+      attempts: 1,
+      createdAt: new Date(),
+    });
+
+    await expect(client.retryWebhookDelivery("whd_success_1")).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("retryWebhookDelivery returns 400 when no webhook URL configured", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    testState["webhook_deliveries"].push({
+      id: "whd_nourl_1",
+      agentId: alpha.agent_id,
+      messageId: "msg_456",
+      url: "https://old-url.com/hook",
+      event: "message.received",
+      success: 0,
+      httpStatus: 500,
+      latencyMs: 100,
+      error: "HTTP 500",
+      attempts: 3,
+      createdAt: new Date(),
+    });
+
+    await expect(client.retryWebhookDelivery("whd_nourl_1")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("retryWebhookDelivery returns 400 for test deliveries without message_id", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+    await client.updateWebhook("https://example.com/hook");
+
+    testState["webhook_deliveries"].push({
+      id: "whd_test_only",
+      agentId: alpha.agent_id,
+      messageId: null,
+      url: "https://example.com/hook",
+      event: "webhook.test",
+      success: 0,
+      httpStatus: null,
+      latencyMs: null,
+      error: "timeout",
+      attempts: 1,
+      createdAt: new Date(),
+    });
+
+    await expect(client.retryWebhookDelivery("whd_test_only")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("retryWebhookDelivery returns 404 when original message no longer exists", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+    await client.updateWebhook("https://example.com/hook");
+
+    testState["webhook_deliveries"].push({
+      id: "whd_orphan_1",
+      agentId: alpha.agent_id,
+      messageId: "msg_deleted_999",
+      url: "https://example.com/hook",
+      event: "message.received",
+      success: 0,
+      httpStatus: 500,
+      latencyMs: 200,
+      error: "HTTP 500",
+      attempts: 2,
+      createdAt: new Date(),
+    });
+
+    await expect(client.retryWebhookDelivery("whd_orphan_1")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("retryWebhookDelivery cannot retry another agent's delivery", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const clientA = createClient(alpha.secret);
+    await clientA.updateWebhook("https://example.com/hook");
+
+    testState["webhook_deliveries"].push({
+      id: "whd_other_agent",
+      agentId: beta.agent_id,
+      messageId: "msg_789",
+      url: "https://beta.example.com/hook",
+      event: "message.received",
+      success: 0,
+      httpStatus: 500,
+      latencyMs: 100,
+      error: "HTTP 500",
+      attempts: 1,
+      createdAt: new Date(),
+    });
+
+    await expect(clientA.retryWebhookDelivery("whd_other_agent")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("retryWebhookDelivery attempts re-delivery and logs new delivery record", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await betaClient.updateWebhook("https://beta.example.com/hook");
+
+    // Send a message from alpha to beta
+    const receipt = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test retry" },
+    });
+
+    // Manually mark as failed delivery
+    testState["webhook_deliveries"].push({
+      id: "whd_retry_test",
+      agentId: beta.agent_id,
+      messageId: receipt.id,
+      url: "https://beta.example.com/hook",
+      event: "message.received",
+      success: 0,
+      httpStatus: 500,
+      latencyMs: 150,
+      error: "HTTP 500",
+      attempts: 3,
+      createdAt: new Date(),
+    });
+
+    // Retry — fetch will fail in test env (no real server), so expect 502
+    const res = await app.request(`/agents/me/webhook/deliveries/whd_retry_test/retry`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${beta.secret}` },
+    });
+    const body = await res.json();
+
+    // Should return a response (either success or 502 depending on fetch behavior)
+    expect(body).toHaveProperty("delivery_id");
+    expect(body).toHaveProperty("original_delivery_id", "whd_retry_test");
+    expect(body).toHaveProperty("message_id", receipt.id);
+
+    // A new delivery record should be logged
+    const deliveries = testState["webhook_deliveries"].filter(
+      (d: WebhookDeliveryRow) => d.event === "message.received.retry"
+    );
+    expect(deliveries.length).toBe(1);
+    expect(deliveries[0].messageId).toBe(receipt.id);
+  });
+
   it("presence returns 400 when not in a workspace", async () => {
     const alpha = await createClient().register({ name: "solo" });
     const client = createClient(alpha.secret);

@@ -2080,14 +2080,15 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_webhook",
-    "Manage webhook configuration. Actions: status (view config), set (configure URL), remove (clear URL), rotate_secret (new signing secret), deliveries (recent delivery log), test (send test ping).",
+    "Manage webhook configuration. Actions: status (view config), set (configure URL), remove (clear URL), rotate_secret (new signing secret), deliveries (recent delivery log), test (send test ping), retry (re-deliver a failed webhook delivery).",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["status", "set", "remove", "rotate_secret", "deliveries", "test"]).describe("Action to perform"),
+      action: z.enum(["status", "set", "remove", "rotate_secret", "deliveries", "test", "retry"]).describe("Action to perform"),
       url: z.string().optional().describe("Webhook URL (required for 'set' action)"),
       limit: z.number().optional().describe("Max deliveries to return (for 'deliveries' action, default 20)"),
+      delivery_id: z.string().optional().describe("Delivery ID to retry (required for 'retry' action)"),
     },
-    async ({ secret, action, url, limit: deliveryLimit }) => {
+    async ({ secret, action, url, limit: deliveryLimit, delivery_id: retryDeliveryId }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -2254,6 +2255,100 @@ export function createTrunkMcpServer() {
             isError: true,
           };
         }
+      }
+
+      if (action === "retry") {
+        if (!retryDeliveryId) return errorResult("delivery_id is required for 'retry' action");
+        if (!agent.webhookUrl) return errorResult("No webhook URL configured.");
+
+        const [delivery] = await db
+          .select()
+          .from(webhookDeliveries)
+          .where(and(eq(webhookDeliveries.id, retryDeliveryId), eq(webhookDeliveries.agentId, agent.id)))
+          .limit(1);
+
+        if (!delivery) return errorResult("Delivery not found");
+        if (delivery.success === 1) return errorResult("Delivery already succeeded");
+        if (!delivery.messageId) return errorResult("No message associated with this delivery");
+
+        const [message] = await db
+          .select()
+          .from(messages)
+          .where(eq(messages.id, delivery.messageId))
+          .limit(1);
+
+        if (!message) return errorResult("Original message no longer exists");
+
+        const retryBody = JSON.stringify({ event: "message.received", message });
+        const retryHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+          "X-Trunk-Message-Id": message.id,
+          "X-Trunk-Retry": "true",
+          "X-Trunk-Original-Delivery": retryDeliveryId,
+        };
+
+        if (agent.webhookSecret) {
+          const encoder = new TextEncoder();
+          const key = await crypto.subtle.importKey(
+            "raw", encoder.encode(agent.webhookSecret),
+            { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+          );
+          const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(retryBody));
+          retryHeaders["X-Trunk-Signature"] = `sha256=${Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+        }
+
+        const start = Date.now();
+        let retrySuccess = false;
+        let retryStatus: number | undefined;
+        let retryError: string | undefined;
+
+        try {
+          const res = await fetch(agent.webhookUrl, {
+            method: "POST",
+            headers: retryHeaders,
+            body: retryBody,
+            signal: AbortSignal.timeout(10000),
+          });
+          retrySuccess = res.ok;
+          retryStatus = res.status;
+          if (!res.ok) retryError = `HTTP ${res.status}`;
+        } catch (err: unknown) {
+          retryError = err instanceof Error ? err.message : "unknown error";
+        }
+
+        const latencyMs = Date.now() - start;
+
+        const [newDelivery] = await db.insert(webhookDeliveries).values({
+          agentId: agent.id,
+          messageId: message.id,
+          url: agent.webhookUrl,
+          event: "message.received.retry",
+          success: retrySuccess ? 1 : 0,
+          httpStatus: retryStatus ?? null,
+          latencyMs,
+          error: retryError ?? null,
+          attempts: 1,
+        }).returning();
+
+        if (retrySuccess) {
+          await db.update(messages).set({ status: "delivered" }).where(eq(messages.id, message.id));
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              ok: retrySuccess,
+              delivery_id: newDelivery.id,
+              original_delivery_id: retryDeliveryId,
+              message_id: message.id,
+              status: retryStatus,
+              latency_ms: latencyMs,
+              error: retryError ?? null,
+            }, null, 2),
+          }],
+          isError: !retrySuccess,
+        };
       }
 
       return errorResult("Unknown action");

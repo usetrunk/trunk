@@ -310,6 +310,128 @@ app.get("/me/webhook/deliveries", authMiddleware, async (c) => {
   });
 });
 
+// Retry a failed webhook delivery
+app.post("/me/webhook/deliveries/:id/retry", authMiddleware, async (c) => {
+  const agentId = c.get("agentId");
+  const agent = c.get("agent");
+  const deliveryId = c.req.param("id");
+
+  if (!agent.webhookUrl) {
+    return c.json({ error: "No webhook URL configured", code: "VALIDATION_ERROR" }, 400);
+  }
+
+  const [delivery] = await db
+    .select()
+    .from(webhookDeliveries)
+    .where(and(eq(webhookDeliveries.id, deliveryId), eq(webhookDeliveries.agentId, agentId)))
+    .limit(1);
+
+  if (!delivery) {
+    return c.json({ error: "Delivery not found", code: "NOT_FOUND" }, 404);
+  }
+
+  if (delivery.success === 1) {
+    return c.json({ error: "Delivery already succeeded", code: "ALREADY_DELIVERED" }, 409);
+  }
+
+  if (!delivery.messageId) {
+    return c.json({ error: "No message associated with this delivery (e.g. webhook.test)", code: "VALIDATION_ERROR" }, 400);
+  }
+
+  const [message] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, delivery.messageId))
+    .limit(1);
+
+  if (!message) {
+    return c.json({ error: "Original message no longer exists", code: "NOT_FOUND" }, 404);
+  }
+
+  // Re-attempt delivery using the same webhook infrastructure
+  const body = JSON.stringify({ event: "message.received", message });
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Trunk-Message-Id": message.id,
+    "X-Trunk-Retry": "true",
+    "X-Trunk-Original-Delivery": deliveryId,
+  };
+
+  if (agent.webhookSecret) {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw", encoder.encode(agent.webhookSecret),
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+    );
+    const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+    headers["X-Trunk-Signature"] = `sha256=${Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  const start = Date.now();
+  let success = false;
+  let httpStatus: number | undefined;
+  let errorMsg: string | undefined;
+
+  try {
+    const res = await fetch(agent.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+      signal: AbortSignal.timeout(10000),
+    });
+
+    success = res.ok;
+    httpStatus = res.status;
+    if (!res.ok) errorMsg = `HTTP ${res.status}`;
+  } catch (err: unknown) {
+    errorMsg = err instanceof Error ? err.message : "unknown error";
+  }
+
+  const latencyMs = Date.now() - start;
+
+  // Log the retry delivery
+  const [retryDelivery] = await db.insert(webhookDeliveries).values({
+    agentId,
+    messageId: message.id,
+    url: agent.webhookUrl,
+    event: "message.received.retry",
+    success: success ? 1 : 0,
+    httpStatus: httpStatus ?? null,
+    latencyMs,
+    error: errorMsg ?? null,
+    attempts: 1,
+  }).returning();
+
+  if (success) {
+    await db
+      .update(messages)
+      .set({ status: "delivered" })
+      .where(eq(messages.id, message.id));
+
+    await audit(agentId, "webhook.retry.success", "webhook_delivery", retryDelivery.id, {
+      original_delivery_id: deliveryId,
+      message_id: message.id,
+    });
+  } else {
+    await audit(agentId, "webhook.retry.failed", "webhook_delivery", retryDelivery.id, {
+      original_delivery_id: deliveryId,
+      message_id: message.id,
+      error: errorMsg,
+    });
+  }
+
+  return c.json({
+    ok: success,
+    delivery_id: retryDelivery.id,
+    original_delivery_id: deliveryId,
+    message_id: message.id,
+    status: httpStatus,
+    latency_ms: latencyMs,
+    error: errorMsg ?? null,
+  }, success ? 200 : 502);
+});
+
 // Test webhook — sends a ping to the agent's configured webhook URL
 app.post("/me/webhook/test", authMiddleware, async (c) => {
   const agent = c.get("agent");

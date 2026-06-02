@@ -99,6 +99,16 @@ export type WebhookDeliveriesResponse = {
   count: number;
 };
 
+export type WebhookRetryResponse = {
+  ok: boolean;
+  delivery_id: string;
+  original_delivery_id: string;
+  message_id: string;
+  status?: number;
+  latency_ms: number;
+  error: string | null;
+};
+
 export type PairRequest = {
   code: string;
   alias?: string;
@@ -772,6 +782,10 @@ export class TrunkClient {
     if (options.limit !== undefined) search.set("limit", String(options.limit));
     const query = search.toString();
     return this.request(`/agents/me/webhook/deliveries${query ? `?${query}` : ""}`);
+  }
+
+  retryWebhookDelivery(deliveryId: string): Promise<WebhookRetryResponse> {
+    return this.request(`/agents/me/webhook/deliveries/${encodeURIComponent(deliveryId)}/retry`, { method: "POST" });
   }
 
   testWebhook(): Promise<WebhookTestResponse> {
