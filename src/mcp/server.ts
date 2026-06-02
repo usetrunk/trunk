@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches, messageEdits } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches, messageEdits, attachments } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -3516,6 +3516,188 @@ export function createTrunkMcpServer() {
           type: "text",
           text: JSON.stringify({ ok: true, deleted: template.name }, null, 2),
         }],
+      };
+    }
+  );
+
+  // --- Attachments ---
+
+  server.tool(
+    "trunk_upload_attachment",
+    "Upload a file attachment, optionally linked to a message. Returns attachment ID. Max 10MB, base64-encoded.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      filename: z.string().describe("Original filename"),
+      data: z.string().describe("Base64-encoded file content"),
+      content_type: z.string().optional().describe("MIME type (default: application/octet-stream)"),
+      message_id: z.string().optional().describe("Message ID to link this attachment to"),
+    },
+    async ({ secret, filename, data, content_type, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const sizeBytes = Math.ceil((data.length * 3) / 4);
+      if (sizeBytes > 10 * 1024 * 1024) return errorResult("Attachment exceeds 10MB limit");
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return errorResult("data must be valid base64");
+
+      if (message_id) {
+        const [msg] = await db.select().from(messages).where(eq(messages.id, message_id)).limit(1);
+        if (!msg) return errorResult("Message not found");
+        if (msg.fromAgent !== agent.id && msg.toAgent !== agent.id) return errorResult("Not authorized to attach to this message");
+      }
+
+      const [attachment] = await db.insert(attachments).values({
+        messageId: message_id ?? null,
+        agentId: agent.id,
+        filename,
+        contentType: content_type ?? "application/octet-stream",
+        sizeBytes,
+        data,
+      }).returning();
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            id: attachment.id,
+            message_id: attachment.messageId,
+            filename: attachment.filename,
+            content_type: attachment.contentType,
+            size_bytes: attachment.sizeBytes,
+            created_at: attachment.createdAt.toISOString(),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_get_attachment",
+    "Download an attachment by ID. Returns metadata and base64-encoded content.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      attachment_id: z.string().describe("Attachment ID"),
+    },
+    async ({ secret, attachment_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [attachment] = await db.select().from(attachments).where(eq(attachments.id, attachment_id)).limit(1);
+      if (!attachment) return errorResult("Attachment not found");
+
+      if (attachment.agentId !== agent.id) {
+        if (attachment.messageId) {
+          const [msg] = await db.select().from(messages).where(eq(messages.id, attachment.messageId)).limit(1);
+          if (!msg || (msg.fromAgent !== agent.id && msg.toAgent !== agent.id)) return errorResult("Not authorized");
+        } else {
+          return errorResult("Not authorized");
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            id: attachment.id,
+            message_id: attachment.messageId,
+            filename: attachment.filename,
+            content_type: attachment.contentType,
+            size_bytes: attachment.sizeBytes,
+            data: attachment.data,
+            created_at: attachment.createdAt.toISOString(),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_list_attachments",
+    "List your uploaded attachments.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const results = await db.select().from(attachments)
+        .where(eq(attachments.agentId, agent.id))
+        .orderBy(desc(attachments.createdAt));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            attachments: results.map((a) => ({
+              id: a.id,
+              message_id: a.messageId,
+              filename: a.filename,
+              content_type: a.contentType,
+              size_bytes: a.sizeBytes,
+              created_at: a.createdAt.toISOString(),
+            })),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_message_attachments",
+    "List attachments for a specific message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("Message ID"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db.select().from(messages).where(eq(messages.id, message_id)).limit(1);
+      if (!msg) return errorResult("Message not found");
+      if (msg.fromAgent !== agent.id && msg.toAgent !== agent.id) return errorResult("Not authorized");
+
+      const results = await db.select().from(attachments)
+        .where(eq(attachments.messageId, message_id))
+        .orderBy(desc(attachments.createdAt));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            message_id,
+            attachments: results.map((a) => ({
+              id: a.id,
+              filename: a.filename,
+              content_type: a.contentType,
+              size_bytes: a.sizeBytes,
+              created_at: a.createdAt.toISOString(),
+            })),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_delete_attachment",
+    "Delete an attachment you uploaded.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      attachment_id: z.string().describe("Attachment ID to delete"),
+    },
+    async ({ secret, attachment_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [attachment] = await db.select().from(attachments).where(eq(attachments.id, attachment_id)).limit(1);
+      if (!attachment) return errorResult("Attachment not found");
+      if (attachment.agentId !== agent.id) return errorResult("Only the uploader can delete an attachment");
+
+      await db.delete(attachments).where(eq(attachments.id, attachment_id));
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }],
       };
     }
   );

@@ -259,6 +259,17 @@ type MessageTemplateRow = {
   updatedAt: Date;
 };
 
+type AttachmentRow = {
+  id: string;
+  messageId: string | null;
+  agentId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  data: string;
+  createdAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -283,7 +294,8 @@ type TableName =
   | "notification_preferences"
   | "contact_tags"
   | "saved_searches"
-  | "message_edits";
+  | "message_edits"
+  | "attachments";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -310,6 +322,7 @@ const testState = vi.hoisted(() => ({
   "contact_tags": [] as ContactTagRow[],
   "saved_searches": [] as SavedSearchRow[],
   "message_edits": [] as MessageEditRow[],
+  attachments: [] as AttachmentRow[],
   idCounter: 0,
 }));
 
@@ -348,6 +361,7 @@ describe("Hono API behavior", () => {
     testState["contact_tags"].length = 0;
     testState["saved_searches"].length = 0;
     testState["message_edits"].length = 0;
+    testState.attachments.length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -5834,6 +5848,161 @@ describe("Hono API behavior", () => {
     const betaList = await betaClient.listSavedSearches();
     expect(betaList.searches).toHaveLength(0);
   });
+
+  // --- Attachments ---
+
+  it("uploads an attachment and retrieves it", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    const uploaded = await client.uploadAttachment({
+      filename: "test.txt",
+      content_type: "text/plain",
+      data: btoa("hello world"),
+    });
+
+    expect(uploaded.id).toEqual(expect.any(String));
+    expect(uploaded.filename).toBe("test.txt");
+    expect(uploaded.content_type).toBe("text/plain");
+    expect(uploaded.size_bytes).toBeGreaterThan(0);
+    expect(uploaded.message_id).toBeNull();
+
+    const downloaded = await client.getAttachment(uploaded.id);
+    expect(downloaded.id).toBe(uploaded.id);
+    expect(downloaded.data).toBe(btoa("hello world"));
+    expect(downloaded.filename).toBe("test.txt");
+  });
+
+  it("lists my attachments", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    await client.uploadAttachment({ filename: "a.txt", data: btoa("a") });
+    await client.uploadAttachment({ filename: "b.txt", data: btoa("b") });
+
+    const list = await client.listAttachments();
+    expect(list.attachments).toHaveLength(2);
+  });
+
+  it("links attachment to message via attachment_ids", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const uploaded = await alphaClient.uploadAttachment({
+      filename: "report.pdf",
+      data: btoa("pdf content"),
+      content_type: "application/pdf",
+    });
+
+    const receipt = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "here is the report" },
+      attachment_ids: [uploaded.id],
+    });
+
+    const msgAttachments = await alphaClient.messageAttachments(receipt.id);
+    expect(msgAttachments.message_id).toBe(receipt.id);
+    expect(msgAttachments.attachments).toHaveLength(1);
+    expect(msgAttachments.attachments[0].filename).toBe("report.pdf");
+  });
+
+  it("links attachment to message via message_id on upload", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const receipt = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "message first" },
+    });
+
+    const uploaded = await alphaClient.uploadAttachment({
+      filename: "doc.txt",
+      data: btoa("doc"),
+      message_id: receipt.id,
+    });
+
+    expect(uploaded.message_id).toBe(receipt.id);
+  });
+
+  it("rejects attachment download by non-owner/non-participant", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const uploaded = await alphaClient.uploadAttachment({
+      filename: "private.txt",
+      data: btoa("secret"),
+    });
+
+    await expect(betaClient.getAttachment(uploaded.id)).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+
+  it("deletes an attachment", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    const uploaded = await client.uploadAttachment({
+      filename: "temp.txt",
+      data: btoa("temp"),
+    });
+
+    await client.deleteAttachment(uploaded.id);
+
+    await expect(client.getAttachment(uploaded.id)).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("rejects attachment deletion by non-owner", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const uploaded = await alphaClient.uploadAttachment({
+      filename: "mine.txt",
+      data: btoa("mine"),
+    });
+
+    await expect(betaClient.deleteAttachment(uploaded.id)).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+
+  it("rejects invalid base64 in attachment upload", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    await expect(
+      client.uploadAttachment({ filename: "bad.txt", data: "not-valid-base64!!!" })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("recipient can download attachment linked to a message they received", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const receipt = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "file attached" },
+    });
+
+    const uploaded = await alphaClient.uploadAttachment({
+      filename: "shared.txt",
+      data: btoa("shared content"),
+      message_id: receipt.id,
+    });
+
+    const downloaded = await betaClient.getAttachment(uploaded.id);
+    expect(downloaded.filename).toBe("shared.txt");
+    expect(downloaded.data).toBe(btoa("shared content"));
+  });
 });
 
 async function registerPair(): Promise<{
@@ -6049,6 +6218,16 @@ class SelectQuery {
         const dir = this.orderDirection === "desc" ? -1 : 1;
         if (left !== right) return dir * (left - right);
         return dir * ((a as AuditEventRow).id < (b as AuditEventRow).id ? -1 : 1);
+      });
+    }
+
+    if (this.table === "attachments") {
+      rows.sort((a, b) => {
+        const left = (a as AttachmentRow).createdAt.getTime();
+        const right = (b as AttachmentRow).createdAt.getTime();
+        const dir = this.orderDirection === "desc" ? -1 : 1;
+        if (left !== right) return dir * (left - right);
+        return dir * ((a as AttachmentRow).id < (b as AttachmentRow).id ? -1 : 1);
       });
     }
 
@@ -6402,6 +6581,21 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "attachments") {
+      const row: AttachmentRow = {
+        id: nextId("attachment"),
+        messageId: (this.insertValues.messageId as string | undefined) ?? null,
+        agentId: this.insertValues.agentId as string,
+        filename: this.insertValues.filename as string,
+        contentType: (this.insertValues.contentType as string) ?? "application/octet-stream",
+        sizeBytes: this.insertValues.sizeBytes as number,
+        data: this.insertValues.data as string,
+        createdAt: new Date(),
+      };
+      testState.attachments.push(row);
+      return row;
+    }
+
     const row: MessageRow = {
       id: nextId("message"),
       fromAgent: this.insertValues.fromAgent as string,
@@ -6501,7 +6695,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow> {
   return testState[table];
 }
 
@@ -6540,7 +6734,8 @@ function getTableName(table: unknown): TableName {
     name === "notification_preferences" ||
     name === "contact_tags" ||
     name === "saved_searches" ||
-    name === "message_edits"
+    name === "message_edits" ||
+    name === "attachments"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -6705,4 +6900,5 @@ const columnToProperty: Record<string, string> = {
   urgency_filter: "urgencyFilter",
   expires_at: "expiresAt",
   workspace_role: "workspaceRole",
+  size_bytes: "sizeBytes",
 };

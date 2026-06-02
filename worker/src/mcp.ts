@@ -1454,6 +1454,82 @@ export function createMcpServer() {
     }
   );
 
+  // --- Attachments ---
+
+  server.tool(
+    "trunk_upload_attachment",
+    "Upload a file attachment, optionally linked to a message. Returns attachment ID. Max 10MB, base64-encoded.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      filename: z.string().describe("Original filename"),
+      data: z.string().describe("Base64-encoded file content"),
+      content_type: z.string().optional().describe("MIME type (default: application/octet-stream)"),
+      message_id: z.string().optional().describe("Message ID to link this attachment to"),
+    },
+    async ({ secret, filename, data, content_type, message_id }) => {
+      const result = await relay("/attachments", {
+        method: "POST",
+        body: { filename, data, content_type, message_id },
+        secret,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_get_attachment",
+    "Download an attachment by ID. Returns metadata and base64-encoded content.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      attachment_id: z.string().describe("Attachment ID"),
+    },
+    async ({ secret, attachment_id }) => {
+      const result = await relay(`/attachments/${attachment_id}`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_list_attachments",
+    "List your uploaded attachments.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const result = await relay("/attachments", { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_message_attachments",
+    "List attachments for a specific message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("Message ID"),
+    },
+    async ({ secret, message_id }) => {
+      const result = await relay(`/attachments/message/${message_id}`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_delete_attachment",
+    "Delete an attachment you uploaded.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      attachment_id: z.string().describe("Attachment ID to delete"),
+    },
+    async ({ secret, attachment_id }) => {
+      const result = await relay(`/attachments/${attachment_id}`, {
+        method: "DELETE",
+        secret,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   return server;
 }
 

@@ -15,6 +15,7 @@ import workspacesRoutes from "./routes/workspaces.js";
 import billingRoutes from "./routes/billing.js";
 import auditRoutes from "./routes/audit.js";
 import templatesRoutes from "./routes/templates.js";
+import attachmentsRoutes from "./routes/attachments.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 import { db } from "./db/index.js";
 import { agents } from "./db/schema.js";
@@ -70,6 +71,7 @@ app.route("/workspaces", workspacesRoutes);
 app.route("/billing", billingRoutes);
 app.route("/audit-events", auditRoutes);
 app.route("/templates", templatesRoutes);
+app.route("/attachments", attachmentsRoutes);
 
 export default app;
 

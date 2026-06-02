@@ -192,6 +192,7 @@ export type SendMessageRequest = {
   scheduled_at?: string;
   expires_at?: string;
   ttl_seconds?: number;
+  attachment_ids?: string[];
 };
 
 export type MessageReceipt = {
@@ -628,6 +629,35 @@ export type MessageEditHistoryResponse = {
   edited_at: string | Date | null;
   edits: MessageEditEntry[];
   edit_count: number;
+};
+
+export type AttachmentUploadRequest = {
+  filename: string;
+  content_type?: string;
+  data: string; // base64
+  message_id?: string;
+};
+
+export type AttachmentResponse = {
+  id: string;
+  message_id: string | null;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+};
+
+export type AttachmentDownloadResponse = AttachmentResponse & {
+  data: string; // base64
+};
+
+export type AttachmentListResponse = {
+  attachments: AttachmentResponse[];
+};
+
+export type MessageAttachmentsResponse = {
+  message_id: string;
+  attachments: AttachmentResponse[];
 };
 
 export type HealthResponse = {
@@ -1329,6 +1359,28 @@ export class TrunkClient {
 
   deleteTemplate(templateId: string): Promise<{ ok: true }> {
     return this.request(`/templates/${encodeURIComponent(templateId)}`, { method: "DELETE" });
+  }
+
+  // --- Attachments ---
+
+  uploadAttachment(input: AttachmentUploadRequest): Promise<AttachmentResponse> {
+    return this.request("/attachments", { method: "POST", body: input });
+  }
+
+  getAttachment(attachmentId: string): Promise<AttachmentDownloadResponse> {
+    return this.request(`/attachments/${encodeURIComponent(attachmentId)}`);
+  }
+
+  listAttachments(): Promise<AttachmentListResponse> {
+    return this.request("/attachments");
+  }
+
+  messageAttachments(messageId: string): Promise<MessageAttachmentsResponse> {
+    return this.request(`/attachments/message/${encodeURIComponent(messageId)}`);
+  }
+
+  deleteAttachment(attachmentId: string): Promise<{ ok: true }> {
+    return this.request(`/attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE" });
   }
 
   private async request<T>(

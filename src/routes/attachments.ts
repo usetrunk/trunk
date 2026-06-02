@@ -1,0 +1,173 @@
+import { Hono } from "hono";
+import { db } from "../db/index.js";
+import { attachments, messages } from "../db/schema.js";
+import { eq, and, desc } from "drizzle-orm";
+import { authMiddleware } from "../lib/auth.js";
+import { canMessage } from "../lib/workspace.js";
+import type { AgentVariables } from "../lib/types.js";
+
+const app = new Hono<AgentVariables>();
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB
+
+app.use("/*", authMiddleware);
+
+// Upload an attachment (optionally linked to a message)
+app.post("/", async (c) => {
+  const agentId = c.get("agentId");
+  const body = await c.req.json<{
+    filename: string;
+    content_type?: string;
+    data: string; // base64
+    message_id?: string;
+  }>();
+
+  if (!body.filename || !body.data) {
+    return c.json({ error: "filename and data are required", code: "MISSING_FIELD" }, 400);
+  }
+
+  // Validate base64 and check size
+  let sizeBytes: number;
+  try {
+    sizeBytes = Math.ceil((body.data.length * 3) / 4);
+    // Validate it's valid base64
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(body.data)) {
+      return c.json({ error: "data must be valid base64", code: "INVALID_INPUT" }, 400);
+    }
+  } catch {
+    return c.json({ error: "data must be valid base64", code: "INVALID_INPUT" }, 400);
+  }
+
+  if (sizeBytes > MAX_ATTACHMENT_BYTES) {
+    return c.json({ error: "Attachment exceeds 10MB limit", code: "VALIDATION_ERROR" }, 413);
+  }
+
+  // If linked to a message, verify the agent can access it
+  if (body.message_id) {
+    const [msg] = await db.select().from(messages).where(eq(messages.id, body.message_id)).limit(1);
+    if (!msg) {
+      return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
+    }
+    if (msg.fromAgent !== agentId && msg.toAgent !== agentId) {
+      return c.json({ error: "Not authorized to attach to this message", code: "FORBIDDEN" }, 403);
+    }
+  }
+
+  const [attachment] = await db.insert(attachments).values({
+    messageId: body.message_id ?? null,
+    agentId,
+    filename: body.filename,
+    contentType: body.content_type ?? "application/octet-stream",
+    sizeBytes,
+    data: body.data,
+  }).returning();
+
+  return c.json({
+    id: attachment.id,
+    message_id: attachment.messageId,
+    filename: attachment.filename,
+    content_type: attachment.contentType,
+    size_bytes: attachment.sizeBytes,
+    created_at: attachment.createdAt.toISOString(),
+  }, 201);
+});
+
+// Download an attachment
+app.get("/:id", async (c) => {
+  const agentId = c.get("agentId");
+  const attachmentId = c.req.param("id");
+
+  const [attachment] = await db.select().from(attachments).where(eq(attachments.id, attachmentId)).limit(1);
+  if (!attachment) {
+    return c.json({ error: "Attachment not found", code: "NOT_FOUND" }, 404);
+  }
+
+  // Verify access: must be the uploader, or if linked to a message, the sender/recipient
+  if (attachment.agentId !== agentId) {
+    if (attachment.messageId) {
+      const [msg] = await db.select().from(messages).where(eq(messages.id, attachment.messageId)).limit(1);
+      if (!msg || (msg.fromAgent !== agentId && msg.toAgent !== agentId)) {
+        return c.json({ error: "Not authorized to access this attachment", code: "FORBIDDEN" }, 403);
+      }
+    } else {
+      return c.json({ error: "Not authorized to access this attachment", code: "FORBIDDEN" }, 403);
+    }
+  }
+
+  return c.json({
+    id: attachment.id,
+    message_id: attachment.messageId,
+    filename: attachment.filename,
+    content_type: attachment.contentType,
+    size_bytes: attachment.sizeBytes,
+    data: attachment.data,
+    created_at: attachment.createdAt.toISOString(),
+  });
+});
+
+// List attachments for a message
+app.get("/message/:messageId", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("messageId");
+
+  const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
+  if (!msg) {
+    return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
+  }
+  if (msg.fromAgent !== agentId && msg.toAgent !== agentId) {
+    return c.json({ error: "Not authorized to view these attachments", code: "FORBIDDEN" }, 403);
+  }
+
+  const results = await db.select().from(attachments)
+    .where(eq(attachments.messageId, messageId))
+    .orderBy(desc(attachments.createdAt));
+
+  return c.json({
+    message_id: messageId,
+    attachments: results.map((a) => ({
+      id: a.id,
+      filename: a.filename,
+      content_type: a.contentType,
+      size_bytes: a.sizeBytes,
+      created_at: a.createdAt.toISOString(),
+    })),
+  });
+});
+
+// Delete an attachment (only uploader can delete)
+app.delete("/:id", async (c) => {
+  const agentId = c.get("agentId");
+  const attachmentId = c.req.param("id");
+
+  const [attachment] = await db.select().from(attachments).where(eq(attachments.id, attachmentId)).limit(1);
+  if (!attachment) {
+    return c.json({ error: "Attachment not found", code: "NOT_FOUND" }, 404);
+  }
+  if (attachment.agentId !== agentId) {
+    return c.json({ error: "Only the uploader can delete an attachment", code: "NOT_OWNER" }, 403);
+  }
+
+  await db.delete(attachments).where(eq(attachments.id, attachmentId));
+  return c.json({ ok: true });
+});
+
+// List my attachments
+app.get("/", async (c) => {
+  const agentId = c.get("agentId");
+
+  const results = await db.select().from(attachments)
+    .where(eq(attachments.agentId, agentId))
+    .orderBy(desc(attachments.createdAt));
+
+  return c.json({
+    attachments: results.map((a) => ({
+      id: a.id,
+      message_id: a.messageId,
+      filename: a.filename,
+      content_type: a.contentType,
+      size_bytes: a.sizeBytes,
+      created_at: a.createdAt.toISOString(),
+    })),
+  });
+});
+
+export default app;

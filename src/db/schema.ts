@@ -316,3 +316,17 @@ export const sharedDocumentVersions = pgTable("shared_document_versions", {
 }, (table) => [
   index("shared_doc_versions_idx").on(table.documentId, table.version),
 ]);
+
+export const attachments = pgTable("attachments", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  messageId: text("message_id").references(() => messages.id),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  filename: text("filename").notNull(),
+  contentType: text("content_type").notNull().default("application/octet-stream"),
+  sizeBytes: integer("size_bytes").notNull(),
+  data: text("data").notNull(), // base64-encoded content
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("attachments_message_idx").on(table.messageId),
+  index("attachments_agent_idx").on(table.agentId, table.createdAt),
+]);

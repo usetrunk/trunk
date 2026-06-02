@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits, attachments } from "../db/schema.js";
 import { eq, or, and, desc, lt } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -31,6 +31,7 @@ app.post("/", async (c) => {
     scheduled_at?: string;
     expires_at?: string;
     ttl_seconds?: number;
+    attachment_ids?: string[];
   }>();
   const idempotencyKey = requireIdempotencyKey(c);
   if (idempotencyKey instanceof Response) return idempotencyKey;
@@ -274,6 +275,20 @@ app.post("/", async (c) => {
       .set({ threadId: message.id })
       .where(eq(messages.id, message.id));
     message.threadId = message.id;
+  }
+
+  // Link attachments to the message if provided
+  if (body.attachment_ids && body.attachment_ids.length > 0) {
+    for (const attachmentId of body.attachment_ids) {
+      const [att] = await db.select().from(attachments).where(eq(attachments.id, attachmentId)).limit(1);
+      if (!att) {
+        return c.json({ error: `Attachment ${attachmentId} not found`, code: "ATTACHMENT_NOT_FOUND" }, 404);
+      }
+      if (att.agentId !== agentId) {
+        return c.json({ error: `Attachment ${attachmentId} not owned by you`, code: "FORBIDDEN" }, 403);
+      }
+      await db.update(attachments).set({ messageId: message.id }).where(eq(attachments.id, attachmentId));
+    }
   }
 
   await applyFactUpdates(agentId, body.to, body.payload.updates_facts);

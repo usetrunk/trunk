@@ -1820,6 +1820,95 @@ server.tool(
   }
 );
 
+// --- Attachments ---
+
+server.tool(
+  "trunk_upload_attachment",
+  "Upload a file attachment, optionally linked to a message. Returns attachment ID. Max 10MB, base64-encoded.",
+  {
+    filename: z.string().describe("Original filename"),
+    data: z.string().describe("Base64-encoded file content"),
+    content_type: z.string().optional().describe("MIME type (default: application/octet-stream)"),
+    message_id: z.string().optional().describe("Message ID to link this attachment to"),
+  },
+  async ({ filename, data, content_type, message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/attachments", {
+      method: "POST",
+      body: { filename, data, content_type, message_id },
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_get_attachment",
+  "Download an attachment by ID. Returns metadata and base64-encoded content.",
+  {
+    attachment_id: z.string().describe("Attachment ID"),
+  },
+  async ({ attachment_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/attachments/${attachment_id}`, {
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_list_attachments",
+  "List your uploaded attachments.",
+  {},
+  async () => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/attachments", { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_message_attachments",
+  "List attachments for a specific message.",
+  {
+    message_id: z.string().describe("Message ID"),
+  },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/attachments/message/${message_id}`, {
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_delete_attachment",
+  "Delete an attachment you uploaded.",
+  {
+    attachment_id: z.string().describe("Attachment ID to delete"),
+  },
+  async ({ attachment_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/attachments/${attachment_id}`, {
+      method: "DELETE",
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 // --- Start ---
 
 async function main() {
