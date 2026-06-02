@@ -32,6 +32,7 @@ type MessageRow = {
   fromAgent: string;
   toAgent: string;
   toWorkspace?: string | null;
+  toRoom?: string | null;
   threadId: string | null;
   replyTo: string | null;
   idempotencyKey: string | null;
@@ -1472,6 +1473,131 @@ describe("Hono API behavior", () => {
     // Alpha still sees it
     const alphaRooms = await alphaClient.listRooms();
     expect(alphaRooms.rooms.some(r => r.id === room.id)).toBe(true);
+  });
+
+  // --- Room messaging fan-out tests ---
+
+  it("sends a message to room:<id> and fans out to all other members", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create room with alpha, join beta
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Chat Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Alpha sends to room
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Room broadcast from alpha" },
+    });
+
+    expect(receipt.status).toBe("delivered");
+    expect(receipt.recipients).toBe(1);
+    expect(receipt.thread_id).toBeDefined();
+
+    // Beta should see the message in inbox
+    const inbox = await betaClient.inbox();
+    const roomMsg = inbox.messages.find(
+      (m: { payload: { content: string } }) => m.payload.content === "Room broadcast from alpha"
+    );
+    expect(roomMsg).toBeDefined();
+    expect(roomMsg.fromAgent).toBe(alpha.agent_id);
+  });
+
+  it("fans out room message to multiple members", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Register a third agent
+    const gammaReg = await createClient().register({ name: "gamma", owner: "Test" });
+    const gammaClient = createClient(gammaReg.secret);
+
+    // Create room, join all three
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Multi Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+    await joinRoomRaw(gammaReg.secret, room.pairing_code);
+
+    // Alpha sends to room
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Hello everyone" },
+    });
+
+    expect(receipt.status).toBe("delivered");
+    expect(receipt.recipients).toBe(2);
+
+    // Both beta and gamma should see the message
+    const betaInbox = await betaClient.inbox();
+    expect(betaInbox.messages.some(
+      (m: { payload: { content: string } }) => m.payload.content === "Hello everyone"
+    )).toBe(true);
+
+    const gammaInbox = await gammaClient.inbox();
+    expect(gammaInbox.messages.some(
+      (m: { payload: { content: string } }) => m.payload.content === "Hello everyone"
+    )).toBe(true);
+  });
+
+  it("rejects room message from non-member", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create room with only alpha
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Private Room" });
+    const room = await roomRes.json();
+
+    // Register an outsider
+    const outsider = await createClient().register({ name: "outsider", owner: "Test" });
+    const outsiderClient = createClient(outsider.secret);
+
+    // Outsider tries to send to room
+    try {
+      await outsiderClient.send({
+        to: `room:${room.id}`,
+        type: "update",
+        payload: { content: "Sneaking in" },
+      });
+      expect(true).toBe(false); // should not reach here
+    } catch (e: unknown) {
+      expect((e as Error).message).toContain("Not a member");
+    }
+  });
+
+  it("rejects room message to non-existent room", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    try {
+      await alphaClient.send({
+        to: "room:non-existent-room-id",
+        type: "update",
+        payload: { content: "Ghost room" },
+      });
+      expect(true).toBe(false);
+    } catch (e: unknown) {
+      expect((e as Error).message).toContain("Room not found");
+    }
+  });
+
+  it("rejects room message when sender is the only member", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Solo Room" });
+    const room = await roomRes.json();
+
+    try {
+      await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "update",
+        payload: { content: "Talking to myself" },
+      });
+      expect(true).toBe(false);
+    } catch (e: unknown) {
+      expect((e as Error).message).toContain("No other members");
+    }
   });
 
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
@@ -5290,6 +5416,7 @@ class InsertQuery {
       fromAgent: this.insertValues.fromAgent as string,
       toAgent: this.insertValues.toAgent as string,
       toWorkspace: (this.insertValues.toWorkspace as string | undefined) ?? null,
+      toRoom: (this.insertValues.toRoom as string | undefined) ?? null,
       threadId: (this.insertValues.threadId as string | undefined) ?? null,
       replyTo: (this.insertValues.replyTo as string | undefined) ?? null,
       idempotencyKey: (this.insertValues.idempotencyKey as string | undefined) ?? null,
@@ -5562,6 +5689,7 @@ const columnToProperty: Record<string, string> = {
   window_start: "windowStart",
   workspace_id: "workspaceId",
   to_workspace: "toWorkspace",
+  to_room: "toRoom",
   content_type: "contentType",
   last_edited_by: "lastEditedBy",
   document_id: "documentId",

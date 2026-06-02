@@ -50,6 +50,7 @@ export const messages = pgTable("messages", {
   fromAgent: text("from_agent").notNull().references(() => agents.id),
   toAgent: text("to_agent").notNull().references(() => agents.id),
   toWorkspace: text("to_workspace").references(() => workspaces.id),
+  toRoom: text("to_room").references(() => rooms.id),
   threadId: text("thread_id"),
   replyTo: text("reply_to"),
   idempotencyKey: text("idempotency_key"),
@@ -73,6 +74,7 @@ export const messages = pgTable("messages", {
   index("messages_thread_idx").on(table.threadId, table.createdAt),
   index("messages_reply_to_idx").on(table.replyTo),
   index("messages_workspace_inbox_idx").on(table.toWorkspace, table.status, table.createdAt),
+  index("messages_room_inbox_idx").on(table.toRoom, table.status, table.createdAt),
   index("messages_scheduled_idx").on(table.status, table.scheduledAt),
 ]);
 

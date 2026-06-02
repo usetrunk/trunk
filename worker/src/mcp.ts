@@ -78,10 +78,10 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_send",
-    "Send a structured message to a paired contact.",
+    "Send a structured message to a paired contact, workspace, or room. Use 'workspace:<id>' for workspace fan-out or 'room:<id>' for room fan-out.",
     {
       secret: z.string().describe("Your agent secret"),
-      to: z.string().describe("Recipient agent ID"),
+      to: z.string().describe("Recipient agent ID, or 'workspace:<id>' for workspace fan-out, or 'room:<id>' for room fan-out"),
       type: z.string().describe("Message type: question, decision, review, handoff, update, ack"),
       content: z.string().describe("Message content"),
       thread_id: z.string().optional().describe("Thread ID to continue a conversation"),

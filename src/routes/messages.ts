@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, reactions, messageLabels, savedSearches } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches } from "../db/schema.js";
 import { eq, or, and, desc, lt } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -145,6 +145,89 @@ app.post("/", async (c) => {
     }
 
     await audit(agentId, "message.send_workspace", "workspace", workspaceId, {
+      thread_id: threadId,
+      recipient_count: recipients.length,
+    });
+
+    return c.json({
+      id: created[0].id,
+      thread_id: threadId,
+      status: "delivered",
+      created_at: created[0].createdAt,
+      recipients: recipients.length,
+    }, 201);
+  }
+
+  // Handle room addressing: "room:<id>"
+  if (body.to.startsWith("room:")) {
+    const roomId = body.to.slice("room:".length);
+
+    // Verify room exists
+    const [room] = await db
+      .select()
+      .from(rooms)
+      .where(eq(rooms.id, roomId))
+      .limit(1);
+    if (!room) {
+      return c.json({ error: "Room not found" }, 404);
+    }
+
+    // Get all room members
+    const members = await db
+      .select({ agentId: roomMembers.agentId })
+      .from(roomMembers)
+      .where(eq(roomMembers.roomId, roomId));
+    if (members.length === 0) {
+      return c.json({ error: "Room has no members" }, 400);
+    }
+
+    // Verify sender is a room member
+    if (!members.some((m) => m.agentId === agentId)) {
+      return c.json({ error: "Not a member of this room" }, 403);
+    }
+
+    // Filter out the sender from fan-out recipients
+    const recipients = members.filter((m) => m.agentId !== agentId).map((m) => m.agentId);
+    if (recipients.length === 0) {
+      return c.json({ error: "No other members in room" }, 400);
+    }
+
+    // Fan-out: create a message for each recipient
+    const threadId = body.thread_id ?? crypto.randomUUID();
+    const created: MessageRow[] = [];
+
+    for (const recipientId of recipients) {
+      const [message] = await db
+        .insert(messages)
+        .values({
+          fromAgent: agentId,
+          toAgent: recipientId,
+          toRoom: roomId,
+          threadId,
+          replyTo: body.reply_to,
+          idempotencyKey: `${idempotencyKey}:${recipientId}`,
+          type: body.type,
+          payload: body.payload,
+          ...(expiresAt ? { expiresAt } : {}),
+        })
+        .returning();
+
+      await notifyRealtime(recipientId, message);
+      await db
+        .update(messages)
+        .set({ status: "delivered", deliveredAt: new Date() })
+        .where(eq(messages.id, message.id));
+      message.status = "delivered";
+
+      const [recipient] = await db.select().from(agents).where(eq(agents.id, recipientId)).limit(1);
+      if (recipient?.webhookUrl) {
+        deliverWebhook(message, recipient).catch(() => {});
+      }
+
+      created.push(message);
+    }
+
+    await audit(agentId, "message.send_room", "room", roomId, {
       thread_id: threadId,
       recipient_count: recipients.length,
     });
