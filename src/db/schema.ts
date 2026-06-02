@@ -256,6 +256,18 @@ export const messageTemplates = pgTable("message_templates", {
   index("message_templates_agent_idx").on(table.agentId),
 ]);
 
+export const contactTags = pgTable("contact_tags", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  contactAgentId: text("contact_agent_id").notNull().references(() => agents.id),
+  tag: text("tag").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("contact_tags_unique_idx").on(table.agentId, table.contactAgentId, table.tag),
+  index("contact_tags_agent_idx").on(table.agentId, table.tag),
+  index("contact_tags_contact_idx").on(table.agentId, table.contactAgentId),
+]);
+
 export const notificationPreferences = pgTable("notification_preferences", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   agentId: text("agent_id").notNull().references(() => agents.id),

@@ -1442,6 +1442,60 @@ server.tool(
 );
 
 server.tool(
+  "trunk_tag_contact",
+  "Add a tag to a contact for organization (e.g., 'team', 'vendor', 'priority').",
+  {
+    contact_id: z.string().describe("Agent ID of the contact"),
+    tag: z.string().describe("Tag to add (lowercased, max 50 chars)"),
+  },
+  async ({ contact_id, tag }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/contacts/${contact_id}/tags`, { method: "POST", body: { tag }, secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_untag_contact",
+  "Remove a tag from a contact.",
+  {
+    contact_id: z.string().describe("Agent ID of the contact"),
+    tag: z.string().describe("Tag to remove"),
+  },
+  async ({ contact_id, tag }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/contacts/${contact_id}/tags/${encodeURIComponent(tag)}`, { method: "DELETE", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_contact_tags",
+  "List tags for a contact, or list all your tags.",
+  {
+    contact_id: z.string().optional().describe("Agent ID to list tags for (omit for all tags)"),
+    tag: z.string().optional().describe("Tag to list contacts by"),
+  },
+  async ({ contact_id, tag }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    if (contact_id) {
+      const result = await relay(`/contacts/${contact_id}/tags`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (tag) {
+      const result = await relay(`/contacts/by-tag/${encodeURIComponent(tag)}`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    const result = await relay("/contacts/tags/all", { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_label_message",
   "Add a label/tag to a message for organization. Labels are private to you. Good for marking messages as 'important', 'action-required', 'reviewed', etc.",
   {

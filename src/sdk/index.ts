@@ -999,6 +999,26 @@ export class TrunkClient {
     return this.request(`/contacts/${encodeURIComponent(agentId)}/notifications`, { method: "PUT", body: prefs });
   }
 
+  addContactTag(agentId: string, tag: string): Promise<{ id?: string; tag?: string; created_at?: string; ok?: true; already_tagged?: boolean }> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/tags`, { method: "POST", body: { tag } });
+  }
+
+  removeContactTag(agentId: string, tag: string): Promise<{ ok: true }> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
+  }
+
+  contactTags(agentId: string): Promise<{ tags: string[] }> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/tags`);
+  }
+
+  contactsByTag(tag: string): Promise<{ contacts: Array<{ agent_id: string; name: string | null; tagged_at: string }> }> {
+    return this.request(`/contacts/by-tag/${encodeURIComponent(tag)}`);
+  }
+
+  allContactTags(): Promise<{ tags: Array<{ tag: string; count: number }> }> {
+    return this.request("/contacts/tags/all");
+  }
+
   addLabel(messageId: string, label: string): Promise<{ id: string; message_id: string; label: string; created_at: string }> {
     return this.request(`/messages/${encodeURIComponent(messageId)}/labels`, { method: "POST", body: { label } });
   }

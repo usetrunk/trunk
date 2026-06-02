@@ -211,6 +211,14 @@ type ContactNoteRow = {
   updatedAt: Date;
 };
 
+type ContactTagRow = {
+  id: string;
+  agentId: string;
+  contactAgentId: string;
+  tag: string;
+  createdAt: Date;
+};
+
 type NotificationPrefRow = {
   id: string;
   agentId: string;
@@ -253,7 +261,8 @@ type TableName =
   | "blocked_contacts"
   | "contact_notes"
   | "message_templates"
-  | "notification_preferences";
+  | "notification_preferences"
+  | "contact_tags";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -277,6 +286,7 @@ const testState = vi.hoisted(() => ({
   "contact_notes": [] as ContactNoteRow[],
   "message_templates": [] as MessageTemplateRow[],
   "notification_preferences": [] as NotificationPrefRow[],
+  "contact_tags": [] as ContactTagRow[],
   idCounter: 0,
 }));
 
@@ -312,6 +322,7 @@ describe("Hono API behavior", () => {
     testState["contact_notes"].length = 0;
     testState["message_templates"].length = 0;
     testState["notification_preferences"].length = 0;
+    testState["contact_tags"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -4594,6 +4605,72 @@ describe("Hono API behavior", () => {
       alphaClient.setNotificationPrefs(beta.agent_id, { urgency_filter: "invalid" })
     ).rejects.toMatchObject({ status: 400 });
   });
+
+  // --- Contact tags tests ---
+
+  it("adds and lists tags for a contact", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.addContactTag(beta.agent_id, "team");
+    expect(result.tag).toBe("team");
+
+    const tags = await alphaClient.contactTags(beta.agent_id);
+    expect(tags.tags).toContain("team");
+  });
+
+  it("prevents duplicate tags", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.addContactTag(beta.agent_id, "vendor");
+    const dup = await alphaClient.addContactTag(beta.agent_id, "vendor");
+    expect(dup).toMatchObject({ ok: true, already_tagged: true });
+  });
+
+  it("removes a tag from a contact", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.addContactTag(beta.agent_id, "temp");
+    const result = await alphaClient.removeContactTag(beta.agent_id, "temp");
+    expect(result).toMatchObject({ ok: true });
+
+    const tags = await alphaClient.contactTags(beta.agent_id);
+    expect(tags.tags).not.toContain("temp");
+  });
+
+  it("lists contacts by tag", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.addContactTag(beta.agent_id, "priority");
+    const contacts = await alphaClient.contactsByTag("priority");
+    expect(contacts.contacts).toHaveLength(1);
+    expect(contacts.contacts[0].agent_id).toBe(beta.agent_id);
+  });
+
+  it("lists all tags with counts", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.addContactTag(beta.agent_id, "team");
+    await alphaClient.addContactTag(beta.agent_id, "active");
+
+    const allTags = await alphaClient.allContactTags();
+    expect(allTags.tags).toHaveLength(2);
+    expect(allTags.tags.find((t: { tag: string }) => t.tag === "team")?.count).toBe(1);
+  });
+
+  it("tags are private to each agent", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.addContactTag(beta.agent_id, "my-tag");
+
+    const betaTags = await betaClient.contactTags(alpha.agent_id);
+    expect(betaTags.tags).toHaveLength(0);
+  });
 });
 
 async function registerPair(): Promise<{
@@ -5095,6 +5172,18 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "contact_tags") {
+      const row: ContactTagRow = {
+        id: nextId("ctag"),
+        agentId: this.insertValues.agentId as string,
+        contactAgentId: this.insertValues.contactAgentId as string,
+        tag: this.insertValues.tag as string,
+        createdAt: new Date(),
+      };
+      testState["contact_tags"].push(row);
+      return row;
+    }
+
     if (this.table === "notification_preferences") {
       const row: NotificationPrefRow = {
         id: nextId("notifpref"),
@@ -5222,7 +5311,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow> {
   return testState[table];
 }
 
@@ -5258,7 +5347,8 @@ function getTableName(table: unknown): TableName {
     name === "blocked_contacts" ||
     name === "contact_notes" ||
     name === "message_templates" ||
-    name === "notification_preferences"
+    name === "notification_preferences" ||
+    name === "contact_tags"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }

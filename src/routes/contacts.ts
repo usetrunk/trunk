@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, workspaces, workspaceContacts, blockedContacts, contactNotes, notificationPreferences } from "../db/schema.js";
+import { agents, contacts, workspaces, workspaceContacts, blockedContacts, contactNotes, notificationPreferences, contactTags } from "../db/schema.js";
 import { eq, or, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -499,6 +499,125 @@ app.put("/:id/notifications", async (c) => {
     muted: pref.muted === 1,
     urgency_filter: pref.urgencyFilter,
     updated_at: pref.updatedAt,
+  });
+});
+
+// --- Contact tags ---
+
+// Add a tag to a contact
+app.post("/:id/tags", async (c) => {
+  const agentId = c.get("agentId");
+  const contactId = c.req.param("id");
+  const body = await c.req.json<{ tag: string }>();
+
+  if (!body.tag || typeof body.tag !== "string") {
+    return c.json({ error: "tag is required" }, 400);
+  }
+
+  const tag = body.tag.toLowerCase().slice(0, 50);
+
+  // Check if already tagged
+  const [existing] = await db
+    .select()
+    .from(contactTags)
+    .where(and(
+      eq(contactTags.agentId, agentId),
+      eq(contactTags.contactAgentId, contactId),
+      eq(contactTags.tag, tag)
+    ))
+    .limit(1);
+
+  if (existing) {
+    return c.json({ ok: true, already_tagged: true });
+  }
+
+  const [row] = await db
+    .insert(contactTags)
+    .values({ agentId, contactAgentId: contactId, tag })
+    .returning();
+
+  await audit(agentId, "contact.tag_add", "agent", contactId, { tag });
+  return c.json({ id: row.id, tag: row.tag, created_at: row.createdAt }, 201);
+});
+
+// Remove a tag from a contact
+app.delete("/:id/tags/:tag", async (c) => {
+  const agentId = c.get("agentId");
+  const contactId = c.req.param("id");
+  const tag = c.req.param("tag").toLowerCase();
+
+  const deleted = await db
+    .delete(contactTags)
+    .where(and(
+      eq(contactTags.agentId, agentId),
+      eq(contactTags.contactAgentId, contactId),
+      eq(contactTags.tag, tag)
+    ))
+    .returning();
+
+  if (deleted.length === 0) return c.json({ error: "Tag not found" }, 404);
+  await audit(agentId, "contact.tag_remove", "agent", contactId, { tag });
+  return c.json({ ok: true });
+});
+
+// List tags for a specific contact
+app.get("/:id/tags", async (c) => {
+  const agentId = c.get("agentId");
+  const contactId = c.req.param("id");
+
+  const rows = await db
+    .select()
+    .from(contactTags)
+    .where(and(
+      eq(contactTags.agentId, agentId),
+      eq(contactTags.contactAgentId, contactId)
+    ));
+
+  return c.json({ tags: rows.map((r) => r.tag) });
+});
+
+// List all contacts with a specific tag
+app.get("/by-tag/:tag", async (c) => {
+  const agentId = c.get("agentId");
+  const tag = c.req.param("tag").toLowerCase();
+
+  const rows = await db
+    .select()
+    .from(contactTags)
+    .where(and(eq(contactTags.agentId, agentId), eq(contactTags.tag, tag)));
+
+  const agentIds = rows.map((r) => r.contactAgentId);
+  const agentList = agentIds.length > 0
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+    : [];
+  const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
+
+  return c.json({
+    contacts: rows.map((r) => ({
+      agent_id: r.contactAgentId,
+      name: nameMap[r.contactAgentId] ?? null,
+      tagged_at: r.createdAt,
+    })),
+  });
+});
+
+// List all tags used by the agent
+app.get("/tags/all", async (c) => {
+  const agentId = c.get("agentId");
+
+  const rows = await db
+    .select()
+    .from(contactTags)
+    .where(eq(contactTags.agentId, agentId));
+
+  // Aggregate unique tags with counts
+  const tagCounts: Record<string, number> = {};
+  for (const row of rows) {
+    tagCounts[row.tag] = (tagCounts[row.tag] ?? 0) + 1;
+  }
+
+  return c.json({
+    tags: Object.entries(tagCounts).map(([tag, count]) => ({ tag, count })),
   });
 });
 

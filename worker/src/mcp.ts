@@ -1116,6 +1116,56 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_tag_contact",
+    "Add a tag to a contact for organization.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      tag: z.string().describe("Tag to add (lowercased, max 50 chars)"),
+    },
+    async ({ secret, contact_id, tag }) => {
+      const result = await relay(`/contacts/${contact_id}/tags`, { method: "POST", body: { tag }, secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_untag_contact",
+    "Remove a tag from a contact.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      tag: z.string().describe("Tag to remove"),
+    },
+    async ({ secret, contact_id, tag }) => {
+      const result = await relay(`/contacts/${contact_id}/tags/${encodeURIComponent(tag)}`, { method: "DELETE", secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_contact_tags",
+    "List tags for a contact, or list all your tags.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().optional().describe("Agent ID to list tags for (omit for all tags)"),
+      tag: z.string().optional().describe("Tag to list contacts by"),
+    },
+    async ({ secret, contact_id, tag }) => {
+      if (contact_id) {
+        const result = await relay(`/contacts/${contact_id}/tags`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (tag) {
+        const result = await relay(`/contacts/by-tag/${encodeURIComponent(tag)}`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      const result = await relay("/contacts/tags/all", { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_label_message",
     "Add a label/tag to a message for organization. Labels are private to the agent.",
     {

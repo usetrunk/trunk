@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -2705,6 +2705,113 @@ export function createTrunkMcpServer() {
             urgency_filter: urgency_filter ?? (existing ? existing.urgencyFilter : "all"),
           }, null, 2),
         }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_tag_contact",
+    "Add a tag to a contact for organization. Tags are private to you. Use to group contacts (e.g., 'team', 'vendor', 'priority').",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      tag: z.string().describe("Tag to add (lowercased, max 50 chars)"),
+    },
+    async ({ secret, contact_id, tag }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const normalizedTag = tag.toLowerCase().slice(0, 50);
+      const [existing] = await db
+        .select()
+        .from(contactTags)
+        .where(and(
+          eq(contactTags.agentId, agent.id),
+          eq(contactTags.contactAgentId, contact_id),
+          eq(contactTags.tag, normalizedTag)
+        ))
+        .limit(1);
+
+      if (existing) {
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, already_tagged: true }, null, 2) }] };
+      }
+
+      const [row] = await db
+        .insert(contactTags)
+        .values({ agentId: agent.id, contactAgentId: contact_id, tag: normalizedTag })
+        .returning();
+
+      return { content: [{ type: "text", text: JSON.stringify({ id: row.id, tag: row.tag, created_at: row.createdAt }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_untag_contact",
+    "Remove a tag from a contact.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      tag: z.string().describe("Tag to remove"),
+    },
+    async ({ secret, contact_id, tag }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const deleted = await db
+        .delete(contactTags)
+        .where(and(
+          eq(contactTags.agentId, agent.id),
+          eq(contactTags.contactAgentId, contact_id),
+          eq(contactTags.tag, tag.toLowerCase())
+        ))
+        .returning();
+
+      if (deleted.length === 0) return errorResult("Tag not found");
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_contact_tags",
+    "List all tags for a specific contact, or list contacts by tag.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().optional().describe("Agent ID to list tags for"),
+      tag: z.string().optional().describe("Tag to list contacts by"),
+    },
+    async ({ secret, contact_id, tag }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      if (contact_id) {
+        const rows = await db.select().from(contactTags)
+          .where(and(eq(contactTags.agentId, agent.id), eq(contactTags.contactAgentId, contact_id)));
+        return { content: [{ type: "text", text: JSON.stringify({ tags: rows.map((r) => r.tag) }, null, 2) }] };
+      }
+
+      if (tag) {
+        const rows = await db.select().from(contactTags)
+          .where(and(eq(contactTags.agentId, agent.id), eq(contactTags.tag, tag.toLowerCase())));
+        const ids = rows.map((r) => r.contactAgentId);
+        const agentList = ids.length > 0
+          ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...ids.map((id) => eq(agents.id, id))))
+          : [];
+        const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            contacts: rows.map((r) => ({ agent_id: r.contactAgentId, name: nameMap[r.contactAgentId] ?? null })),
+          }, null, 2) }],
+        };
+      }
+
+      // List all tags with counts
+      const rows = await db.select().from(contactTags).where(eq(contactTags.agentId, agent.id));
+      const tagCounts: Record<string, number> = {};
+      for (const row of rows) tagCounts[row.tag] = (tagCounts[row.tag] ?? 0) + 1;
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          tags: Object.entries(tagCounts).map(([t, count]) => ({ tag: t, count })),
+        }, null, 2) }],
       };
     }
   );
