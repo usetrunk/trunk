@@ -1625,6 +1625,160 @@ describe("Hono API behavior", () => {
     await expect(blocked.json()).resolves.toMatchObject({ error: "Rate limit exceeded" });
   });
 
+  it("rate limit responses include X-RateLimit-* headers and Retry-After on 429", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // First send should include rate limit headers with remaining count
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const first = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${secret}`,
+        "Idempotency-Key": "rl-header-0",
+      },
+      body: JSON.stringify({ to: beta.agent_id, type: "update", payload: { content: "first" } }),
+    });
+    expect(first.status).toBe(201);
+    expect(first.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(first.headers.get("X-RateLimit-Remaining")).toBe("59");
+    expect(first.headers.get("X-RateLimit-Reset")).toBeTruthy();
+
+    // Exhaust the limit
+    for (let i = 1; i < 60; i += 1) {
+      await sendRaw(alphaClient, beta.agent_id, `rl-header-${i}`, { content: `msg ${i}` });
+    }
+
+    // 61st request should be blocked with 429 + Retry-After header
+    const blocked = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${secret}`,
+        "Idempotency-Key": "rl-header-blocked",
+      },
+      body: JSON.stringify({ to: beta.agent_id, type: "update", payload: { content: "blocked" } }),
+    });
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("Retry-After")).toBeTruthy();
+    expect(Number(blocked.headers.get("Retry-After"))).toBeGreaterThan(0);
+    expect(blocked.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(blocked.headers.get("X-RateLimit-Remaining")).toBe("0");
+
+    const body = await blocked.json();
+    expect(body).toMatchObject({
+      error: "Rate limit exceeded",
+      retry_after_seconds: expect.any(Number),
+    });
+  });
+
+  it("rate limit registration includes headers and Retry-After on 429", async () => {
+    for (let i = 0; i < 10; i += 1) {
+      await app.request("/agents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-forwarded-for": "198.51.100.1" },
+        body: JSON.stringify({ name: `reg-${i}` }),
+      });
+    }
+
+    const blocked = await app.request("/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-forwarded-for": "198.51.100.1" },
+      body: JSON.stringify({ name: "reg-blocked" }),
+    });
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("Retry-After")).toBeTruthy();
+    expect(blocked.headers.get("X-RateLimit-Limit")).toBe("10");
+    expect(blocked.headers.get("X-RateLimit-Remaining")).toBe("0");
+  });
+
+  it("different agents have independent rate limit counters", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Alpha sends 60 messages (hits limit)
+    for (let i = 0; i < 60; i += 1) {
+      await sendRaw(alphaClient, beta.agent_id, `indep-a-${i}`, { content: `msg ${i}` });
+    }
+
+    // Alpha is now blocked
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const blockedAlpha = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${secret}`,
+        "Idempotency-Key": "indep-a-blocked",
+      },
+      body: JSON.stringify({ to: beta.agent_id, type: "update", payload: { content: "blocked" } }),
+    });
+    expect(blockedAlpha.status).toBe(429);
+
+    // Beta can still send (independent counter)
+    const betaRaw = await sendRaw(betaClient, alpha.agent_id, "indep-b-0", { content: "beta fine" });
+    expect(betaRaw.status).toBe("delivered");
+  });
+
+  it("SDK exposes retryAfterSeconds and isRateLimited on 429 errors", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Exhaust the limit
+    for (let i = 0; i < 60; i += 1) {
+      await sendRaw(alphaClient, beta.agent_id, `sdk-rl-${i}`, { content: `msg ${i}` });
+    }
+
+    // SDK should throw TrunkApiError with retryAfterSeconds
+    try {
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "over limit" },
+      });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(TrunkApiError);
+      const apiErr = err as TrunkApiError;
+      expect(apiErr.status).toBe(429);
+      expect(apiErr.isRateLimited).toBe(true);
+      expect(apiErr.retryAfterSeconds).toBeGreaterThan(0);
+      expect(apiErr.message).toBe("Rate limit exceeded");
+    }
+  });
+
+  it("rate limits replies at the same 60/min threshold as sends", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Alpha sends 1 message for beta to reply to
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "hello" },
+    });
+
+    // Exhaust beta's rate limit with sends
+    for (let i = 0; i < 60; i += 1) {
+      await sendRaw(betaClient, alpha.agent_id, `reply-rl-${i}`, { content: `msg ${i}` });
+    }
+
+    // Beta's reply should also be rate limited (shares counter with sends)
+    try {
+      await betaClient.reply(sent.id, {
+        type: "ack",
+        payload: { content: "can't reply" },
+      });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(TrunkApiError);
+      const apiErr = err as TrunkApiError;
+      expect(apiErr.status).toBe(429);
+      expect(apiErr.isRateLimited).toBe(true);
+    }
+  });
+
   it("LangGraph adapter nodes send messages and write inbox results into graph state", async () => {
     const { beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

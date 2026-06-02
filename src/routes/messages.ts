@@ -7,7 +7,7 @@ import { audit } from "../lib/audit.js";
 import { parsePaginationQuery, paginateResults, type PaginationParams } from "../lib/pagination.js";
 import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
-import { checkRateLimit } from "../lib/rate-limit.js";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import { canMessage, getWorkspaceMembers } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
@@ -38,6 +38,7 @@ app.post("/", async (c) => {
     return c.json({ error: "payload exceeds 1MB limit" }, 413);
   }
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
     return c.json({ error: "Rate limit exceeded", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
@@ -625,6 +626,7 @@ app.post("/:id/reply", async (c) => {
     return c.json({ error: "payload exceeds 1MB limit" }, 413);
   }
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
     return c.json({ error: "Rate limit exceeded", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }

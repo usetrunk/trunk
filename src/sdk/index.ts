@@ -377,8 +377,9 @@ export type TrunkClientOptions = {
 export class TrunkApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  readonly retryAfterSeconds: number | undefined;
 
-  constructor(status: number, body: unknown) {
+  constructor(status: number, body: unknown, retryAfterSeconds?: number) {
     const message =
       typeof body === "object" && body !== null && "error" in body
         ? String((body as { error: unknown }).error)
@@ -387,6 +388,11 @@ export class TrunkApiError extends Error {
     this.name = "TrunkApiError";
     this.status = status;
     this.body = body;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+
+  get isRateLimited(): boolean {
+    return this.status === 429;
   }
 }
 
@@ -713,7 +719,12 @@ export class TrunkClient {
 
     const body = await readJson(response);
     if (!response.ok) {
-      throw new TrunkApiError(response.status, body);
+      const retryAfter = response.headers.get("Retry-After");
+      throw new TrunkApiError(
+        response.status,
+        body,
+        retryAfter ? parseInt(retryAfter, 10) : undefined,
+      );
     }
     return body as T;
   }
