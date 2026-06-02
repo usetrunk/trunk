@@ -183,6 +183,23 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_ack_bulk",
+    "Acknowledge multiple messages at once (mark as read/processed). Useful for clearing inbox backlog.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_ids: z.array(z.string()).describe("Array of message IDs to acknowledge (max 100)"),
+    },
+    async ({ secret, message_ids }) => {
+      const result = await relay("/messages/ack-bulk", {
+        method: "POST",
+        body: { message_ids },
+        secret,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {

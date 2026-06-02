@@ -447,6 +447,10 @@ export class TrunkClient {
     return this.request(`/messages/${encodeURIComponent(messageId)}/ack`, { method: "POST" });
   }
 
+  ackBulk(messageIds: string[]): Promise<{ ok: true; acked: number }> {
+    return this.request("/messages/ack-bulk", { method: "POST", body: { message_ids: messageIds } });
+  }
+
   reply(messageId: string, input: Omit<SendMessageRequest, "to" | "thread_id">): Promise<MessageReceipt> {
     return this.request(`/messages/${encodeURIComponent(messageId)}/reply`, {
       method: "POST",

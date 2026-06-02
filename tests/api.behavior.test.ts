@@ -1604,6 +1604,44 @@ describe("Hono API behavior", () => {
     expect(inbox.messages[0].payload).toMatchObject({ content: "new" });
   });
 
+  // --- Bulk ack tests ---
+
+  it("bulk acks multiple messages at once", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+    const m2 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg2" } });
+    const m3 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg3" } });
+
+    const result = await betaClient.ackBulk([m1.id, m2.id, m3.id]);
+
+    expect(result).toMatchObject({ ok: true, acked: 3 });
+    // All messages should be processed now — inbox returns no pending messages
+    const inbox = await betaClient.inbox();
+    expect(inbox.messages).toHaveLength(0);
+  });
+
+  it("bulk ack skips messages not addressed to the agent", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "to beta" } });
+
+    // Alpha tries to ack a message sent TO beta — should not work
+    const result = await alphaClient.ackBulk([m1.id]);
+    expect(result).toMatchObject({ ok: true, acked: 0 });
+
+    // Beta can still ack it
+    const betaResult = await betaClient.ackBulk([m1.id]);
+    expect(betaResult).toMatchObject({ ok: true, acked: 1 });
+  });
+
+  it("rejects bulk ack with empty array", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.ackBulk([])).rejects.toMatchObject({ status: 400 });
+  });
+
   // --- Sent messages (outbox) tests ---
 
   it("returns sent messages for the authenticated agent", async () => {

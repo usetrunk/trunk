@@ -385,6 +385,43 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_ack_bulk",
+    "Acknowledge multiple messages at once (mark as read/processed). Useful for clearing inbox backlog.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_ids: z.array(z.string()).describe("Array of message IDs to acknowledge (max 100)"),
+    },
+    async ({ secret, message_ids }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      let acked = 0;
+      for (const messageId of message_ids.slice(0, 100)) {
+        const [msg] = await db
+          .select()
+          .from(messages)
+          .where(and(eq(messages.id, messageId), eq(messages.toAgent, agent.id)))
+          .limit(1);
+
+        if (msg) {
+          await db
+            .update(messages)
+            .set({ status: "processed", readAt: new Date(), processedAt: new Date() })
+            .where(eq(messages.id, messageId));
+          acked++;
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, acked, requested: message_ids.length }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {

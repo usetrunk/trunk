@@ -284,6 +284,39 @@ app.delete("/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// Bulk acknowledge messages (mark multiple as read)
+app.post("/ack-bulk", async (c) => {
+  const agentId = c.get("agentId");
+  const body = await c.req.json<{ message_ids: string[] }>();
+
+  if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
+    return c.json({ error: "message_ids array is required" }, 400);
+  }
+  if (body.message_ids.length > 100) {
+    return c.json({ error: "Cannot ack more than 100 messages at once" }, 400);
+  }
+
+  let acked = 0;
+  for (const messageId of body.message_ids) {
+    const [msg] = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.id, messageId), eq(messages.toAgent, agentId)))
+      .limit(1);
+
+    if (msg) {
+      await db
+        .update(messages)
+        .set({ status: "processed", readAt: new Date(), processedAt: new Date() })
+        .where(eq(messages.id, messageId));
+      acked++;
+    }
+  }
+
+  await audit(agentId, "message.ack_bulk", "message", null, { count: acked });
+  return c.json({ ok: true, acked });
+});
+
 // Acknowledge a message (mark as read)
 app.post("/:id/ack", async (c) => {
   const agentId = c.get("agentId");
