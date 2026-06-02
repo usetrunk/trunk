@@ -989,7 +989,7 @@ app.get("/thread/:threadId/pins", async (c) => {
     return c.json({ thread_id: threadId, pinned: [], count: 0 });
   }
 
-  const agentIds = [...new Set(pinned.flatMap((m) => [m.fromAgent, m.toAgent, m.pinnedBy].filter(Boolean)))];
+  const agentIds = [...new Set(pinned.flatMap((m) => [m.fromAgent, m.toAgent, m.pinnedBy].filter((x): x is string => !!x)))];
   const agentList = agentIds.length > 0
     ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
     : [];
