@@ -117,8 +117,13 @@ function spawnAgent(config: AgentConfig): ChildProcess {
   ], {
     cwd: expandedCwd,
     env,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
+    stdio: ["pipe", "pipe", "pipe"],
+    shell: true,
+  });
+
+  child.on("error", (err: Error) => {
+    console.error(`[harness] failed to spawn ${config.name}: ${err.message}`);
+    removeAgent(config.name);
   });
 
   child.stdout?.on("data", (data: Buffer) => {
@@ -141,16 +146,15 @@ function spawnAgent(config: AgentConfig): ChildProcess {
   });
 
   // Track the process
-  addAgent({
-    name: config.name,
-    profile: config.profile,
-    pid: child.pid!,
-    cwd: expandedCwd,
-    startedAt: new Date().toISOString(),
-  });
-
-  // Unref so the parent can exit without killing children (if detached)
-  child.unref();
+  if (child.pid) {
+    addAgent({
+      name: config.name,
+      profile: config.profile,
+      pid: child.pid,
+      cwd: expandedCwd,
+      startedAt: new Date().toISOString(),
+    });
+  }
 
   return child;
 }
