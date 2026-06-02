@@ -553,6 +553,41 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_unpair",
+    "Remove a contact pairing. Both agents lose the ability to message each other.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      agent_id: z.string().describe("The contact's agent ID to unpair from"),
+    },
+    async ({ secret, agent_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [row] = await db
+        .select()
+        .from(contacts)
+        .where(or(
+          and(eq(contacts.agentA, agent.id), eq(contacts.agentB, agent_id)),
+          and(eq(contacts.agentA, agent_id), eq(contacts.agentB, agent.id))
+        ))
+        .limit(1);
+
+      if (!row) return errorResult("Not a contact");
+
+      await db
+        .delete(contacts)
+        .where(or(
+          and(eq(contacts.agentA, agent.id), eq(contacts.agentB, agent_id)),
+          and(eq(contacts.agentA, agent_id), eq(contacts.agentB, agent.id))
+        ));
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true, unpaired_from: agent_id }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_update_contact",
     "Update a contact's alias (your nickname for them).",
     {
@@ -1682,6 +1717,119 @@ export function createTrunkMcpServer() {
       }
 
       return errorResult("Unknown action");
+    }
+  );
+
+  server.tool(
+    "trunk_document_versions",
+    "List version history or get a specific version of a shared document.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      doc_id: z.string().describe("Document ID"),
+      version: z.number().optional().describe("Specific version to retrieve (omit for full history)"),
+    },
+    async ({ secret, contact_id, doc_id, version }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      if (!(await verifyContactAccess(agent.id, contact_id))) return errorResult("Not a contact");
+
+      if (version !== undefined) {
+        const [v] = await db
+          .select()
+          .from(sharedDocumentVersions)
+          .where(and(eq(sharedDocumentVersions.documentId, doc_id), eq(sharedDocumentVersions.version, version)))
+          .limit(1);
+        if (!v) return errorResult("Version not found");
+        return { content: [{ type: "text", text: JSON.stringify({ id: v.id, document_id: v.documentId, version: v.version, body: v.body, edited_by: v.editedBy, created_at: v.createdAt }, null, 2) }] };
+      }
+
+      const versions = await db
+        .select()
+        .from(sharedDocumentVersions)
+        .where(eq(sharedDocumentVersions.documentId, doc_id))
+        .orderBy(desc(sharedDocumentVersions.version));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            document_id: doc_id,
+            versions: versions.map(v => ({ id: v.id, version: v.version, edited_by: v.editedBy, created_at: v.createdAt })),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_gantt",
+    "Get workspace tasks with dependency tracking, grouping, and progress summary for Gantt chart visualization.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      workspace_id: z.string().describe("Workspace ID"),
+    },
+    async ({ secret, workspace_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const ok = await verifyWorkspaceAccess(agent.id, workspace_id);
+      if (!ok) return errorResult("Not a workspace member");
+
+      const scope = `workspace:${workspace_id}`;
+      const allTasks = await db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.scope, scope))
+        .orderBy(tasks.sequence, tasks.createdAt);
+
+      const ownerIds = [...new Set(allTasks.map(t => t.owner).filter(Boolean))] as string[];
+      const ownerRows = ownerIds.length > 0
+        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...ownerIds.map(id => eq(agents.id, id))))
+        : [];
+      const ownerNames = Object.fromEntries(ownerRows.map(a => [a.id, a.name]));
+
+      const doneIds = new Set(allTasks.filter(t => t.status === "done").map(t => t.id));
+
+      const ganttTasks = allTasks.map(t => {
+        const deps = (t.dependsOn as string[]) || [];
+        const blockedBy = deps.filter(d => !doneIds.has(d));
+        return {
+          id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority,
+          owner: t.owner, due: t.due, start_date: t.startDate, group: t.group,
+          depends_on: t.dependsOn, sequence: t.sequence, estimate: t.estimate,
+          owner_name: t.owner ? ownerNames[t.owner] || t.owner.slice(0, 8) : null,
+          deps_met: blockedBy.length === 0, blocked_by: blockedBy,
+        };
+      });
+
+      const grouped: Record<string, typeof ganttTasks> = {};
+      const ungrouped: typeof ganttTasks = [];
+      for (const t of ganttTasks) {
+        if (t.group) {
+          if (!grouped[t.group]) grouped[t.group] = [];
+          grouped[t.group].push(t);
+        } else {
+          ungrouped.push(t);
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            tasks: ganttTasks, groups: grouped, ungrouped,
+            summary: {
+              total: allTasks.length,
+              done: allTasks.filter(t => t.status === "done").length,
+              in_progress: allTasks.filter(t => t.status === "in-progress").length,
+              blocked: allTasks.filter(t => t.status === "blocked").length,
+              open: allTasks.filter(t => t.status === "open").length,
+            },
+          }, null, 2),
+        }],
+      };
     }
   );
 

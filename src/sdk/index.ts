@@ -203,6 +203,25 @@ export type TaskListResponse = {
   tasks: TaskResponse[];
 };
 
+export type GanttTask = TaskResponse & {
+  owner_name: string | null;
+  deps_met: boolean;
+  blocked_by: string[];
+};
+
+export type GanttResponse = {
+  tasks: GanttTask[];
+  groups: Record<string, GanttTask[]>;
+  ungrouped: GanttTask[];
+  summary: {
+    total: number;
+    done: number;
+    in_progress: number;
+    blocked: number;
+    open: number;
+  };
+};
+
 export type UpdateTaskRequest = {
   title?: string;
   description?: string;
@@ -635,6 +654,10 @@ export class TrunkClient {
     if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/tasks/workspace/${encodeURIComponent(workspaceId)}${query ? `?${query}` : ""}`);
+  }
+
+  ganttData(workspaceId: string): Promise<GanttResponse> {
+    return this.request(`/tasks/gantt/workspace/${encodeURIComponent(workspaceId)}`);
   }
 
   deleteTask(scopeId: string, taskId: string): Promise<{ ok: true; deleted_id: string }> {

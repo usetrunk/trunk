@@ -361,6 +361,21 @@ server.tool(
 );
 
 server.tool(
+  "trunk_unpair",
+  "Remove a contact pairing. Both agents lose the ability to message each other.",
+  {
+    agent_id: z.string().describe("The contact's agent ID to unpair from"),
+  },
+  async ({ agent_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/contacts/${encodeURIComponent(agent_id)}`, { method: "DELETE", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_update_contact",
   "Update a contact's alias (your nickname for them).",
   {
@@ -965,6 +980,43 @@ server.tool(
     }
 
     return { content: [{ type: "text", text: "Error: Unknown action" }], isError: true };
+  }
+);
+
+server.tool(
+  "trunk_document_versions",
+  "List version history or get a specific version of a shared document.",
+  {
+    contact_id: z.string().describe("Agent ID of the contact"),
+    doc_id: z.string().describe("Document ID"),
+    version: z.number().optional().describe("Specific version to retrieve (omit for full history)"),
+  },
+  async ({ contact_id, doc_id, version }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    if (version !== undefined) {
+      const result = await relay(`/documents/${encodeURIComponent(contact_id)}/${encodeURIComponent(doc_id)}/versions/${version}`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    const result = await relay(`/documents/${encodeURIComponent(contact_id)}/${encodeURIComponent(doc_id)}/versions`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_gantt",
+  "Get workspace tasks with dependency tracking, grouping, and progress summary for Gantt chart visualization.",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+  },
+  async ({ workspace_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/tasks/gantt/workspace/${encodeURIComponent(workspace_id)}`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
 
