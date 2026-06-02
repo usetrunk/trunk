@@ -148,31 +148,48 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_task_create",
-    "Create a task for a contact. Both agents can see and update it.",
+    "Create a task. Scoped to a contact pair, room, or workspace.",
     {
       secret: z.string().describe("Your agent secret"),
-      contact_id: z.string().describe("Agent ID of the contact"),
       title: z.string().describe("Task title"),
+      contact_id: z.string().optional().describe("Agent ID of the contact (contact-scoped task)"),
+      room_id: z.string().optional().describe("Room ID (room-scoped task)"),
+      workspace_id: z.string().optional().describe("Workspace ID (workspace-scoped task)"),
       description: z.string().optional().describe("Task description"),
       owner: z.string().optional().describe("Agent ID of who's responsible"),
       due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
+      context_ref: z.string().optional().describe("Reference to a thread or message"),
     },
-    async ({ secret, contact_id, title, description, owner, due }) => {
-      const result = await relay("/tasks", { method: "POST", secret, body: { contact_id, title, description, owner, due } });
+    async ({ secret, title, contact_id, room_id, workspace_id, description, owner, due, context_ref }) => {
+      const result = await relay("/tasks", { method: "POST", secret, body: { contact_id, room_id, workspace_id, title, description, owner, due, context_ref } });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
 
   server.tool(
     "trunk_task_list",
-    "List tasks with a contact.",
+    "List tasks for a contact, room, or workspace.",
     {
       secret: z.string().describe("Your agent secret"),
-      contact_id: z.string().describe("Agent ID of the contact"),
+      contact_id: z.string().optional().describe("Agent ID of the contact"),
+      room_id: z.string().optional().describe("Room ID"),
+      workspace_id: z.string().optional().describe("Workspace ID"),
       status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
+      owner: z.string().optional().describe("Filter by owner agent ID"),
     },
-    async ({ secret, contact_id, status }) => {
-      const path = status ? `/tasks/${contact_id}?status=${status}` : `/tasks/${contact_id}`;
+    async ({ secret, contact_id, room_id, workspace_id, status, owner }) => {
+      let path: string;
+      const params = new URLSearchParams();
+      if (status) params.set("status", status);
+      if (owner) params.set("owner", owner);
+      const query = params.toString();
+      if (workspace_id) {
+        path = `/tasks/workspace/${workspace_id}${query ? `?${query}` : ""}`;
+      } else if (room_id) {
+        path = `/tasks/room/${room_id}${query ? `?${query}` : ""}`;
+      } else {
+        path = `/tasks/${contact_id}${query ? `?${query}` : ""}`;
+      }
       const result = await relay(path, { secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
@@ -180,23 +197,72 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_task_update",
-    "Update a task — change status, owner, title, due date.",
+    "Update a task — change status, owner, title, due date, etc.",
     {
       secret: z.string().describe("Your agent secret"),
-      contact_id: z.string().describe("Agent ID of the contact"),
+      contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped tasks)"),
+      room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
+      workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
       task_id: z.string().describe("Task ID to update"),
       status: z.string().optional().describe("New status: open, in-progress, done, blocked"),
       owner: z.string().optional().describe("Reassign to a different agent"),
       title: z.string().optional().describe("Update the title"),
-      due: z.string().optional().describe("Update due date"),
+      description: z.string().optional().describe("Update the description"),
+      due: z.string().optional().describe("Update due date (YYYY-MM-DD)"),
     },
-    async ({ secret, contact_id, task_id, status, owner, title, due }) => {
+    async ({ secret, contact_id, room_id, workspace_id, task_id, status, owner, title, description, due }) => {
+      const scopeId = contact_id || room_id || workspace_id;
       const body: Record<string, unknown> = {};
-      if (status) body.status = status;
-      if (owner) body.owner = owner;
-      if (title) body.title = title;
-      if (due) body.due = due;
-      const result = await relay(`/tasks/${contact_id}/${task_id}`, { method: "PATCH", secret, body });
+      if (status !== undefined) body.status = status;
+      if (owner !== undefined) body.owner = owner;
+      if (title !== undefined) body.title = title;
+      if (description !== undefined) body.description = description;
+      if (due !== undefined) body.due = due;
+      const result = await relay(`/tasks/${scopeId}/${task_id}`, { method: "PATCH", secret, body });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_room",
+    "Manage rooms (projects). Actions: create, join, list, members.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["create", "join", "list", "members"]).describe("What to do"),
+      name: z.string().optional().describe("Room name (for create)"),
+      code: z.string().optional().describe("Join code (for join)"),
+      room_id: z.string().optional().describe("Room ID (for members)"),
+    },
+    async ({ secret, action, name, code, room_id }) => {
+      if (action === "create") {
+        const result = await relay("/rooms", { method: "POST", secret, body: { name } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "join") {
+        const result = await relay("/rooms/join", { method: "POST", secret, body: { code } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "list") {
+        const result = await relay("/rooms", { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "members") {
+        const result = await relay(`/rooms/${room_id}/members`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      return { content: [{ type: "text", text: "Unknown action" }] };
+    }
+  );
+
+  server.tool(
+    "trunk_profile",
+    "Look up another agent's public profile (role, projects, metadata). They must be a contact or workspace co-member.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      agent_id: z.string().describe("The agent ID to look up"),
+    },
+    async ({ secret, agent_id }) => {
+      const result = await relay(`/agents/${agent_id}`, { secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );

@@ -1,10 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers } from "../db/schema.js";
 import { eq, or, and, desc } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
+import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
 
 export function createTrunkMcpServer() {
   const server = new McpServer({
@@ -442,6 +443,209 @@ export function createTrunkMcpServer() {
       }
 
       return errorResult("Unknown action");
+    }
+  );
+
+  server.tool(
+    "trunk_task_create",
+    "Create a task. Scoped to a contact pair, room, or workspace.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      title: z.string().describe("Task title"),
+      contact_id: z.string().optional().describe("Agent ID of the contact (contact-scoped task)"),
+      room_id: z.string().optional().describe("Room ID (room-scoped task)"),
+      workspace_id: z.string().optional().describe("Workspace ID (workspace-scoped task)"),
+      description: z.string().optional().describe("Task description / details"),
+      owner: z.string().optional().describe("Agent ID of who's responsible"),
+      due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
+      context_ref: z.string().optional().describe("Reference to a thread or message"),
+    },
+    async ({ secret, title, contact_id, room_id, workspace_id, description, owner, due, context_ref }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+      if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
+
+      let scope: string;
+      if (workspace_id) {
+        const ok = await verifyWorkspaceAccess(agent.id, workspace_id);
+        if (!ok) return errorResult("Not a workspace member");
+        scope = `workspace:${workspace_id}`;
+      } else if (room_id) {
+        const members = await db.select().from(roomMembers)
+          .where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
+        if (members.length === 0) return errorResult("Not a room member");
+        scope = `room:${room_id}`;
+      } else {
+        const ok = await canMessage(agent.id, contact_id!);
+        if (!ok) return errorResult("Not a contact");
+        scope = `contact:${[agent.id, contact_id!].sort().join("-")}`;
+      }
+
+      const [task] = await db.insert(tasks).values({
+        scope, title, description, owner: owner || contact_id || undefined,
+        createdBy: agent.id, due, contextRef: context_ref,
+      }).returning();
+
+      return { content: [{ type: "text", text: JSON.stringify({ id: task.id, scope: task.scope, title: task.title, status: task.status, priority: task.priority, owner: task.owner, due: task.due }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_task_list",
+    "List tasks for a contact, room, or workspace.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().optional().describe("Agent ID of the contact"),
+      room_id: z.string().optional().describe("Room ID"),
+      workspace_id: z.string().optional().describe("Workspace ID"),
+      status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
+      owner: z.string().optional().describe("Filter by owner agent ID"),
+    },
+    async ({ secret, contact_id, room_id, workspace_id, status, owner }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+      if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
+
+      let scope: string;
+      if (workspace_id) {
+        const ok = await verifyWorkspaceAccess(agent.id, workspace_id);
+        if (!ok) return errorResult("Not a workspace member");
+        scope = `workspace:${workspace_id}`;
+      } else if (room_id) {
+        const members = await db.select().from(roomMembers)
+          .where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
+        if (members.length === 0) return errorResult("Not a room member");
+        scope = `room:${room_id}`;
+      } else {
+        const ok = await canMessage(agent.id, contact_id!);
+        if (!ok) return errorResult("Not a contact");
+        scope = `contact:${[agent.id, contact_id!].sort().join("-")}`;
+      }
+
+      let rows = await db.select().from(tasks)
+        .where(status ? and(eq(tasks.scope, scope), eq(tasks.status, status)) : eq(tasks.scope, scope))
+        .orderBy(desc(tasks.createdAt));
+      if (owner) rows = rows.filter(t => t.owner === owner);
+
+      return { content: [{ type: "text", text: JSON.stringify({ tasks: rows.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, owner: t.owner, due: t.due, created_at: t.createdAt, updated_at: t.updatedAt })) }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_task_update",
+    "Update a task — change status, owner, title, due date, etc.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().optional().describe("Contact ID (for contact-scoped tasks)"),
+      room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
+      workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
+      task_id: z.string().describe("Task ID to update"),
+      status: z.string().optional().describe("New status: open, in-progress, done, blocked"),
+      owner: z.string().optional().describe("Reassign to a different agent"),
+      title: z.string().optional().describe("Update the title"),
+      description: z.string().optional().describe("Update the description"),
+      due: z.string().optional().describe("Update due date (YYYY-MM-DD)"),
+    },
+    async ({ secret, contact_id, room_id, workspace_id, task_id, status, owner, title, description, due }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      // Verify access via whichever scope ID was provided
+      const scopeId = contact_id || room_id || workspace_id;
+      if (!scopeId) return errorResult("contact_id, room_id, or workspace_id is required");
+
+      const hasContact = contact_id ? await canMessage(agent.id, contact_id) : false;
+      const hasRoom = room_id ? (await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1)).length > 0 : false;
+      const hasWs = workspace_id ? await verifyWorkspaceAccess(agent.id, workspace_id) : false;
+      if (!hasContact && !hasRoom && !hasWs) return errorResult("No access");
+
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (title !== undefined) updates.title = title;
+      if (description !== undefined) updates.description = description;
+      if (status !== undefined) updates.status = status;
+      if (owner !== undefined) updates.owner = owner;
+      if (due !== undefined) updates.due = due;
+
+      const [updated] = await db.update(tasks).set(updates).where(eq(tasks.id, task_id)).returning();
+      if (!updated) return errorResult("Task not found");
+
+      return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, title: updated.title, status: updated.status, owner: updated.owner, due: updated.due, updated_at: updated.updatedAt }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_room",
+    "Manage rooms (projects). Actions: create, join, list, members.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["create", "join", "list", "members"]).describe("What to do"),
+      name: z.string().optional().describe("Room name (for create)"),
+      code: z.string().optional().describe("Join code (for join)"),
+      room_id: z.string().optional().describe("Room ID (for members)"),
+    },
+    async ({ secret, action, name, code, room_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      if (action === "create") {
+        if (!name) return errorResult("name is required for create");
+        const pairingCode = generatePairingCode();
+        const [room] = await db.insert(rooms).values({ name, createdBy: agent.id, pairingCode }).returning();
+        await db.insert(roomMembers).values({ roomId: room.id, agentId: agent.id, role: "creator" });
+        return { content: [{ type: "text", text: JSON.stringify({ id: room.id, name: room.name, pairing_code: room.pairingCode }, null, 2) }] };
+      }
+
+      if (action === "join") {
+        if (!code) return errorResult("code is required for join");
+        const [room] = await db.select().from(rooms).where(eq(rooms.pairingCode, code.toUpperCase())).limit(1);
+        if (!room) return errorResult("Invalid join code");
+        const existing = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room.id), eq(roomMembers.agentId, agent.id))).limit(1);
+        if (existing.length > 0) return { content: [{ type: "text", text: JSON.stringify({ joined: true, already_member: true, room_id: room.id, name: room.name }, null, 2) }] };
+        await db.insert(roomMembers).values({ roomId: room.id, agentId: agent.id });
+        return { content: [{ type: "text", text: JSON.stringify({ joined: true, room_id: room.id, name: room.name }, null, 2) }] };
+      }
+
+      if (action === "list") {
+        const memberships = await db.select({ roomId: roomMembers.roomId }).from(roomMembers).where(eq(roomMembers.agentId, agent.id));
+        if (memberships.length === 0) return { content: [{ type: "text", text: JSON.stringify({ rooms: [] }, null, 2) }] };
+        const roomIds = memberships.map(m => m.roomId);
+        const roomList = await db.select().from(rooms).where(or(...roomIds.map(id => eq(rooms.id, id))));
+        return { content: [{ type: "text", text: JSON.stringify({ rooms: roomList.map(r => ({ id: r.id, name: r.name, pairing_code: r.pairingCode, created_at: r.createdAt })) }, null, 2) }] };
+      }
+
+      if (action === "members") {
+        if (!room_id) return errorResult("room_id is required for members");
+        const members = await db.select({ agentId: roomMembers.agentId, role: roomMembers.role, joinedAt: roomMembers.joinedAt }).from(roomMembers).where(eq(roomMembers.roomId, room_id));
+        const agentIds = members.map(m => m.agentId);
+        const agentList = agentIds.length > 0 ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner }).from(agents).where(or(...agentIds.map(id => eq(agents.id, id)))) : [];
+        const agentMap = Object.fromEntries(agentList.map(a => [a.id, a]));
+        return { content: [{ type: "text", text: JSON.stringify({ members: members.map(m => ({ ...agentMap[m.agentId], role: m.role, joined_at: m.joinedAt })) }, null, 2) }] };
+      }
+
+      return errorResult("Unknown action");
+    }
+  );
+
+  server.tool(
+    "trunk_profile",
+    "Look up another agent's public profile. They must be a contact or workspace co-member.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      agent_id: z.string().describe("The agent ID to look up"),
+    },
+    async ({ secret, agent_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      // Check access: direct contact or workspace co-member
+      const isContact = await canMessage(agent.id, agent_id);
+      if (!isContact) return errorResult("Not a contact or workspace co-member");
+
+      const [target] = await db.select().from(agents).where(eq(agents.id, agent_id)).limit(1);
+      if (!target) return errorResult("Agent not found");
+
+      const meta = (target.metadata as Record<string, unknown>) || {};
+      return { content: [{ type: "text", text: JSON.stringify({ agent_id: target.id, name: target.name, owner: target.owner, role: meta.role, projects: meta.projects, metadata: meta }, null, 2) }] };
     }
   );
 

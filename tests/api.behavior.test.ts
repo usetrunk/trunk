@@ -632,6 +632,99 @@ describe("Hono API behavior", () => {
     expect(doneTasks.tasks[0].title).toBe("Done task");
   });
 
+  // --- Room tests ---
+
+  it("creates a room and returns id + pairing_code", async () => {
+    const { alpha } = await registerPair();
+    const res = await createRoomRaw(alpha.secret, { name: "Sprint Room" });
+    expect(res.status).toBe(201);
+    const room = await res.json();
+    expect(room).toMatchObject({ name: "Sprint Room" });
+    expect(typeof room.id).toBe("string");
+    expect(typeof room.pairing_code).toBe("string");
+  });
+
+  it("joins a room by pairing code and lists rooms", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Shared Room" });
+    const room = await roomRes.json();
+
+    const joinRes = await joinRoomRaw(beta.secret, room.pairing_code);
+    expect(joinRes.status).toBe(200);
+    const joined = await joinRes.json();
+    expect(joined.joined).toBe(true);
+
+    const listRes = await app.request("/rooms", {
+      headers: { "Authorization": `Bearer ${beta.secret}` },
+    });
+    expect(listRes.status).toBe(200);
+    const list = await listRes.json();
+    expect(list.rooms.some((r: { id: string }) => r.id === room.id)).toBe(true);
+  });
+
+  it("returns idempotent result when already a room member", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Idempotent Room" });
+    const room = await roomRes.json();
+
+    // Join again — same code
+    const joinRes = await joinRoomRaw(alpha.secret, room.pairing_code);
+    expect(joinRes.status).toBe(200);
+    const body = await joinRes.json();
+    expect(body.joined).toBe(true);
+    expect(body.already_member).toBe(true);
+  });
+
+  it("lists room members", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Members Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const res = await app.request(`/rooms/${room.id}/members`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const ids = body.members.map((m: { id: string }) => m.id);
+    expect(ids).toContain(alpha.agent_id);
+    expect(ids).toContain(beta.agent_id);
+  });
+
+  it("creates a room-scoped task and lists it by room", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Task Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, { title: "Room task alpha" });
+    expect(taskRes.status).toBe(201);
+    const task = await taskRes.json();
+    expect(task.title).toBe("Room task alpha");
+
+    // Both members can see it
+    for (const secret of [alpha.secret, beta.secret]) {
+      const listRes = await app.request(`/tasks/room/${room.id}`, {
+        headers: { "Authorization": `Bearer ${secret}` },
+      });
+      expect(listRes.status).toBe(200);
+      const body = await listRes.json();
+      expect(body.tasks.some((t: { title: string }) => t.title === "Room task alpha")).toBe(true);
+    }
+  });
+
+  it("non-room-member cannot list room tasks", async () => {
+    const { alpha } = await registerPair();
+    const outsider = await createClient().register({ name: "outsider" });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Private Room" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/tasks/room/${room.id}`, {
+      headers: { "Authorization": `Bearer ${outsider.secret}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

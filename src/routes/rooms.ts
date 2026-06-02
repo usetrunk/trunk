@@ -59,7 +59,7 @@ app.post("/join", async (c) => {
     .limit(100);
 
   if (existing.some((m) => m.agentId === agentId)) {
-    return c.json({ error: "Already a member" }, 409);
+    return c.json({ joined: true, already_member: true, room_id: room.id, name: room.name });
   }
 
   await db.insert(roomMembers).values({ roomId: room.id, agentId, role: "member" });
