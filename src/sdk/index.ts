@@ -476,6 +476,27 @@ export type AuditEvent = {
   created_at: string | Date;
 };
 
+export type MessageLabel = {
+  id: string;
+  label: string;
+  created_at: string | Date;
+};
+
+export type MessageLabelsResponse = {
+  message_id: string;
+  labels: MessageLabel[];
+  count: number;
+};
+
+export type LabelSummary = {
+  label: string;
+  count: number;
+};
+
+export type LabelListResponse = {
+  labels: LabelSummary[];
+};
+
 export type AuditLogOptions = {
   action?: string;
   target_type?: string;
@@ -884,6 +905,30 @@ export class TrunkClient {
     if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/messages/threads${query ? `?${query}` : ""}`);
+  }
+
+  addLabel(messageId: string, label: string): Promise<{ id: string; message_id: string; label: string; created_at: string }> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/labels`, { method: "POST", body: { label } });
+  }
+
+  removeLabel(messageId: string, label: string): Promise<AckResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/labels/${encodeURIComponent(label)}`, { method: "DELETE" });
+  }
+
+  messageLabels(messageId: string): Promise<MessageLabelsResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/labels`);
+  }
+
+  messagesByLabel(label: string, options: { limit?: number; cursor?: string } = {}): Promise<PaginatedResponse<MessagesResponse>> {
+    const search = new URLSearchParams();
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
+    const query = search.toString();
+    return this.request(`/messages/by-label/${encodeURIComponent(label)}${query ? `?${query}` : ""}`);
+  }
+
+  allLabels(): Promise<LabelListResponse> {
+    return this.request("/messages/labels/all");
   }
 
   auditLog(options: AuditLogOptions = {}): Promise<PaginatedResponse<AuditLogResponse>> {

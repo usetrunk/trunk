@@ -1237,6 +1237,80 @@ server.tool(
   }
 );
 
+server.tool(
+  "trunk_label_message",
+  "Add a label/tag to a message for organization. Labels are private to you. Good for marking messages as 'important', 'action-required', 'reviewed', etc.",
+  {
+    message_id: z.string().describe("ID of the message to label"),
+    label: z.string().describe("Label to add (will be lowercased, max 50 chars)"),
+  },
+  async ({ message_id, label }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/messages/${encodeURIComponent(message_id)}/labels`, { method: "POST", secret: config.secret, body: { label } });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_unlabel_message",
+  "Remove a label from a message.",
+  {
+    message_id: z.string().describe("ID of the message"),
+    label: z.string().describe("Label to remove"),
+  },
+  async ({ message_id, label }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/messages/${encodeURIComponent(message_id)}/labels/${encodeURIComponent(label)}`, { method: "DELETE", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_message_labels",
+  "List your labels on a message.",
+  {
+    message_id: z.string().describe("ID of the message"),
+  },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/messages/${encodeURIComponent(message_id)}/labels`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_labels_list",
+  "List all labels you've used across all messages, with counts.",
+  {},
+  async () => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay("/messages/labels/all", { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_messages_by_label",
+  "List messages that have a specific label.",
+  {
+    label: z.string().describe("Label to filter by"),
+    limit: z.number().optional().describe("Max results (default 50)"),
+  },
+  async ({ label, limit }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set("limit", String(limit));
+    const query = params.toString();
+    const result = await relay(`/messages/by-label/${encodeURIComponent(label)}${query ? `?${query}` : ""}`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 // --- Start ---
 
 async function main() {

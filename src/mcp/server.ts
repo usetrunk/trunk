@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -2313,6 +2313,149 @@ export function createTrunkMcpServer() {
             has_more: paginated.has_more,
           }, null, 2),
         }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_label_message",
+    "Add a label/tag to a message for organization. Labels are private to the agent. Good for marking messages as 'important', 'action-required', 'reviewed', etc.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to label"),
+      label: z.string().describe("Label to add (will be lowercased, max 50 chars)"),
+    },
+    async ({ secret, message_id, label }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const normalizedLabel = label.trim().toLowerCase();
+      if (!normalizedLabel || normalizedLabel.length > 50) return errorResult("Label must be 1-50 characters");
+
+      const [msg] = await db.select().from(messages).where(eq(messages.id, message_id)).limit(1);
+      if (!msg) return errorResult("Message not found");
+      if (msg.fromAgent !== agent.id && msg.toAgent !== agent.id) return errorResult("Not authorized");
+
+      const existing = await db.select().from(messageLabels)
+        .where(and(eq(messageLabels.messageId, message_id), eq(messageLabels.agentId, agent.id), eq(messageLabels.label, normalizedLabel)));
+      if (existing.length > 0) {
+        return { content: [{ type: "text", text: JSON.stringify({ id: existing[0].id, message_id, label: normalizedLabel, already_exists: true }, null, 2) }] };
+      }
+
+      const [row] = await db.insert(messageLabels).values({ messageId: message_id, agentId: agent.id, label: normalizedLabel }).returning();
+      return { content: [{ type: "text", text: JSON.stringify({ id: row.id, message_id, label: row.label, created_at: row.createdAt }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_unlabel_message",
+    "Remove a label from a message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+      label: z.string().describe("Label to remove"),
+    },
+    async ({ secret, message_id, label }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const deleted = await db.delete(messageLabels)
+        .where(and(eq(messageLabels.messageId, message_id), eq(messageLabels.agentId, agent.id), eq(messageLabels.label, label.trim().toLowerCase())))
+        .returning();
+      if (deleted.length === 0) return errorResult("Label not found");
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_message_labels",
+    "List your labels on a message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db.select().from(messages).where(eq(messages.id, message_id)).limit(1);
+      if (!msg) return errorResult("Message not found");
+      if (msg.fromAgent !== agent.id && msg.toAgent !== agent.id) return errorResult("Not authorized");
+
+      const rows = await db.select().from(messageLabels)
+        .where(and(eq(messageLabels.messageId, message_id), eq(messageLabels.agentId, agent.id)));
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          message_id,
+          labels: rows.map((r) => ({ id: r.id, label: r.label, created_at: r.createdAt })),
+          count: rows.length,
+        }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_labels_list",
+    "List all labels you've used across all messages, with counts.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const rows = await db.select().from(messageLabels).where(eq(messageLabels.agentId, agent.id));
+      const counts: Record<string, number> = {};
+      for (const r of rows) counts[r.label] = (counts[r.label] || 0) + 1;
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          labels: Object.entries(counts).map(([label, count]) => ({ label, count })),
+        }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_messages_by_label",
+    "List messages that have a specific label.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      label: z.string().describe("Label to filter by"),
+      limit: z.number().optional().describe("Max results (default 50)"),
+    },
+    async ({ secret, label, limit: maxResults }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const labelRows = await db.select().from(messageLabels)
+        .where(and(eq(messageLabels.agentId, agent.id), eq(messageLabels.label, label.trim().toLowerCase())));
+
+      const messageIds = labelRows.map((r) => r.messageId);
+      if (messageIds.length === 0) {
+        return { content: [{ type: "text", text: JSON.stringify({ messages: [], count: 0 }, null, 2) }] };
+      }
+
+      const rows = await db.select().from(messages)
+        .where(or(...messageIds.map((id) => eq(messages.id, id))))
+        .orderBy(desc(messages.createdAt))
+        .limit(maxResults ?? 50);
+
+      const visible = rows.filter((r) => r.status !== "deleted");
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          messages: visible.map((m) => ({
+            id: m.id,
+            from: m.fromAgent,
+            to: m.toAgent,
+            type: m.type,
+            payload: m.payload,
+            status: m.status,
+            created_at: m.createdAt,
+          })),
+          count: visible.length,
+        }, null, 2) }],
       };
     }
   );

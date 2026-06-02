@@ -185,6 +185,14 @@ type WebhookDeliveryRow = {
   createdAt: Date;
 };
 
+type MessageLabelRow = {
+  id: string;
+  messageId: string;
+  agentId: string;
+  label: string;
+  createdAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -201,7 +209,8 @@ type TableName =
   | "rate_limits"
   | "subscriptions"
   | "reactions"
-  | "webhook_deliveries";
+  | "webhook_deliveries"
+  | "message_labels";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -220,6 +229,7 @@ const testState = vi.hoisted(() => ({
   subscriptions: [] as SubscriptionRow[],
   reactions: [] as ReactionRow[],
   "webhook_deliveries": [] as WebhookDeliveryRow[],
+  "message_labels": [] as MessageLabelRow[],
   idCounter: 0,
 }));
 
@@ -250,6 +260,7 @@ describe("Hono API behavior", () => {
     testState.subscriptions.length = 0;
     testState.reactions.length = 0;
     testState["webhook_deliveries"].length = 0;
+    testState["message_labels"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -3835,6 +3846,140 @@ describe("Hono API behavior", () => {
     expect(thread).toBeDefined();
     expect(thread!.message_count).toBe(2);
   });
+
+  // ── Message Labels ──
+  it("can add, list, and remove labels on a message", async () => {
+    const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "label test" },
+    });
+
+    // Add a label
+    const added = await alphaClient.addLabel(msg.id, "Important");
+    expect(added.label).toBe("important"); // normalized to lowercase
+    expect(added.message_id).toBe(msg.id);
+
+    // Add another label
+    await alphaClient.addLabel(msg.id, "action-required");
+
+    // List labels on the message
+    const labels = await alphaClient.messageLabels(msg.id);
+    expect(labels.message_id).toBe(msg.id);
+    expect(labels.count).toBe(2);
+    expect(labels.labels.map((l) => l.label).sort()).toEqual(["action-required", "important"]);
+
+    // Remove a label
+    await alphaClient.removeLabel(msg.id, "important");
+    const afterRemove = await alphaClient.messageLabels(msg.id);
+    expect(afterRemove.count).toBe(1);
+    expect(afterRemove.labels[0].label).toBe("action-required");
+  });
+
+  it("returns 404 when removing a label that doesn't exist", async () => {
+    const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+    await expect(alphaClient.removeLabel(msg.id, "nonexistent")).rejects.toThrow(TrunkApiError);
+  });
+
+  it("can add duplicate label idempotently", async () => {
+    const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+    const first = await alphaClient.addLabel(msg.id, "urgent");
+    const second = await alphaClient.addLabel(msg.id, "urgent");
+    expect(first.label).toBe("urgent");
+    expect(second.label).toBe("urgent");
+
+    const labels = await alphaClient.messageLabels(msg.id);
+    expect(labels.count).toBe(1);
+  });
+
+  it("can list all labels used by the agent", async () => {
+    const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg1 = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "msg1" },
+    });
+    const msg2 = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "msg2" },
+    });
+    await alphaClient.addLabel(msg1.id, "important");
+    await alphaClient.addLabel(msg2.id, "important");
+    await alphaClient.addLabel(msg1.id, "review");
+
+    const result = await alphaClient.allLabels();
+    const importantLabel = result.labels.find((l) => l.label === "important");
+    const reviewLabel = result.labels.find((l) => l.label === "review");
+    expect(importantLabel?.count).toBe(2);
+    expect(reviewLabel?.count).toBe(1);
+  });
+
+  it("can filter messages by label", async () => {
+    const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg1 = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "labeled" },
+    });
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "unlabeled" },
+    });
+    await alphaClient.addLabel(msg1.id, "flagged");
+
+    const result = await alphaClient.messagesByLabel("flagged");
+    expect(result.messages.length).toBe(1);
+    expect(result.messages[0].id).toBe(msg1.id);
+  });
+
+  it("recipient can label received messages", async () => {
+    const { alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "for beta" },
+    });
+    const added = await betaClient.addLabel(msg.id, "needs-response");
+    expect(added.label).toBe("needs-response");
+
+    // Beta's labels are private — alpha sees no labels
+    const alphaLabels = await alphaClient.messageLabels(msg.id);
+    expect(alphaLabels.count).toBe(0);
+  });
+
+  it("rejects labeling a message by an unrelated agent", async () => {
+    const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "private" },
+    });
+
+    // Register a third agent that's not sender or recipient
+    const gamma = await createClient().register({ name: "gamma" });
+    const gammaClient = createClient(gamma.secret);
+    await expect(gammaClient.addLabel(msg.id, "snoop")).rejects.toThrow(TrunkApiError);
+  });
 });
 
 async function registerPair(): Promise<{
@@ -4281,6 +4426,18 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "message_labels") {
+      const row: MessageLabelRow = {
+        id: nextId("label"),
+        messageId: this.insertValues.messageId as string,
+        agentId: this.insertValues.agentId as string,
+        label: this.insertValues.label as string,
+        createdAt: new Date(),
+      };
+      testState["message_labels"].push(row);
+      return row;
+    }
+
     if (this.table === "webhook_deliveries") {
       const row: WebhookDeliveryRow = {
         id: nextId("whd"),
@@ -4396,7 +4553,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow> {
   return testState[table];
 }
 
@@ -4427,7 +4584,8 @@ function getTableName(table: unknown): TableName {
     name === "rate_limits" ||
     name === "subscriptions" ||
     name === "reactions" ||
-    name === "webhook_deliveries"
+    name === "webhook_deliveries" ||
+    name === "message_labels"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }

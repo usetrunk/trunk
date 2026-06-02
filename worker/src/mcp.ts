@@ -929,6 +929,76 @@ export function createMcpServer() {
     }
   );
 
+  server.tool(
+    "trunk_label_message",
+    "Add a label/tag to a message for organization. Labels are private to the agent.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to label"),
+      label: z.string().describe("Label to add (lowercased, max 50 chars)"),
+    },
+    async ({ secret, message_id, label }) => {
+      const result = await relay(`/messages/${encodeURIComponent(message_id)}/labels`, { method: "POST", secret, body: { label } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_unlabel_message",
+    "Remove a label from a message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+      label: z.string().describe("Label to remove"),
+    },
+    async ({ secret, message_id, label }) => {
+      const result = await relay(`/messages/${encodeURIComponent(message_id)}/labels/${encodeURIComponent(label)}`, { method: "DELETE", secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_message_labels",
+    "List your labels on a message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+    },
+    async ({ secret, message_id }) => {
+      const result = await relay(`/messages/${encodeURIComponent(message_id)}/labels`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_labels_list",
+    "List all labels you've used across all messages, with counts.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const result = await relay("/messages/labels/all", { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_messages_by_label",
+    "List messages that have a specific label.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      label: z.string().describe("Label to filter by"),
+      limit: z.number().optional().describe("Max results (default 50)"),
+    },
+    async ({ secret, label, limit }) => {
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", String(limit));
+      const query = params.toString();
+      const result = await relay(`/messages/by-label/${encodeURIComponent(label)}${query ? `?${query}` : ""}`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   return server;
 }
 

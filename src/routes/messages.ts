@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, reactions } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, reactions, messageLabels } from "../db/schema.js";
 import { eq, or, and, desc, lt } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -466,6 +466,66 @@ app.get("/scheduled", async (c) => {
 
   const page = paginateResults(rows, limit);
   return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+});
+
+// List all messages with a specific label
+app.get("/by-label/:label", async (c) => {
+  const agentId = c.get("agentId");
+  const label = c.req.param("label").trim().toLowerCase();
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
+
+  const labelRows = await db
+    .select()
+    .from(messageLabels)
+    .where(and(eq(messageLabels.agentId, agentId), eq(messageLabels.label, label)));
+
+  const messageIds = labelRows.map((r) => r.messageId);
+  if (messageIds.length === 0) {
+    return c.json({ messages: [], next_cursor: null, has_more: false });
+  }
+
+  const conditions = [or(...messageIds.map((id) => eq(messages.id, id)))!];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(messages.createdAt, cursor.createdAt),
+        and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id))
+      )!
+    );
+  }
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(...conditions))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(limit + 1);
+
+  const visible = rows.filter((r) => r.status !== "deleted");
+  const page = paginateResults(visible, limit);
+  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+});
+
+// List all labels used by the agent
+app.get("/labels/all", async (c) => {
+  const agentId = c.get("agentId");
+
+  const rows = await db
+    .select()
+    .from(messageLabels)
+    .where(eq(messageLabels.agentId, agentId));
+
+  const labelCounts: Record<string, number> = {};
+  for (const r of rows) {
+    labelCounts[r.label] = (labelCounts[r.label] || 0) + 1;
+  }
+
+  return c.json({
+    labels: Object.entries(labelCounts).map(([label, count]) => ({ label, count })),
+  });
 });
 
 // Cancel a scheduled message (only sender, only if still scheduled)
@@ -1186,6 +1246,80 @@ app.get("/thread/:threadId/pins", async (c) => {
       created_at: m.createdAt,
     })),
     count: pinned.length,
+  });
+});
+
+// Add a label to a message
+app.post("/:id/labels", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+  const body = await c.req.json<{ label: string }>();
+  if (!body.label || typeof body.label !== "string" || body.label.trim().length === 0) {
+    return c.json({ error: "label is required" }, 400);
+  }
+  const label = body.label.trim().toLowerCase();
+  if (label.length > 50) {
+    return c.json({ error: "label must be 50 characters or fewer" }, 400);
+  }
+
+  // Verify the message exists and the agent is sender or recipient
+  const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (msg.fromAgent !== agentId && msg.toAgent !== agentId) {
+    return c.json({ error: "Not authorized" }, 403);
+  }
+
+  // Check for duplicate
+  const existing = await db
+    .select()
+    .from(messageLabels)
+    .where(and(eq(messageLabels.messageId, messageId), eq(messageLabels.agentId, agentId), eq(messageLabels.label, label)));
+  if (existing.length > 0) {
+    return c.json({ id: existing[0].id, message_id: messageId, label, created_at: existing[0].createdAt });
+  }
+
+  const [row] = await db.insert(messageLabels).values({ messageId, agentId, label }).returning();
+  await audit(agentId, "message.label_add", "message", messageId, { label });
+  return c.json({ id: row.id, message_id: messageId, label: row.label, created_at: row.createdAt }, 201);
+});
+
+// Remove a label from a message
+app.delete("/:id/labels/:label", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+  const label = c.req.param("label").trim().toLowerCase();
+
+  const deleted = await db
+    .delete(messageLabels)
+    .where(and(eq(messageLabels.messageId, messageId), eq(messageLabels.agentId, agentId), eq(messageLabels.label, label)))
+    .returning();
+
+  if (deleted.length === 0) return c.json({ error: "Label not found" }, 404);
+  await audit(agentId, "message.label_remove", "message", messageId, { label });
+  return c.json({ ok: true });
+});
+
+// List labels on a message (only the requesting agent's labels)
+app.get("/:id/labels", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+
+  // Verify access
+  const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (msg.fromAgent !== agentId && msg.toAgent !== agentId) {
+    return c.json({ error: "Not authorized" }, 403);
+  }
+
+  const rows = await db
+    .select()
+    .from(messageLabels)
+    .where(and(eq(messageLabels.messageId, messageId), eq(messageLabels.agentId, agentId)));
+
+  return c.json({
+    message_id: messageId,
+    labels: rows.map((r) => ({ id: r.id, label: r.label, created_at: r.createdAt })),
+    count: rows.length,
   });
 });
 

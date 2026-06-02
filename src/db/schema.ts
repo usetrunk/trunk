@@ -207,6 +207,18 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
   index("webhook_deliveries_agent_idx").on(table.agentId, table.createdAt),
 ]);
 
+export const messageLabels = pgTable("message_labels", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  messageId: text("message_id").notNull().references(() => messages.id),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  label: text("label").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("message_labels_unique_idx").on(table.messageId, table.agentId, table.label),
+  index("message_labels_agent_idx").on(table.agentId, table.label),
+  index("message_labels_message_idx").on(table.messageId),
+]);
+
 export const sharedDocumentVersions = pgTable("shared_document_versions", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   documentId: text("document_id").notNull().references(() => sharedDocuments.id),
