@@ -329,6 +329,40 @@ export type RoomMembersResponse = {
   members: RoomMember[];
 };
 
+export type UpdateRoomRequest = {
+  name?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type UpdateRoomResponse = {
+  id: string;
+  name: string;
+  pairing_code: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string | Date;
+};
+
+export type KickMemberRequest = {
+  agent_id: string;
+};
+
+export type KickMemberResponse = {
+  ok: boolean;
+  kicked: string;
+  room_id: string;
+};
+
+export type ChangeRoleRequest = {
+  role: "admin" | "member";
+};
+
+export type ChangeRoleResponse = {
+  ok: boolean;
+  agent_id: string;
+  role: string;
+  room_id: string;
+};
+
 export type CreateDocumentRequest = {
   name: string;
   body: string;
@@ -916,6 +950,22 @@ export class TrunkClient {
 
   leaveRoom(roomId: string): Promise<{ ok: boolean; room_id: string }> {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/leave`, { method: "POST" });
+  }
+
+  updateRoom(roomId: string, input: UpdateRoomRequest): Promise<UpdateRoomResponse> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}`, { method: "PATCH", body: input });
+  }
+
+  kickRoomMember(roomId: string, input: KickMemberRequest): Promise<KickMemberResponse> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/kick`, { method: "POST", body: input });
+  }
+
+  changeRoomMemberRole(roomId: string, agentId: string, input: ChangeRoleRequest): Promise<ChangeRoleResponse> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(agentId)}/role`, { method: "PUT", body: input });
+  }
+
+  deleteRoom(roomId: string): Promise<{ ok: boolean; deleted: string }> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
   }
 
   billingStatus(): Promise<BillingStatus> {

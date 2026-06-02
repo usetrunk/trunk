@@ -616,17 +616,20 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_room",
-    "Manage rooms (projects). Actions: create, join, list, members, leave.",
+    "Manage rooms (projects). Actions: create, join, list, members, leave, update, kick, role, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "list", "members", "leave"]).describe("What to do"),
-      name: z.string().optional().describe("Room name (for create)"),
+      action: z.enum(["create", "join", "list", "members", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
+      name: z.string().optional().describe("Room name (for create/update)"),
       code: z.string().optional().describe("Join code (for join)"),
-      room_id: z.string().optional().describe("Room ID (for members/leave)"),
+      room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
+      agent_id: z.string().optional().describe("Target agent ID (for kick/role)"),
+      role: z.enum(["admin", "member"]).optional().describe("New role (for role action)"),
+      metadata: z.record(z.unknown()).optional().describe("Room metadata (for create/update)"),
     },
-    async ({ secret, action, name, code, room_id }) => {
+    async ({ secret, action, name, code, room_id, agent_id, role, metadata }) => {
       if (action === "create") {
-        const result = await relay("/rooms", { method: "POST", secret, body: { name } });
+        const result = await relay("/rooms", { method: "POST", secret, body: { name, metadata } });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
       if (action === "join") {
@@ -643,6 +646,22 @@ export function createMcpServer() {
       }
       if (action === "leave") {
         const result = await relay(`/rooms/${room_id}/leave`, { method: "POST", secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "update") {
+        const result = await relay(`/rooms/${room_id}`, { method: "PATCH", secret, body: { name, metadata } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "kick") {
+        const result = await relay(`/rooms/${room_id}/kick`, { method: "POST", secret, body: { agent_id } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "role") {
+        const result = await relay(`/rooms/${room_id}/members/${agent_id}/role`, { method: "PUT", secret, body: { role } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "delete") {
+        const result = await relay(`/rooms/${room_id}`, { method: "DELETE", secret });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
       return { content: [{ type: "text", text: "Unknown action" }] };

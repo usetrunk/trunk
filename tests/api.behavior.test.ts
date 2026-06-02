@@ -1475,6 +1475,260 @@ describe("Hono API behavior", () => {
     expect(alphaRooms.rooms.some(r => r.id === room.id)).toBe(true);
   });
 
+  // --- Room administration tests ---
+
+  it("creator can update room name", async () => {
+    const { alpha } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Original Name" });
+    const room = await roomRes.json();
+
+    const updateRes = await app.request(`/rooms/${room.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "Updated Name" }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.name).toBe("Updated Name");
+    expect(updated.id).toBe(room.id);
+  });
+
+  it("non-admin cannot update room", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Admin Only" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const updateRes = await app.request(`/rooms/${room.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ name: "Hacked" }),
+    });
+    expect(updateRes.status).toBe(403);
+  });
+
+  it("creator can kick a member", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Kick Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const kickRes = await app.request(`/rooms/${room.id}/kick`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ agent_id: beta.agent_id }),
+    });
+    expect(kickRes.status).toBe(200);
+    const body = await kickRes.json();
+    expect(body.ok).toBe(true);
+    expect(body.kicked).toBe(beta.agent_id);
+
+    // Verify beta is no longer a member
+    const membersRes = await app.request(`/rooms/${room.id}/members`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    const members = await membersRes.json();
+    expect(members.members.some((m: { id: string }) => m.id === beta.agent_id)).toBe(false);
+  });
+
+  it("regular member cannot kick others", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "No Kick" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const kickRes = await app.request(`/rooms/${room.id}/kick`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ agent_id: alpha.agent_id }),
+    });
+    expect(kickRes.status).toBe(403);
+  });
+
+  it("cannot kick yourself", async () => {
+    const { alpha } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Self Kick" });
+    const room = await roomRes.json();
+
+    const kickRes = await app.request(`/rooms/${room.id}/kick`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ agent_id: alpha.agent_id }),
+    });
+    expect(kickRes.status).toBe(400);
+  });
+
+  it("creator can change member role to admin", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Role Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const roleRes = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect(roleRes.status).toBe(200);
+    const body = await roleRes.json();
+    expect(body.ok).toBe(true);
+    expect(body.role).toBe("admin");
+  });
+
+  it("non-creator cannot change roles", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "No Role Change" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const roleRes = await app.request(`/rooms/${room.id}/members/${alpha.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect(roleRes.status).toBe(403);
+  });
+
+  it("admin can update room and kick members", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Admin Test" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Promote beta to admin
+    await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+
+    // Admin (beta) can update room
+    const updateRes = await app.request(`/rooms/${room.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ name: "Admin Updated" }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.name).toBe("Admin Updated");
+  });
+
+  it("creator can delete room", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Delete Me" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const deleteRes = await app.request(`/rooms/${room.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(deleteRes.status).toBe(200);
+    const body = await deleteRes.json();
+    expect(body.ok).toBe(true);
+    expect(body.deleted).toBe(room.id);
+
+    // Room no longer appears in list
+    const listRes = await app.request("/rooms", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    const list = await listRes.json();
+    expect(list.rooms.some((r: { id: string }) => r.id === room.id)).toBe(false);
+  });
+
+  it("non-creator cannot delete room", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "No Delete" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const deleteRes = await app.request(`/rooms/${room.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(deleteRes.status).toBe(403);
+  });
+
+  it("SDK updateRoom changes room name", async () => {
+    const { alphaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "SDK Original" });
+    const updated = await alphaClient.updateRoom(room.id, { name: "SDK Updated" });
+    expect(updated.name).toBe("SDK Updated");
+  });
+
+  it("SDK kickRoomMember removes member", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "SDK Kick" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const result = await alphaClient.kickRoomMember(room.id, { agent_id: beta.agent_id });
+    expect(result.ok).toBe(true);
+    expect(result.kicked).toBe(beta.agent_id);
+  });
+
+  it("SDK changeRoomMemberRole promotes to admin", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "SDK Role" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const result = await alphaClient.changeRoomMemberRole(room.id, beta.agent_id, { role: "admin" });
+    expect(result.ok).toBe(true);
+    expect(result.role).toBe("admin");
+  });
+
+  it("SDK deleteRoom removes room", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "SDK Delete" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const result = await alphaClient.deleteRoom(room.id);
+    expect(result.ok).toBe(true);
+
+    const rooms = await alphaClient.listRooms();
+    expect(rooms.rooms.some(r => r.id === room.id)).toBe(false);
+  });
+
   // --- Room messaging fan-out tests ---
 
   it("sends a message to room:<id> and fans out to all other members", async () => {

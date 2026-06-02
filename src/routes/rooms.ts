@@ -132,6 +132,152 @@ app.get("/:roomId/members", async (c) => {
   return c.json({ members: result });
 });
 
+// Update a room (creator/admin only)
+app.patch("/:roomId", async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+  const body = await c.req.json<{ name?: string; metadata?: Record<string, unknown> }>();
+
+  if (!body.name && !body.metadata) {
+    return c.json({ error: "name or metadata is required" }, 400);
+  }
+
+  // Verify creator/admin role
+  const [membership] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
+
+  if (!membership) return c.json({ error: "Not a member of this room" }, 403);
+  if (membership.role !== "creator" && membership.role !== "admin") {
+    return c.json({ error: "Only creators and admins can update rooms" }, 403);
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (body.name) updates.name = body.name;
+  if (body.metadata) updates.metadata = body.metadata;
+
+  const [updated] = await db
+    .update(rooms)
+    .set(updates)
+    .where(eq(rooms.id, roomId))
+    .returning();
+
+  return c.json({
+    id: updated.id,
+    name: updated.name,
+    pairing_code: updated.pairingCode,
+    metadata: updated.metadata,
+    created_at: updated.createdAt,
+  });
+});
+
+// Kick a member from a room (creator/admin only)
+app.post("/:roomId/kick", async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+  const body = await c.req.json<{ agent_id: string }>();
+
+  if (!body.agent_id) return c.json({ error: "agent_id is required" }, 400);
+  if (body.agent_id === agentId) return c.json({ error: "Cannot kick yourself" }, 400);
+
+  // Verify caller is creator/admin
+  const callerMembership = await db
+    .select()
+    .from(roomMembers)
+    .where(eq(roomMembers.roomId, roomId))
+    .limit(100);
+
+  const caller = callerMembership.find((m) => m.agentId === agentId);
+  if (!caller) return c.json({ error: "Not a member of this room" }, 403);
+  if (caller.role !== "creator" && caller.role !== "admin") {
+    return c.json({ error: "Only creators and admins can kick members" }, 403);
+  }
+
+  const target = callerMembership.find((m) => m.agentId === body.agent_id);
+  if (!target) return c.json({ error: "Target is not a member" }, 404);
+
+  // Admins cannot kick creators or other admins
+  if (caller.role === "admin" && (target.role === "creator" || target.role === "admin")) {
+    return c.json({ error: "Admins cannot kick creators or other admins" }, 403);
+  }
+
+  await db
+    .delete(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, body.agent_id)));
+
+  return c.json({ ok: true, kicked: body.agent_id, room_id: roomId });
+});
+
+// Change a member's role (creator only)
+app.put("/:roomId/members/:agentId/role", async (c) => {
+  const callerId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+  const targetId = c.req.param("agentId");
+  const body = await c.req.json<{ role: string }>();
+
+  if (!body.role || !["admin", "member"].includes(body.role)) {
+    return c.json({ error: "role must be 'admin' or 'member'" }, 400);
+  }
+
+  if (targetId === callerId) {
+    return c.json({ error: "Cannot change your own role" }, 400);
+  }
+
+  // Verify caller is creator
+  const [callerMembership] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, callerId)))
+    .limit(1);
+
+  if (!callerMembership) return c.json({ error: "Not a member of this room" }, 403);
+  if (callerMembership.role !== "creator") {
+    return c.json({ error: "Only the creator can change roles" }, 403);
+  }
+
+  // Verify target is a member
+  const [targetMembership] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, targetId)))
+    .limit(1);
+
+  if (!targetMembership) return c.json({ error: "Target is not a member" }, 404);
+
+  await db
+    .update(roomMembers)
+    .set({ role: body.role })
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, targetId)));
+
+  return c.json({ ok: true, agent_id: targetId, role: body.role, room_id: roomId });
+});
+
+// Delete a room (creator only)
+app.delete("/:roomId", async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+
+  // Verify caller is creator
+  const [membership] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
+
+  if (!membership) return c.json({ error: "Not a member of this room" }, 403);
+  if (membership.role !== "creator") {
+    return c.json({ error: "Only the creator can delete a room" }, 403);
+  }
+
+  // Delete all members first, then the room
+  await db.delete(roomMembers).where(eq(roomMembers.roomId, roomId));
+  await db.delete(rooms).where(eq(rooms.id, roomId));
+
+  return c.json({ ok: true, deleted: roomId });
+});
+
 // Leave a room
 app.post("/:roomId/leave", async (c) => {
   const agentId = c.get("agentId");

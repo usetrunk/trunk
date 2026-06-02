@@ -1644,15 +1644,18 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_room",
-    "Manage rooms (projects). Actions: create, join, list, members, leave.",
+    "Manage rooms (projects). Actions: create, join, list, members, leave, update, kick, role, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "list", "members", "leave"]).describe("What to do"),
-      name: z.string().optional().describe("Room name (for create)"),
+      action: z.enum(["create", "join", "list", "members", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
+      name: z.string().optional().describe("Room name (for create/update)"),
       code: z.string().optional().describe("Join code (for join)"),
-      room_id: z.string().optional().describe("Room ID (for members/leave)"),
+      room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
+      agent_id: z.string().optional().describe("Target agent ID (for kick/role)"),
+      role: z.enum(["admin", "member"]).optional().describe("New role (for role action)"),
+      metadata: z.record(z.unknown()).optional().describe("Room metadata (for create/update)"),
     },
-    async ({ secret, action, name, code, room_id }) => {
+    async ({ secret, action, name, code, room_id, agent_id, role, metadata }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -1697,6 +1700,58 @@ export function createTrunkMcpServer() {
         if (!membership) return errorResult("Not a member of this room");
         await db.delete(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id)));
         return { content: [{ type: "text", text: JSON.stringify({ ok: true, room_id }) }] };
+      }
+
+      if (action === "update") {
+        if (!room_id) return errorResult("room_id is required for update");
+        if (!name && !metadata) return errorResult("name or metadata is required for update");
+        const [mem] = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
+        if (!mem) return errorResult("Not a member of this room");
+        if (mem.role !== "creator" && mem.role !== "admin") return errorResult("Only creators and admins can update rooms");
+        const updates: Record<string, unknown> = {};
+        if (name) updates.name = name;
+        if (metadata) updates.metadata = metadata;
+        const [updated] = await db.update(rooms).set(updates).where(eq(rooms.id, room_id)).returning();
+        return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, name: updated.name, pairing_code: updated.pairingCode, metadata: updated.metadata }, null, 2) }] };
+      }
+
+      if (action === "kick") {
+        if (!room_id) return errorResult("room_id is required for kick");
+        if (!agent_id) return errorResult("agent_id is required for kick");
+        if (agent_id === agent.id) return errorResult("Cannot kick yourself");
+        const allMembers = await db.select().from(roomMembers).where(eq(roomMembers.roomId, room_id)).limit(100);
+        const caller = allMembers.find(m => m.agentId === agent.id);
+        if (!caller) return errorResult("Not a member of this room");
+        if (caller.role !== "creator" && caller.role !== "admin") return errorResult("Only creators and admins can kick members");
+        const target = allMembers.find(m => m.agentId === agent_id);
+        if (!target) return errorResult("Target is not a member");
+        if (caller.role === "admin" && (target.role === "creator" || target.role === "admin")) return errorResult("Admins cannot kick creators or other admins");
+        await db.delete(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent_id)));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, kicked: agent_id, room_id }) }] };
+      }
+
+      if (action === "role") {
+        if (!room_id) return errorResult("room_id is required for role");
+        if (!agent_id) return errorResult("agent_id is required for role");
+        if (!role) return errorResult("role is required (admin or member)");
+        if (agent_id === agent.id) return errorResult("Cannot change your own role");
+        const [callerMem] = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
+        if (!callerMem) return errorResult("Not a member of this room");
+        if (callerMem.role !== "creator") return errorResult("Only the creator can change roles");
+        const [targetMem] = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent_id))).limit(1);
+        if (!targetMem) return errorResult("Target is not a member");
+        await db.update(roomMembers).set({ role }).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent_id)));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, agent_id, role, room_id }) }] };
+      }
+
+      if (action === "delete") {
+        if (!room_id) return errorResult("room_id is required for delete");
+        const [mem] = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
+        if (!mem) return errorResult("Not a member of this room");
+        if (mem.role !== "creator") return errorResult("Only the creator can delete a room");
+        await db.delete(roomMembers).where(eq(roomMembers.roomId, room_id));
+        await db.delete(rooms).where(eq(rooms.id, room_id));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: room_id }) }] };
       }
 
       return errorResult("Unknown action");
