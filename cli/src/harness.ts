@@ -122,13 +122,20 @@ function spawnAgent(config: AgentConfig): ChildProcess {
   }
 
   // Write MCP config to a temp file so claude can load Trunk tools in -p mode
+  // Use pre-compiled JS if available, fall back to tsx
+  const compiledCli = resolve(import.meta.dirname, "../dist/index.js");
+  const sourceCli = resolve(import.meta.dirname, "index.ts");
+  const useCompiled = existsSync(compiledCli);
+  const mcpCommand = useCompiled ? "node" : "npx";
+  const mcpArgs = useCompiled ? [compiledCli] : ["tsx", sourceCli];
+
   const mcpConfigPath = join(STATE_DIR, `mcp-${config.profile}.json`);
   writeFileSync(mcpConfigPath, JSON.stringify({
     mcpServers: {
       trunk: {
         type: "stdio",
-        command: "npx",
-        args: ["tsx", resolve(import.meta.dirname, "index.ts")],
+        command: mcpCommand,
+        args: mcpArgs,
         env: { TRUNK_PROFILE: config.profile },
       },
     },
