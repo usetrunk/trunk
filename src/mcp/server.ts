@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -2633,6 +2633,78 @@ export function createTrunkMcpServer() {
           })),
           count: rows.length,
         }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_notification_prefs",
+    "Get or set notification preferences for a contact. Use to mute a noisy contact or filter by urgency.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      muted: z.boolean().optional().describe("Set to true to mute notifications from this contact"),
+      urgency_filter: z.enum(["all", "sync_only"]).optional().describe("Filter: 'all' or 'sync_only'"),
+    },
+    async ({ secret, contact_id, muted, urgency_filter }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      // If no set params, just get current prefs
+      if (muted === undefined && urgency_filter === undefined) {
+        const [pref] = await db
+          .select()
+          .from(notificationPreferences)
+          .where(and(
+            eq(notificationPreferences.agentId, agent.id),
+            eq(notificationPreferences.contactAgentId, contact_id)
+          ))
+          .limit(1);
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(pref
+              ? { muted: pref.muted === 1, urgency_filter: pref.urgencyFilter }
+              : { muted: false, urgency_filter: "all" }
+            , null, 2),
+          }],
+        };
+      }
+
+      // Set prefs
+      const [existing] = await db
+        .select()
+        .from(notificationPreferences)
+        .where(and(
+          eq(notificationPreferences.agentId, agent.id),
+          eq(notificationPreferences.contactAgentId, contact_id)
+        ))
+        .limit(1);
+
+      if (existing) {
+        const updates: Record<string, unknown> = { updatedAt: new Date() };
+        if (muted !== undefined) updates.muted = muted ? 1 : 0;
+        if (urgency_filter) updates.urgencyFilter = urgency_filter;
+        await db.update(notificationPreferences).set(updates).where(eq(notificationPreferences.id, existing.id));
+      } else {
+        await db.insert(notificationPreferences).values({
+          agentId: agent.id,
+          contactAgentId: contact_id,
+          muted: muted ? 1 : 0,
+          urgencyFilter: urgency_filter ?? "all",
+        });
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            ok: true,
+            muted: muted ?? (existing ? existing.muted === 1 : false),
+            urgency_filter: urgency_filter ?? (existing ? existing.urgencyFilter : "all"),
+          }, null, 2),
+        }],
       };
     }
   );

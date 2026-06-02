@@ -535,6 +535,12 @@ export type AuditLogResponse = {
   events: AuditEvent[];
 };
 
+export type NotificationPrefsResponse = {
+  muted: boolean;
+  urgency_filter: string;
+  updated_at?: string;
+};
+
 export type TemplateResponse = {
   id: string;
   name: string;
@@ -983,6 +989,14 @@ export class TrunkClient {
 
   blockedContacts(): Promise<BlockedListResponse> {
     return this.request("/contacts/blocked");
+  }
+
+  notificationPrefs(agentId: string): Promise<NotificationPrefsResponse> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/notifications`);
+  }
+
+  setNotificationPrefs(agentId: string, prefs: { muted?: boolean; urgency_filter?: string }): Promise<NotificationPrefsResponse> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/notifications`, { method: "PUT", body: prefs });
   }
 
   addLabel(messageId: string, label: string): Promise<{ id: string; message_id: string; label: string; created_at: string }> {

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, workspaces, workspaceContacts, blockedContacts, contactNotes } from "../db/schema.js";
+import { agents, contacts, workspaces, workspaceContacts, blockedContacts, contactNotes, notificationPreferences } from "../db/schema.js";
 import { eq, or, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -415,6 +415,91 @@ app.delete("/:agentId/notes", async (c) => {
   if (deleted.length === 0) return c.json({ error: "No note found" }, 404);
   await audit(myId, "contact.note_delete", "agent", targetId);
   return c.json({ ok: true });
+});
+
+// --- Notification preferences ---
+
+// Get notification preferences for a contact
+app.get("/:id/notifications", async (c) => {
+  const agentId = c.get("agentId");
+  const contactId = c.req.param("id");
+
+  const [pref] = await db
+    .select()
+    .from(notificationPreferences)
+    .where(and(
+      eq(notificationPreferences.agentId, agentId),
+      eq(notificationPreferences.contactAgentId, contactId)
+    ))
+    .limit(1);
+
+  if (!pref) {
+    return c.json({ muted: false, urgency_filter: "all" });
+  }
+
+  return c.json({
+    muted: pref.muted === 1,
+    urgency_filter: pref.urgencyFilter,
+    updated_at: pref.updatedAt,
+  });
+});
+
+// Set notification preferences for a contact
+app.put("/:id/notifications", async (c) => {
+  const agentId = c.get("agentId");
+  const contactId = c.req.param("id");
+  const body = await c.req.json<{
+    muted?: boolean;
+    urgency_filter?: string;
+  }>();
+
+  if (body.urgency_filter && !["all", "sync_only"].includes(body.urgency_filter)) {
+    return c.json({ error: "urgency_filter must be 'all' or 'sync_only'" }, 400);
+  }
+
+  const [existing] = await db
+    .select()
+    .from(notificationPreferences)
+    .where(and(
+      eq(notificationPreferences.agentId, agentId),
+      eq(notificationPreferences.contactAgentId, contactId)
+    ))
+    .limit(1);
+
+  if (existing) {
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (body.muted !== undefined) updates.muted = body.muted ? 1 : 0;
+    if (body.urgency_filter) updates.urgencyFilter = body.urgency_filter;
+
+    await db
+      .update(notificationPreferences)
+      .set(updates)
+      .where(eq(notificationPreferences.id, existing.id));
+
+    await audit(agentId, "contact.notification_prefs_update", "agent", contactId);
+    return c.json({
+      muted: body.muted !== undefined ? body.muted : existing.muted === 1,
+      urgency_filter: body.urgency_filter ?? existing.urgencyFilter,
+      updated_at: new Date(),
+    });
+  }
+
+  const [pref] = await db
+    .insert(notificationPreferences)
+    .values({
+      agentId,
+      contactAgentId: contactId,
+      muted: body.muted ? 1 : 0,
+      urgencyFilter: body.urgency_filter ?? "all",
+    })
+    .returning();
+
+  await audit(agentId, "contact.notification_prefs_set", "agent", contactId);
+  return c.json({
+    muted: pref.muted === 1,
+    urgency_filter: pref.urgencyFilter,
+    updated_at: pref.updatedAt,
+  });
 });
 
 export default app;

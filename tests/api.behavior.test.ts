@@ -211,6 +211,16 @@ type ContactNoteRow = {
   updatedAt: Date;
 };
 
+type NotificationPrefRow = {
+  id: string;
+  agentId: string;
+  contactAgentId: string;
+  muted: number;
+  urgencyFilter: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 type MessageTemplateRow = {
   id: string;
   agentId: string;
@@ -242,7 +252,8 @@ type TableName =
   | "message_labels"
   | "blocked_contacts"
   | "contact_notes"
-  | "message_templates";
+  | "message_templates"
+  | "notification_preferences";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -265,6 +276,7 @@ const testState = vi.hoisted(() => ({
   "blocked_contacts": [] as BlockedContactRow[],
   "contact_notes": [] as ContactNoteRow[],
   "message_templates": [] as MessageTemplateRow[],
+  "notification_preferences": [] as NotificationPrefRow[],
   idCounter: 0,
 }));
 
@@ -299,6 +311,7 @@ describe("Hono API behavior", () => {
     testState["blocked_contacts"].length = 0;
     testState["contact_notes"].length = 0;
     testState["message_templates"].length = 0;
+    testState["notification_preferences"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -4523,6 +4536,64 @@ describe("Hono API behavior", () => {
       client.createTemplate({ name: "", type: "update", payload: { content: "test" } })
     ).rejects.toMatchObject({ status: 400 });
   });
+
+  // --- Notification preferences tests ---
+
+  it("returns defaults when no notification prefs set", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const prefs = await alphaClient.notificationPrefs(beta.agent_id);
+    expect(prefs.muted).toBe(false);
+    expect(prefs.urgency_filter).toBe("all");
+  });
+
+  it("sets and gets notification preferences", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.setNotificationPrefs(beta.agent_id, {
+      muted: true,
+      urgency_filter: "sync_only",
+    });
+
+    expect(result.muted).toBe(true);
+    expect(result.urgency_filter).toBe("sync_only");
+
+    const prefs = await alphaClient.notificationPrefs(beta.agent_id);
+    expect(prefs.muted).toBe(true);
+    expect(prefs.urgency_filter).toBe("sync_only");
+  });
+
+  it("updates existing notification preferences", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true });
+    const updated = await alphaClient.setNotificationPrefs(beta.agent_id, { muted: false });
+
+    expect(updated.muted).toBe(false);
+  });
+
+  it("notification prefs are per-agent", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true });
+
+    // Beta's prefs for alpha should be defaults
+    const betaPrefs = await betaClient.notificationPrefs(alpha.agent_id);
+    expect(betaPrefs.muted).toBe(false);
+  });
+
+  it("rejects invalid urgency_filter", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(
+      alphaClient.setNotificationPrefs(beta.agent_id, { urgency_filter: "invalid" })
+    ).rejects.toMatchObject({ status: 400 });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -5024,6 +5095,20 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "notification_preferences") {
+      const row: NotificationPrefRow = {
+        id: nextId("notifpref"),
+        agentId: this.insertValues.agentId as string,
+        contactAgentId: this.insertValues.contactAgentId as string,
+        muted: (this.insertValues.muted as number | undefined) ?? 0,
+        urgencyFilter: (this.insertValues.urgencyFilter as string | undefined) ?? "all",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      testState["notification_preferences"].push(row);
+      return row;
+    }
+
     if (this.table === "message_templates") {
       const row: MessageTemplateRow = {
         id: nextId("template"),
@@ -5137,7 +5222,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow> {
   return testState[table];
 }
 
@@ -5172,7 +5257,8 @@ function getTableName(table: unknown): TableName {
     name === "message_labels" ||
     name === "blocked_contacts" ||
     name === "contact_notes" ||
-    name === "message_templates"
+    name === "message_templates" ||
+    name === "notification_preferences"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -5333,4 +5419,6 @@ const columnToProperty: Record<string, string> = {
   depends_on: "dependsOn",
   blocked_agent_id: "blockedAgentId",
   contact_agent_id: "contactAgentId",
+  urgency_filter: "urgencyFilter",
+  expires_at: "expiresAt",
 };

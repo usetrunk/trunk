@@ -256,6 +256,19 @@ export const messageTemplates = pgTable("message_templates", {
   index("message_templates_agent_idx").on(table.agentId),
 ]);
 
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  contactAgentId: text("contact_agent_id").notNull().references(() => agents.id),
+  muted: integer("muted").notNull().default(0), // 0 = not muted, 1 = muted
+  urgencyFilter: text("urgency_filter").notNull().default("all"), // all, sync_only
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("notification_prefs_unique_idx").on(table.agentId, table.contactAgentId),
+  index("notification_prefs_agent_idx").on(table.agentId),
+]);
+
 export const sharedDocumentVersions = pgTable("shared_document_versions", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   documentId: text("document_id").notNull().references(() => sharedDocuments.id),

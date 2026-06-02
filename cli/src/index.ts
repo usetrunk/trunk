@@ -1413,6 +1413,35 @@ server.tool(
 );
 
 server.tool(
+  "trunk_notification_prefs",
+  "Get or set notification preferences for a contact. Omit muted/urgency_filter to just read current prefs.",
+  {
+    contact_id: z.string().describe("Agent ID of the contact"),
+    muted: z.boolean().optional().describe("Set to true to mute notifications"),
+    urgency_filter: z.enum(["all", "sync_only"]).optional().describe("Filter: 'all' or 'sync_only'"),
+  },
+  async ({ contact_id, muted, urgency_filter }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    if (muted === undefined && urgency_filter === undefined) {
+      const result = await relay(`/contacts/${contact_id}/notifications`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    const body: Record<string, unknown> = {};
+    if (muted !== undefined) body.muted = muted;
+    if (urgency_filter) body.urgency_filter = urgency_filter;
+    const result = await relay(`/contacts/${contact_id}/notifications`, {
+      method: "PUT",
+      body,
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_label_message",
   "Add a label/tag to a message for organization. Labels are private to you. Good for marking messages as 'important', 'action-required', 'reviewed', etc.",
   {

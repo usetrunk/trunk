@@ -1089,6 +1089,33 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_notification_prefs",
+    "Get or set notification preferences for a contact. Omit muted/urgency_filter to just read current prefs.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      muted: z.boolean().optional().describe("Set to true to mute notifications"),
+      urgency_filter: z.enum(["all", "sync_only"]).optional().describe("Filter: 'all' or 'sync_only'"),
+    },
+    async ({ secret, contact_id, muted, urgency_filter }) => {
+      if (muted === undefined && urgency_filter === undefined) {
+        const result = await relay(`/contacts/${contact_id}/notifications`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      const body: Record<string, unknown> = {};
+      if (muted !== undefined) body.muted = muted;
+      if (urgency_filter) body.urgency_filter = urgency_filter;
+      const result = await relay(`/contacts/${contact_id}/notifications`, {
+        method: "PUT",
+        body,
+        secret,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_label_message",
     "Add a label/tag to a message for organization. Labels are private to the agent.",
     {
