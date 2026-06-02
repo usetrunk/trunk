@@ -52,6 +52,10 @@ if (command === "daemon") {
   } else {
     console.log("Usage: trunk daemon [install|start|status] [--execute]");
   }
+} else if (command === "harness") {
+  // Pass remaining args to harness module
+  process.argv = ["node", "harness", ...args.slice(1)];
+  await import("./harness.js");
 } else if (command === "status") {
   const config = loadConfig();
   if (!config) {
@@ -71,6 +75,11 @@ Commands:
   daemon start --execute
                    Execute eligible handoff/question messages through claude -p
   daemon status    Check if daemon is running
+  harness start    Spawn all agents from agents.json
+  harness spawn    Spawn a single agent
+  harness list     Show running agents
+  harness stop     Stop an agent
+  harness stop-all Stop all agents
   status           Show agent identity and config
 
 MCP server (for Claude Code):

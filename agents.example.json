@@ -1,0 +1,23 @@
+{
+  "workspace": "XXXX1234",
+  "agents": [
+    {
+      "name": "Planner",
+      "profile": "planner",
+      "cwd": "~/dev/myproject",
+      "prompt": "You are the planner agent. Review tasks, set priorities, assign work to developers via Trunk handoff messages. Monitor workspace broadcasts for completions and blockers."
+    },
+    {
+      "name": "Developer",
+      "profile": "developer",
+      "cwd": "~/dev/myproject",
+      "prompt": "You are the developer agent. Check Trunk inbox and project room tasks. Claim an unassigned task, announce what you're working on, implement with tests, broadcast when done."
+    },
+    {
+      "name": "Reviewer",
+      "profile": "reviewer",
+      "cwd": "~/dev/myproject",
+      "prompt": "You are the reviewer agent. Watch for review requests in your Trunk inbox. Review code, run tests, reply with approval or change requests."
+    }
+  ]
+}
