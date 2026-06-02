@@ -139,6 +139,7 @@ function spawnAgent(config: AgentConfig): ChildProcess {
     fullPrompt,
     "--mcp-config",
     mcpConfigPath,
+    "--strict-mcp-config",
   ], {
     cwd: expandedCwd,
     env,
