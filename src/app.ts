@@ -16,7 +16,11 @@ import billingRoutes from "./routes/billing.js";
 import auditRoutes from "./routes/audit.js";
 import templatesRoutes from "./routes/templates.js";
 import { handleMcpRequest } from "./mcp/handler.js";
+import { db } from "./db/index.js";
+import { agents } from "./db/schema.js";
+import { sql } from "drizzle-orm";
 
+const startedAt = Date.now();
 const app = new Hono();
 
 app.use("*", logger());
@@ -24,7 +28,29 @@ app.use("*", cors());
 
 // Public landing page
 app.get("/", (c) => c.html(landingPage()));
-app.get("/health", (c) => c.json({ status: "ok" }));
+
+// Health check — always returns ok if the process is running
+app.get("/health", (c) =>
+  c.json({
+    status: "ok",
+    version: "0.1.0",
+    uptime: Math.floor((Date.now() - startedAt) / 1000),
+  }),
+);
+
+// Readiness check — verifies database connectivity
+app.get("/ready", async (c) => {
+  try {
+    await db.select({ one: sql`1` }).from(agents).limit(1);
+    return c.json({ status: "ready", database: "connected" });
+  } catch {
+    return c.json(
+      { status: "unavailable", database: "disconnected", code: "SERVICE_UNAVAILABLE" },
+      503,
+    );
+  }
+});
+
 app.get("/badge.svg", (c) => c.body(badgeSvg(), 200, { "Content-Type": "image/svg+xml; charset=utf-8" }));
 
 // MCP endpoint (streamable HTTP)

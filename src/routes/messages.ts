@@ -36,10 +36,10 @@ app.post("/", async (c) => {
   if (idempotencyKey instanceof Response) return idempotencyKey;
 
   if (!body.to || !body.type || !body.payload) {
-    return c.json({ error: "to, type, and payload are required" }, 400);
+    return c.json({ error: "to, type, and payload are required", code: "MISSING_FIELD" }, 400);
   }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
-    return c.json({ error: "payload exceeds 1MB limit" }, 413);
+    return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   }
 
   // Validate scheduled_at if provided
@@ -47,10 +47,10 @@ app.post("/", async (c) => {
   if (body.scheduled_at) {
     scheduledAt = new Date(body.scheduled_at);
     if (isNaN(scheduledAt.getTime())) {
-      return c.json({ error: "scheduled_at must be a valid ISO 8601 date" }, 400);
+      return c.json({ error: "scheduled_at must be a valid ISO 8601 date", code: "INVALID_INPUT" }, 400);
     }
     if (scheduledAt.getTime() <= Date.now()) {
-      return c.json({ error: "scheduled_at must be in the future" }, 400);
+      return c.json({ error: "scheduled_at must be in the future", code: "INVALID_INPUT" }, 400);
     }
   }
 
@@ -59,10 +59,10 @@ app.post("/", async (c) => {
   if (body.expires_at) {
     expiresAt = new Date(body.expires_at);
     if (isNaN(expiresAt.getTime())) {
-      return c.json({ error: "expires_at must be a valid ISO 8601 date" }, 400);
+      return c.json({ error: "expires_at must be a valid ISO 8601 date", code: "INVALID_INPUT" }, 400);
     }
     if (expiresAt.getTime() <= Date.now()) {
-      return c.json({ error: "expires_at must be in the future" }, 400);
+      return c.json({ error: "expires_at must be in the future", code: "INVALID_INPUT" }, 400);
     }
   } else if (body.ttl_seconds && body.ttl_seconds > 0) {
     expiresAt = new Date(Date.now() + body.ttl_seconds * 1000);
@@ -70,7 +70,7 @@ app.post("/", async (c) => {
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
-    return c.json({ error: "Rate limit exceeded", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
   const existing = await findIdempotentMessage(agentId, idempotencyKey);
@@ -89,25 +89,25 @@ app.post("/", async (c) => {
       .where(eq(workspaces.id, workspaceId))
       .limit(1);
     if (!workspace) {
-      return c.json({ error: "Workspace not found" }, 404);
+      return c.json({ error: "Workspace not found", code: "WORKSPACE_NOT_FOUND" }, 404);
     }
 
     // Get all workspace members
     const memberIds = await getWorkspaceMembers(workspaceId);
     if (memberIds.length === 0) {
-      return c.json({ error: "Workspace has no members" }, 400);
+      return c.json({ error: "Workspace has no members", code: "VALIDATION_ERROR" }, 400);
     }
 
     // Filter out the sender from fan-out recipients
     const recipients = memberIds.filter((id) => id !== agentId);
     if (recipients.length === 0) {
-      return c.json({ error: "No other members in workspace" }, 400);
+      return c.json({ error: "No other members in workspace", code: "VALIDATION_ERROR" }, 400);
     }
 
     // Verify sender can message the workspace (member or workspace_contact)
     const senderCanMessage = await canMessage(agentId, recipients[0]);
     if (!senderCanMessage) {
-      return c.json({ error: "Not a contact. Pair first." }, 403);
+      return c.json({ error: "Not a contact. Pair first.", code: "NOT_MEMBER" }, 403);
     }
 
     // Fan-out: create a message for each recipient
@@ -170,7 +170,7 @@ app.post("/", async (c) => {
       .where(eq(rooms.id, roomId))
       .limit(1);
     if (!room) {
-      return c.json({ error: "Room not found" }, 404);
+      return c.json({ error: "Room not found", code: "ROOM_NOT_FOUND" }, 404);
     }
 
     // Get all room members
@@ -179,18 +179,18 @@ app.post("/", async (c) => {
       .from(roomMembers)
       .where(eq(roomMembers.roomId, roomId));
     if (members.length === 0) {
-      return c.json({ error: "Room has no members" }, 400);
+      return c.json({ error: "Room has no members", code: "VALIDATION_ERROR" }, 400);
     }
 
     // Verify sender is a room member
     if (!members.some((m) => m.agentId === agentId)) {
-      return c.json({ error: "Not a member of this room" }, 403);
+      return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
     }
 
     // Filter out the sender from fan-out recipients
     const recipients = members.filter((m) => m.agentId !== agentId).map((m) => m.agentId);
     if (recipients.length === 0) {
-      return c.json({ error: "No other members in room" }, 400);
+      return c.json({ error: "No other members in room", code: "VALIDATION_ERROR" }, 400);
     }
 
     // Fan-out: create a message for each recipient
@@ -245,10 +245,10 @@ app.post("/", async (c) => {
   // Direct message: verify contact via canMessage helper
   const allowed = await canMessage(agentId, body.to);
   if (!allowed) {
-    return c.json({ error: "Not a contact. Pair first." }, 403);
+    return c.json({ error: "Not a contact. Pair first.", code: "NOT_MEMBER" }, 403);
   }
   if (await isBlocked(agentId, body.to)) {
-    return c.json({ error: "You have been blocked by this agent" }, 403);
+    return c.json({ error: "You have been blocked by this agent", code: "BLOCKED" }, 403);
   }
 
   // Create message
@@ -568,7 +568,7 @@ app.post("/searches", async (c) => {
   const body = await c.req.json<{ name: string; query: Record<string, string> }>();
 
   if (!body.name || !body.query) {
-    return c.json({ error: "name and query are required" }, 400);
+    return c.json({ error: "name and query are required", code: "MISSING_FIELD" }, 400);
   }
 
   const [existing] = await db
@@ -578,7 +578,7 @@ app.post("/searches", async (c) => {
     .limit(1);
 
   if (existing) {
-    return c.json({ error: "Search with this name already exists" }, 409);
+    return c.json({ error: "Search with this name already exists", code: "ALREADY_EXISTS" }, 409);
   }
 
   const [row] = await db
@@ -601,7 +601,7 @@ app.delete("/searches/:id", async (c) => {
     .where(and(eq(savedSearches.id, searchId), eq(savedSearches.agentId, agentId)))
     .limit(1);
 
-  if (!search) return c.json({ error: "Saved search not found" }, 404);
+  if (!search) return c.json({ error: "Saved search not found", code: "NOT_FOUND" }, 404);
 
   await db.delete(savedSearches).where(eq(savedSearches.id, searchId));
   await audit(agentId, "search.delete", "search", searchId);
@@ -708,9 +708,9 @@ app.post("/:id/cancel", async (c) => {
     .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agentId)))
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   if (msg.status !== "scheduled") {
-    return c.json({ error: "Only scheduled messages can be cancelled" }, 400);
+    return c.json({ error: "Only scheduled messages can be cancelled", code: "VALIDATION_ERROR" }, 400);
   }
 
   await db
@@ -793,7 +793,7 @@ app.get("/thread/:threadId/summary", async (c) => {
 
   const visible = rows.filter((row) => row.status !== "deleted");
   if (visible.length === 0) {
-    return c.json({ error: "Thread not found or empty" }, 404);
+    return c.json({ error: "Thread not found or empty", code: "NOT_FOUND" }, 404);
   }
 
   // Participants
@@ -900,7 +900,7 @@ app.delete("/:id", async (c) => {
     .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agentId)))
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
 
   await db
     .update(messages)
@@ -919,10 +919,10 @@ app.patch("/:id", async (c) => {
   }>();
 
   if (!body.payload) {
-    return c.json({ error: "payload is required" }, 400);
+    return c.json({ error: "payload is required", code: "MISSING_FIELD" }, 400);
   }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
-    return c.json({ error: "payload exceeds 1MB limit" }, 413);
+    return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   }
 
   const [msg] = await db
@@ -931,12 +931,12 @@ app.patch("/:id", async (c) => {
     .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agentId)))
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
-  if (msg.status === "deleted") return c.json({ error: "Cannot edit a deleted message" }, 400);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
+  if (msg.status === "deleted") return c.json({ error: "Cannot edit a deleted message", code: "VALIDATION_ERROR" }, 400);
 
   const ageMs = Date.now() - msg.createdAt.getTime();
   if (ageMs > EDIT_WINDOW_MS) {
-    return c.json({ error: "Edit window expired (15 minutes)" }, 403);
+    return c.json({ error: "Edit window expired (15 minutes)", code: "EDIT_WINDOW_EXPIRED" }, 403);
   }
 
   // Determine version number for this edit
@@ -989,7 +989,7 @@ app.get("/:id/edits", async (c) => {
     )
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
 
   const edits = await db
     .select()
@@ -1017,10 +1017,10 @@ app.post("/ack-bulk", async (c) => {
   const body = await c.req.json<{ message_ids: string[] }>();
 
   if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
-    return c.json({ error: "message_ids array is required" }, 400);
+    return c.json({ error: "message_ids array is required", code: "MISSING_FIELD" }, 400);
   }
   if (body.message_ids.length > 100) {
-    return c.json({ error: "Cannot ack more than 100 messages at once" }, 400);
+    return c.json({ error: "Cannot ack more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
   }
 
   let acked = 0;
@@ -1050,10 +1050,10 @@ app.post("/read-bulk", async (c) => {
   const body = await c.req.json<{ message_ids: string[] }>();
 
   if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
-    return c.json({ error: "message_ids array is required" }, 400);
+    return c.json({ error: "message_ids array is required", code: "MISSING_FIELD" }, 400);
   }
   if (body.message_ids.length > 100) {
-    return c.json({ error: "Cannot mark more than 100 messages at once" }, 400);
+    return c.json({ error: "Cannot mark more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
   }
 
   let marked = 0;
@@ -1083,10 +1083,10 @@ app.post("/delete-bulk", async (c) => {
   const body = await c.req.json<{ message_ids: string[] }>();
 
   if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
-    return c.json({ error: "message_ids array is required" }, 400);
+    return c.json({ error: "message_ids array is required", code: "MISSING_FIELD" }, 400);
   }
   if (body.message_ids.length > 100) {
-    return c.json({ error: "Cannot delete more than 100 messages at once" }, 400);
+    return c.json({ error: "Cannot delete more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
   }
 
   let deleted = 0;
@@ -1116,13 +1116,13 @@ app.post("/label-bulk", async (c) => {
   const body = await c.req.json<{ message_ids: string[]; label: string }>();
 
   if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
-    return c.json({ error: "message_ids array is required" }, 400);
+    return c.json({ error: "message_ids array is required", code: "MISSING_FIELD" }, 400);
   }
   if (!body.label || typeof body.label !== "string") {
-    return c.json({ error: "label is required" }, 400);
+    return c.json({ error: "label is required", code: "MISSING_FIELD" }, 400);
   }
   if (body.message_ids.length > 100) {
-    return c.json({ error: "Cannot label more than 100 messages at once" }, 400);
+    return c.json({ error: "Cannot label more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
   }
 
   let labeled = 0;
@@ -1173,7 +1173,7 @@ app.post("/:id/read", async (c) => {
     .where(and(eq(messages.id, messageId), eq(messages.toAgent, agentId)))
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   if (msg.readAt) return c.json({ ok: true, already_read: true, read_at: msg.readAt });
 
   await db
@@ -1196,7 +1196,7 @@ app.post("/:id/ack", async (c) => {
     .limit(1);
 
   if (!msg) {
-    return c.json({ error: "Message not found" }, 404);
+    return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   }
 
   await db
@@ -1228,15 +1228,15 @@ app.post("/:id/reply", async (c) => {
     .limit(1);
 
   if (!original) {
-    return c.json({ error: "Message not found" }, 404);
+    return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
-    return c.json({ error: "payload exceeds 1MB limit" }, 413);
+    return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   }
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
-    return c.json({ error: "Rate limit exceeded", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
   const existing = await findIdempotentMessage(agentId, idempotencyKey);
@@ -1299,7 +1299,7 @@ app.post("/:id/forward", async (c) => {
   if (idempotencyKey instanceof Response) return idempotencyKey;
 
   if (!body.to) {
-    return c.json({ error: "to is required" }, 400);
+    return c.json({ error: "to is required", code: "MISSING_FIELD" }, 400);
   }
 
   // Verify original message exists and agent is sender or recipient
@@ -1314,12 +1314,12 @@ app.post("/:id/forward", async (c) => {
     )
     .limit(1);
 
-  if (!original) return c.json({ error: "Message not found" }, 404);
+  if (!original) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
 
   // Verify forwarder can message the target
   const allowed = await canMessage(agentId, body.to);
   if (!allowed) {
-    return c.json({ error: "Not a contact. Pair first." }, 403);
+    return c.json({ error: "Not a contact. Pair first.", code: "NOT_MEMBER" }, 403);
   }
 
   const existing = await findIdempotentMessage(agentId, idempotencyKey);
@@ -1388,10 +1388,10 @@ app.post("/:id/react", async (c) => {
   const body = await c.req.json<{ emoji: string }>();
 
   if (!body.emoji || typeof body.emoji !== "string") {
-    return c.json({ error: "emoji is required" }, 400);
+    return c.json({ error: "emoji is required", code: "MISSING_FIELD" }, 400);
   }
   if (body.emoji.length > 32) {
-    return c.json({ error: "emoji too long" }, 400);
+    return c.json({ error: "emoji too long", code: "VALIDATION_ERROR" }, 400);
   }
 
   // Verify message exists and agent is sender or recipient
@@ -1406,7 +1406,7 @@ app.post("/:id/react", async (c) => {
     )
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
 
   // Check for existing reaction (idempotent)
   const existing = await db
@@ -1457,7 +1457,7 @@ app.delete("/:id/react/:emoji", async (c) => {
     );
 
   if (existing.length === 0) {
-    return c.json({ error: "Reaction not found" }, 404);
+    return c.json({ error: "Reaction not found", code: "NOT_FOUND" }, 404);
   }
 
   await db
@@ -1492,7 +1492,7 @@ app.get("/:id/reactions", async (c) => {
     )
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
 
   const rows = await db
     .select()
@@ -1537,7 +1537,7 @@ app.post("/:id/pin", async (c) => {
     )
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   if (msg.pinnedAt) return c.json({ ok: true, already_pinned: true, pinned_at: msg.pinnedAt, pinned_by: msg.pinnedBy });
 
   const [updated] = await db
@@ -1565,7 +1565,7 @@ app.post("/:id/unpin", async (c) => {
     )
     .limit(1);
 
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   if (!msg.pinnedAt) return c.json({ ok: true, already_unpinned: true });
 
   await db
@@ -1624,18 +1624,18 @@ app.post("/:id/labels", async (c) => {
   const messageId = c.req.param("id");
   const body = await c.req.json<{ label: string }>();
   if (!body.label || typeof body.label !== "string" || body.label.trim().length === 0) {
-    return c.json({ error: "label is required" }, 400);
+    return c.json({ error: "label is required", code: "MISSING_FIELD" }, 400);
   }
   const label = body.label.trim().toLowerCase();
   if (label.length > 50) {
-    return c.json({ error: "label must be 50 characters or fewer" }, 400);
+    return c.json({ error: "label must be 50 characters or fewer", code: "VALIDATION_ERROR" }, 400);
   }
 
   // Verify the message exists and the agent is sender or recipient
   const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   if (msg.fromAgent !== agentId && msg.toAgent !== agentId) {
-    return c.json({ error: "Not authorized" }, 403);
+    return c.json({ error: "Not authorized", code: "FORBIDDEN" }, 403);
   }
 
   // Check for duplicate
@@ -1663,7 +1663,7 @@ app.delete("/:id/labels/:label", async (c) => {
     .where(and(eq(messageLabels.messageId, messageId), eq(messageLabels.agentId, agentId), eq(messageLabels.label, label)))
     .returning();
 
-  if (deleted.length === 0) return c.json({ error: "Label not found" }, 404);
+  if (deleted.length === 0) return c.json({ error: "Label not found", code: "NOT_FOUND" }, 404);
   await audit(agentId, "message.label_remove", "message", messageId, { label });
   return c.json({ ok: true });
 });
@@ -1675,9 +1675,9 @@ app.get("/:id/labels", async (c) => {
 
   // Verify access
   const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
-  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   if (msg.fromAgent !== agentId && msg.toAgent !== agentId) {
-    return c.json({ error: "Not authorized" }, 403);
+    return c.json({ error: "Not authorized", code: "FORBIDDEN" }, 403);
   }
 
   const rows = await db

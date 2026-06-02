@@ -19,10 +19,10 @@ app.post("/room/:roomId", async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ name: string; body: string; content_type?: string }>();
-  if (!body.name || !body.body) return c.json({ error: "name and body are required" }, 400);
+  if (!body.name || !body.body) return c.json({ error: "name and body are required", code: "MISSING_FIELD" }, 400);
 
   const scope = roomScope(roomId);
 
@@ -64,7 +64,7 @@ app.get("/room/:roomId", async (c) => {
     cursor: c.req.query("cursor"),
   });
 
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const scope = roomScope(roomId);
   const conditions = [eq(sharedDocuments.scope, scope)];
@@ -104,7 +104,7 @@ app.get("/room/:roomId/:docId", async (c) => {
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db
     .select()
@@ -112,7 +112,7 @@ app.get("/room/:roomId/:docId", async (c) => {
     .where(eq(sharedDocuments.id, docId))
     .limit(1);
 
-  if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found" }, 404);
+  if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   return c.json({
     id: doc.id,
@@ -131,10 +131,10 @@ app.put("/room/:roomId/:docId", async (c) => {
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ body: string; name?: string }>();
-  if (!body.body) return c.json({ error: "body is required" }, 400);
+  if (!body.body) return c.json({ error: "body is required", code: "MISSING_FIELD" }, 400);
 
   const [existing] = await db
     .select()
@@ -142,7 +142,7 @@ app.put("/room/:roomId/:docId", async (c) => {
     .where(eq(sharedDocuments.id, docId))
     .limit(1);
 
-  if (!existing || existing.scope !== roomScope(roomId)) return c.json({ error: "Document not found" }, 404);
+  if (!existing || existing.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   const newVersion = existing.version + 1;
 
@@ -183,7 +183,7 @@ app.delete("/room/:roomId/:docId", async (c) => {
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db
     .select()
@@ -191,7 +191,7 @@ app.delete("/room/:roomId/:docId", async (c) => {
     .where(eq(sharedDocuments.id, docId))
     .limit(1);
 
-  if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found" }, 404);
+  if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   await db.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
   await db.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
@@ -207,10 +207,10 @@ app.post("/workspace/:workspaceId", async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
 
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ name: string; body: string; content_type?: string }>();
-  if (!body.name || !body.body) return c.json({ error: "name and body are required" }, 400);
+  if (!body.name || !body.body) return c.json({ error: "name and body are required", code: "MISSING_FIELD" }, 400);
 
   const scope = workspaceScope(workspaceId);
 
@@ -230,7 +230,7 @@ app.get("/workspace/:workspaceId", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
 
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const scope = workspaceScope(workspaceId);
   const conditions = [eq(sharedDocuments.scope, scope)];
@@ -252,10 +252,10 @@ app.get("/workspace/:workspaceId/:docId", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
-  if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found" }, 404);
+  if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   return c.json({ id: doc.id, name: doc.name, content_type: doc.contentType, body: doc.body, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt, updated_at: doc.updatedAt });
 });
@@ -265,13 +265,13 @@ app.put("/workspace/:workspaceId/:docId", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ body: string; name?: string }>();
-  if (!body.body) return c.json({ error: "body is required" }, 400);
+  if (!body.body) return c.json({ error: "body is required", code: "MISSING_FIELD" }, 400);
 
   const [existing] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
-  if (!existing || existing.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found" }, 404);
+  if (!existing || existing.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   const newVersion = existing.version + 1;
   await db.insert(sharedDocumentVersions).values({ documentId: docId, version: newVersion, body: body.body, editedBy: agentId });
@@ -288,10 +288,10 @@ app.delete("/workspace/:workspaceId/:docId", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
-  if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found" }, 404);
+  if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   await db.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
   await db.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
@@ -307,10 +307,10 @@ app.post("/:contactId", async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
 
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ name: string; body: string; content_type?: string }>();
-  if (!body.name || !body.body) return c.json({ error: "name and body are required" }, 400);
+  if (!body.name || !body.body) return c.json({ error: "name and body are required", code: "MISSING_FIELD" }, 400);
 
   const scope = contactScope(agentId, contactId);
 
@@ -354,7 +354,7 @@ app.get("/:contactId", async (c) => {
     cursor: c.req.query("cursor"),
   });
 
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const scope = contactScope(agentId, contactId);
   const conditions = [eq(sharedDocuments.scope, scope)];
@@ -395,7 +395,7 @@ app.get("/:contactId/:docId", async (c) => {
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db
     .select()
@@ -403,7 +403,7 @@ app.get("/:contactId/:docId", async (c) => {
     .where(eq(sharedDocuments.id, docId))
     .limit(1);
 
-  if (!doc) return c.json({ error: "Document not found" }, 404);
+  if (!doc) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   return c.json({
     id: doc.id,
@@ -423,10 +423,10 @@ app.put("/:contactId/:docId", async (c) => {
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ body: string; name?: string }>();
-  if (!body.body) return c.json({ error: "body is required" }, 400);
+  if (!body.body) return c.json({ error: "body is required", code: "MISSING_FIELD" }, 400);
 
   const [existing] = await db
     .select()
@@ -434,7 +434,7 @@ app.put("/:contactId/:docId", async (c) => {
     .where(eq(sharedDocuments.id, docId))
     .limit(1);
 
-  if (!existing) return c.json({ error: "Document not found" }, 404);
+  if (!existing) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   const newVersion = existing.version + 1;
 
@@ -478,7 +478,7 @@ app.get("/:contactId/:docId/versions", async (c) => {
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const versions = await db
     .select()
@@ -503,7 +503,7 @@ app.get("/:contactId/:docId/versions/:version", async (c) => {
   const docId = c.req.param("docId");
   const version = parseInt(c.req.param("version"));
 
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const [v] = await db
     .select()
@@ -514,7 +514,7 @@ app.get("/:contactId/:docId/versions/:version", async (c) => {
     ))
     .limit(1);
 
-  if (!v) return c.json({ error: "Version not found" }, 404);
+  if (!v) return c.json({ error: "Version not found", code: "NOT_FOUND" }, 404);
 
   return c.json({
     version: v.version,
@@ -530,7 +530,7 @@ app.delete("/:contactId/:docId", async (c) => {
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
 
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db
     .select()
@@ -538,11 +538,11 @@ app.delete("/:contactId/:docId", async (c) => {
     .where(eq(sharedDocuments.id, docId))
     .limit(1);
 
-  if (!doc) return c.json({ error: "Document not found" }, 404);
+  if (!doc) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   // Verify document belongs to this contact scope
   const scope = contactScope(agentId, contactId);
-  if (doc.scope !== scope) return c.json({ error: "Document not found" }, 404);
+  if (doc.scope !== scope) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   // Delete versions first, then document
   await db.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));

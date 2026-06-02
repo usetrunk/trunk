@@ -42,7 +42,7 @@ app.get("/status", async (c) => {
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 400);
+    return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
   }
 
   const sub = await ensureSubscription(agent.workspaceId);
@@ -63,17 +63,17 @@ app.post("/checkout", async (c) => {
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 400);
+    return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
   }
 
   const sub = await ensureSubscription(agent.workspaceId);
   if (sub.plan === "team" && sub.status === "active") {
-    return c.json({ error: "Already on team plan" }, 409);
+    return c.json({ error: "Already on team plan", code: "ALREADY_EXISTS" }, 409);
   }
 
   const stripe = getStripe();
   const priceId = process.env.STRIPE_TEAM_PRICE_ID;
-  if (!priceId) return c.json({ error: "STRIPE_TEAM_PRICE_ID not configured" }, 500);
+  if (!priceId) return c.json({ error: "STRIPE_TEAM_PRICE_ID not configured", code: "INTERNAL_ERROR" }, 500);
 
   // Find or create Stripe customer
   let customerId = sub.stripeCustomerId;
@@ -108,12 +108,12 @@ app.post("/portal", async (c) => {
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 400);
+    return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
   }
 
   const sub = await ensureSubscription(agent.workspaceId);
   if (!sub.stripeCustomerId) {
-    return c.json({ error: "No billing account. Create a checkout first." }, 400);
+    return c.json({ error: "No billing account. Create a checkout first.", code: "VALIDATION_ERROR" }, 400);
   }
 
   const stripe = getStripe();
@@ -133,7 +133,7 @@ app.post("/webhook", async (c) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   if (!sig || !webhookSecret) {
-    return c.json({ error: "Missing signature or webhook secret" }, 400);
+    return c.json({ error: "Missing signature or webhook secret", code: "UNAUTHORIZED" }, 400);
   }
 
   const rawBody = await c.req.text();
@@ -142,7 +142,7 @@ app.post("/webhook", async (c) => {
   try {
     event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
   } catch {
-    return c.json({ error: "Invalid signature" }, 400);
+    return c.json({ error: "Invalid signature", code: "UNAUTHORIZED" }, 400);
   }
 
   switch (event.type) {

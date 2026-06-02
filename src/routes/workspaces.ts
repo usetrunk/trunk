@@ -16,12 +16,12 @@ app.post("/", async (c) => {
   const agentId = c.get("agentId");
   const body = await c.req.json<{ name: string; owner?: string }>();
 
-  if (!body.name) return c.json({ error: "name is required" }, 400);
+  if (!body.name) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
 
   // Check if agent already belongs to a workspace
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (agent?.workspaceId) {
-    return c.json({ error: "Already in a workspace. Leave first." }, 409);
+    return c.json({ error: "Already in a workspace. Leave first.", code: "ALREADY_MEMBER" }, 409);
   }
 
   const pairingCode = generatePairingCode();
@@ -53,11 +53,11 @@ app.post("/join", async (c) => {
   const agentId = c.get("agentId");
   const body = await c.req.json<{ code: string }>();
 
-  if (!body.code) return c.json({ error: "code is required" }, 400);
+  if (!body.code) return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (agent?.workspaceId) {
-    return c.json({ error: "Already in a workspace. Leave first." }, 409);
+    return c.json({ error: "Already in a workspace. Leave first.", code: "ALREADY_MEMBER" }, 409);
   }
 
   const [workspace] = await db
@@ -66,7 +66,7 @@ app.post("/join", async (c) => {
     .where(eq(workspaces.pairingCode, body.code.toUpperCase()))
     .limit(1);
 
-  if (!workspace) return c.json({ error: "Invalid workspace code" }, 404);
+  if (!workspace) return c.json({ error: "Invalid workspace code", code: "WORKSPACE_NOT_FOUND" }, 404);
 
   await db
     .update(agents)
@@ -88,7 +88,7 @@ app.get("/me", async (c) => {
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 404);
+    return c.json({ error: "Not in a workspace", code: "WORKSPACE_NOT_FOUND" }, 404);
   }
 
   const [workspace] = await db
@@ -97,7 +97,7 @@ app.get("/me", async (c) => {
     .where(eq(workspaces.id, agent.workspaceId))
     .limit(1);
 
-  if (!workspace) return c.json({ error: "Workspace not found" }, 404);
+  if (!workspace) return c.json({ error: "Workspace not found", code: "WORKSPACE_NOT_FOUND" }, 404);
 
   const memberAgents = await db
     .select({ id: agents.id, name: agents.name, owner: agents.owner, workspaceRole: agents.workspaceRole })
@@ -127,15 +127,15 @@ app.patch("/me", async (c) => {
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 404);
+    return c.json({ error: "Not in a workspace", code: "WORKSPACE_NOT_FOUND" }, 404);
   }
   if (agent.workspaceRole !== "admin") {
-    return c.json({ error: "Admin role required" }, 403);
+    return c.json({ error: "Admin role required", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
   const body = await c.req.json<{ name?: string; metadata?: Record<string, unknown> }>();
   if (!body.name && !body.metadata) {
-    return c.json({ error: "name or metadata is required" }, 400);
+    return c.json({ error: "name or metadata is required", code: "MISSING_FIELD" }, 400);
   }
 
   const updates: Record<string, unknown> = {};
@@ -166,7 +166,7 @@ app.post("/leave", async (c) => {
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 400);
+    return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
   }
 
   const workspaceId = agent.workspaceId;
@@ -189,7 +189,7 @@ app.get("/:id/members", async (c) => {
   // Verify membership
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (agent?.workspaceId !== workspaceId) {
-    return c.json({ error: "Not a member of this workspace" }, 403);
+    return c.json({ error: "Not a member of this workspace", code: "NOT_MEMBER" }, 403);
   }
 
   const memberAgents = await db
@@ -212,22 +212,22 @@ app.post("/kick", async (c) => {
   const agentId = c.get("agentId");
   const body = await c.req.json<{ agent_id: string }>();
 
-  if (!body.agent_id) return c.json({ error: "agent_id is required" }, 400);
+  if (!body.agent_id) return c.json({ error: "agent_id is required", code: "MISSING_FIELD" }, 400);
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 404);
+    return c.json({ error: "Not in a workspace", code: "WORKSPACE_NOT_FOUND" }, 404);
   }
   if (agent.workspaceRole !== "admin") {
-    return c.json({ error: "Admin role required" }, 403);
+    return c.json({ error: "Admin role required", code: "INSUFFICIENT_ROLE" }, 403);
   }
   if (body.agent_id === agentId) {
-    return c.json({ error: "Cannot kick yourself. Use leave instead." }, 400);
+    return c.json({ error: "Cannot kick yourself. Use leave instead.", code: "SELF_ACTION" }, 400);
   }
 
   const [target] = await db.select().from(agents).where(eq(agents.id, body.agent_id)).limit(1);
   if (!target || target.workspaceId !== agent.workspaceId) {
-    return c.json({ error: "Agent is not a member of this workspace" }, 404);
+    return c.json({ error: "Agent is not a member of this workspace", code: "NOT_FOUND" }, 404);
   }
 
   await db
@@ -247,20 +247,20 @@ app.patch("/members/:id/role", async (c) => {
   const body = await c.req.json<{ role: string }>();
 
   if (!body.role || !["admin", "member"].includes(body.role)) {
-    return c.json({ error: "role must be 'admin' or 'member'" }, 400);
+    return c.json({ error: "role must be 'admin' or 'member'", code: "INVALID_INPUT" }, 400);
   }
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 404);
+    return c.json({ error: "Not in a workspace", code: "WORKSPACE_NOT_FOUND" }, 404);
   }
   if (agent.workspaceRole !== "admin") {
-    return c.json({ error: "Admin role required" }, 403);
+    return c.json({ error: "Admin role required", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
   const [target] = await db.select().from(agents).where(eq(agents.id, targetId)).limit(1);
   if (!target || target.workspaceId !== agent.workspaceId) {
-    return c.json({ error: "Agent is not a member of this workspace" }, 404);
+    return c.json({ error: "Agent is not a member of this workspace", code: "NOT_FOUND" }, 404);
   }
 
   await db
@@ -282,10 +282,10 @@ app.delete("/", async (c) => {
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 404);
+    return c.json({ error: "Not in a workspace", code: "WORKSPACE_NOT_FOUND" }, 404);
   }
   if (agent.workspaceRole !== "admin") {
-    return c.json({ error: "Admin role required" }, 403);
+    return c.json({ error: "Admin role required", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
   const workspaceId = agent.workspaceId;

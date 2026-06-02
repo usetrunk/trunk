@@ -75,22 +75,22 @@ app.post("/", async (c) => {
     metadata?: Record<string, unknown>;
   }>();
 
-  if (!body.title) return c.json({ error: "title is required" }, 400);
-  if (!body.contact_id && !body.room_id && !body.workspace_id) return c.json({ error: "contact_id, room_id, or workspace_id is required" }, 400);
+  if (!body.title) return c.json({ error: "title is required", code: "MISSING_FIELD" }, 400);
+  if (!body.contact_id && !body.room_id && !body.workspace_id) return c.json({ error: "contact_id, room_id, or workspace_id is required", code: "MISSING_FIELD" }, 400);
 
   let scope: string;
 
   if (body.workspace_id) {
     const hasAccess = await verifyWorkspaceAccess(agentId, body.workspace_id);
-    if (!hasAccess) return c.json({ error: "Not a workspace member" }, 403);
+    if (!hasAccess) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
     scope = `workspace:${body.workspace_id}`;
   } else if (body.room_id) {
     const hasAccess = await verifyRoomAccess(agentId, body.room_id);
-    if (!hasAccess) return c.json({ error: "Not a room member" }, 403);
+    if (!hasAccess) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
     scope = `room:${body.room_id}`;
   } else {
     const hasAccess = await verifyAccess(agentId, body.contact_id!);
-    if (!hasAccess) return c.json({ error: "Not a contact" }, 403);
+    if (!hasAccess) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
     scope = contactScope(agentId, body.contact_id!);
   }
 
@@ -130,7 +130,7 @@ app.get("/:contactId", async (c) => {
   });
 
   const hasAccess = await verifyAccess(agentId, contactId);
-  if (!hasAccess) return c.json({ error: "Not a contact" }, 403);
+  if (!hasAccess) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const scope = contactScope(agentId, contactId);
   const conditions = [eq(tasks.scope, scope)];
@@ -175,7 +175,7 @@ app.get("/room/:roomId", async (c) => {
   });
 
   const hasAccess = await verifyRoomAccess(agentId, roomId);
-  if (!hasAccess) return c.json({ error: "Not a room member" }, 403);
+  if (!hasAccess) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const scope = `room:${roomId}`;
   const conditions = [eq(tasks.scope, scope)];
@@ -220,7 +220,7 @@ app.get("/workspace/:workspaceId", async (c) => {
   });
 
   const hasAccess = await verifyWorkspaceAccess(agentId, workspaceId);
-  if (!hasAccess) return c.json({ error: "Not a workspace member" }, 403);
+  if (!hasAccess) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const scope = `workspace:${workspaceId}`;
   const conditions = [eq(tasks.scope, scope)];
@@ -262,7 +262,7 @@ app.patch("/:scopeId/:taskId", async (c) => {
   const hasContactAccess = await verifyAccess(agentId, scopeId);
   const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
   const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
-  if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access" }, 403);
+  if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
 
   const body = await c.req.json<{
     title?: string;
@@ -301,7 +301,7 @@ app.patch("/:scopeId/:taskId", async (c) => {
     .where(eq(tasks.id, taskId))
     .returning();
 
-  if (!updated) return c.json({ error: "Task not found" }, 404);
+  if (!updated) return c.json({ error: "Task not found", code: "TASK_NOT_FOUND" }, 404);
 
   // When a task is marked done, auto-unblock downstream tasks
   if (body.status === "done") {
@@ -334,7 +334,7 @@ app.get("/gantt/workspace/:workspaceId", async (c) => {
   const workspaceId = c.req.param("workspaceId");
 
   const hasAccess = await verifyWorkspaceAccess(agentId, workspaceId);
-  if (!hasAccess) return c.json({ error: "Not a workspace member" }, 403);
+  if (!hasAccess) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const scope = `workspace:${workspaceId}`;
   const allTasks = await db
@@ -397,14 +397,14 @@ app.delete("/:scopeId/:taskId", async (c) => {
   const hasContactAccess = await verifyAccess(agentId, scopeId);
   const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
   const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
-  if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access" }, 403);
+  if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
 
   const [deleted] = await db
     .delete(tasks)
     .where(eq(tasks.id, taskId))
     .returning();
 
-  if (!deleted) return c.json({ error: "Task not found" }, 404);
+  if (!deleted) return c.json({ error: "Task not found", code: "TASK_NOT_FOUND" }, 404);
 
   return c.json({ ok: true, deleted_id: deleted.id });
 });

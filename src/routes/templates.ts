@@ -43,7 +43,7 @@ app.post("/", async (c) => {
   }>();
 
   if (!body.name || !body.type || !body.payload) {
-    return c.json({ error: "name, type, and payload are required" }, 400);
+    return c.json({ error: "name, type, and payload are required", code: "MISSING_FIELD" }, 400);
   }
 
   // Check for duplicate name
@@ -54,7 +54,7 @@ app.post("/", async (c) => {
     .limit(1);
 
   if (existing) {
-    return c.json({ error: "Template with this name already exists" }, 409);
+    return c.json({ error: "Template with this name already exists", code: "ALREADY_EXISTS" }, 409);
   }
 
   const [template] = await db
@@ -92,7 +92,7 @@ app.get("/:id", async (c) => {
     .where(and(eq(messageTemplates.id, templateId), eq(messageTemplates.agentId, agentId)))
     .limit(1);
 
-  if (!template) return c.json({ error: "Template not found" }, 404);
+  if (!template) return c.json({ error: "Template not found", code: "TEMPLATE_NOT_FOUND" }, 404);
 
   return c.json({
     id: template.id,
@@ -122,7 +122,7 @@ app.patch("/:id", async (c) => {
     .where(and(eq(messageTemplates.id, templateId), eq(messageTemplates.agentId, agentId)))
     .limit(1);
 
-  if (!template) return c.json({ error: "Template not found" }, 404);
+  if (!template) return c.json({ error: "Template not found", code: "TEMPLATE_NOT_FOUND" }, 404);
 
   // If renaming, check for name conflict
   if (body.name && body.name !== template.name) {
@@ -133,7 +133,7 @@ app.patch("/:id", async (c) => {
       .limit(1);
 
     if (conflict) {
-      return c.json({ error: "Template with this name already exists" }, 409);
+      return c.json({ error: "Template with this name already exists", code: "ALREADY_EXISTS" }, 409);
     }
   }
 
@@ -172,7 +172,7 @@ app.delete("/:id", async (c) => {
     .where(and(eq(messageTemplates.id, templateId), eq(messageTemplates.agentId, agentId)))
     .limit(1);
 
-  if (!template) return c.json({ error: "Template not found" }, 404);
+  if (!template) return c.json({ error: "Template not found", code: "TEMPLATE_NOT_FOUND" }, 404);
 
   await db
     .delete(messageTemplates)

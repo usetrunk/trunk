@@ -44,7 +44,7 @@ export const authMiddleware = createMiddleware<AgentVariables>(
   async (c, next) => {
     const authHeader = c.req.header("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
-      return c.json({ error: "Missing or invalid Authorization header" }, 401);
+      return c.json({ error: "Missing or invalid Authorization header", code: "UNAUTHORIZED" }, 401);
     }
 
     const token = authHeader.slice(7);
@@ -57,7 +57,7 @@ export const authMiddleware = createMiddleware<AgentVariables>(
       .limit(1);
 
     if (!agent) {
-      return c.json({ error: "Invalid token" }, 401);
+      return c.json({ error: "Invalid token", code: "UNAUTHORIZED" }, 401);
     }
 
     c.set("agentId", agent.id);

@@ -17,11 +17,11 @@ app.post("/register", async (c) => {
   const rateLimit = await checkRateLimit(`register:${ip}`, 10, 60 * 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
-    return c.json({ error: "Rate limit exceeded", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
   if (!body.name) {
-    return c.json({ error: "name is required" }, 400);
+    return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
   }
 
   const secret = generateSecret();
@@ -136,7 +136,7 @@ app.put("/me/status", authMiddleware, async (c) => {
 app.get("/presence", authMiddleware, async (c) => {
   const agent = c.get("agent");
   if (!agent.workspaceId) {
-    return c.json({ error: "Not in a workspace" }, 400);
+    return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
   }
 
   const members = await db
@@ -196,12 +196,12 @@ app.get("/:id", authMiddleware, async (c) => {
 
   const allowed = await canMessage(myId, targetId);
   if (!allowed) {
-    return c.json({ error: "Not a contact" }, 403);
+    return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
   }
 
   const [target] = await db.select().from(agents).where(eq(agents.id, targetId)).limit(1);
   if (!target) {
-    return c.json({ error: "Agent not found" }, 404);
+    return c.json({ error: "Agent not found", code: "AGENT_NOT_FOUND" }, 404);
   }
 
   const meta = ((target.metadata ?? {}) as Record<string, unknown>);
@@ -231,13 +231,13 @@ app.put("/me/webhook", authMiddleware, async (c) => {
   const body = await c.req.json<{ url: string }>();
 
   if (!body.url) {
-    return c.json({ error: "url is required" }, 400);
+    return c.json({ error: "url is required", code: "MISSING_FIELD" }, 400);
   }
 
   try {
     new URL(body.url);
   } catch {
-    return c.json({ error: "Invalid URL" }, 400);
+    return c.json({ error: "Invalid URL", code: "INVALID_INPUT" }, 400);
   }
 
   const [updated] = await db
@@ -314,7 +314,7 @@ app.get("/me/webhook/deliveries", authMiddleware, async (c) => {
 app.post("/me/webhook/test", authMiddleware, async (c) => {
   const agent = c.get("agent");
   if (!agent.webhookUrl) {
-    return c.json({ error: "No webhook URL configured. Set one with PUT /agents/me/webhook" }, 400);
+    return c.json({ error: "No webhook URL configured. Set one with PUT /agents/me/webhook", code: "VALIDATION_ERROR" }, 400);
   }
 
   const testPayload = JSON.stringify({

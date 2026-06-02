@@ -18,7 +18,7 @@ app.get("/room/:roomId/facts", async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const scope = roomScope(roomId);
   const facts = await db
@@ -42,8 +42,8 @@ app.get("/room/:roomId/facts/:key", async (c) => {
   const roomId = c.req.param("roomId");
   const key = c.req.param("key");
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const [fact] = await db
     .select()
@@ -51,7 +51,7 @@ app.get("/room/:roomId/facts/:key", async (c) => {
     .where(and(eq(sharedFacts.scope, roomScope(roomId)), eq(sharedFacts.key, key)))
     .limit(1);
 
-  if (!fact) return c.json({ error: "Fact not found" }, 404);
+  if (!fact) return c.json({ error: "Fact not found", code: "NOT_FOUND" }, 404);
   return c.json({ key: fact.key, value: fact.value, version: fact.version, updated_by: fact.updatedBy, updated_at: fact.updatedAt });
 });
 
@@ -61,9 +61,9 @@ app.put("/room/:roomId/facts/:key", async (c) => {
   const key = c.req.param("key");
   const body = await c.req.json<{ value: unknown }>();
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!("value" in body)) return c.json({ error: "value is required" }, 400);
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!("value" in body)) return c.json({ error: "value is required", code: "MISSING_FIELD" }, 400);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const scope = roomScope(roomId);
   const ifMatch = c.req.header("If-Match");
@@ -75,7 +75,7 @@ app.put("/room/:roomId/facts/:key", async (c) => {
 
   if (existing.length > 0) {
     if (ifMatch && ifMatch !== String(existing[0].version)) {
-      return c.json({ error: "Version mismatch", current_version: existing[0].version }, 412);
+      return c.json({ error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version }, 412);
     }
     const nextVersion = existing[0].version + 1;
     await db
@@ -86,7 +86,7 @@ app.put("/room/:roomId/facts/:key", async (c) => {
     return c.json({ key, value: body.value, version: nextVersion, updated_by: agentId });
   } else {
     if (ifMatch && ifMatch !== "*") {
-      return c.json({ error: "Fact not found for If-Match" }, 412);
+      return c.json({ error: "Fact not found for If-Match", code: "NOT_FOUND" }, 412);
     }
     await db.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
   }
@@ -99,8 +99,8 @@ app.delete("/room/:roomId/facts/:key", async (c) => {
   const roomId = c.req.param("roomId");
   const key = c.req.param("key");
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   await db
     .delete(sharedFacts)
@@ -115,7 +115,7 @@ app.get("/workspace/:workspaceId/facts", async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
 
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const scope = workspaceScope(workspaceId);
   const facts = await db.select().from(sharedFacts).where(eq(sharedFacts.scope, scope));
@@ -130,11 +130,11 @@ app.get("/workspace/:workspaceId/facts/:key", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const key = c.req.param("key");
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const [fact] = await db.select().from(sharedFacts).where(and(eq(sharedFacts.scope, workspaceScope(workspaceId)), eq(sharedFacts.key, key))).limit(1);
-  if (!fact) return c.json({ error: "Fact not found" }, 404);
+  if (!fact) return c.json({ error: "Fact not found", code: "NOT_FOUND" }, 404);
   return c.json({ key: fact.key, value: fact.value, version: fact.version, updated_by: fact.updatedBy, updated_at: fact.updatedAt });
 });
 
@@ -144,9 +144,9 @@ app.put("/workspace/:workspaceId/facts/:key", async (c) => {
   const key = c.req.param("key");
   const body = await c.req.json<{ value: unknown }>();
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!("value" in body)) return c.json({ error: "value is required" }, 400);
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!("value" in body)) return c.json({ error: "value is required", code: "MISSING_FIELD" }, 400);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const scope = workspaceScope(workspaceId);
   const ifMatch = c.req.header("If-Match");
@@ -154,7 +154,7 @@ app.put("/workspace/:workspaceId/facts/:key", async (c) => {
 
   if (existing.length > 0) {
     if (ifMatch && ifMatch !== String(existing[0].version)) {
-      return c.json({ error: "Version mismatch", current_version: existing[0].version }, 412);
+      return c.json({ error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version }, 412);
     }
     const nextVersion = existing[0].version + 1;
     await db.update(sharedFacts).set({ value: body.value, version: nextVersion, updatedBy: agentId, updatedAt: new Date() }).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
@@ -162,7 +162,7 @@ app.put("/workspace/:workspaceId/facts/:key", async (c) => {
     return c.json({ key, value: body.value, version: nextVersion, updated_by: agentId });
   } else {
     if (ifMatch && ifMatch !== "*") {
-      return c.json({ error: "Fact not found for If-Match" }, 412);
+      return c.json({ error: "Fact not found for If-Match", code: "NOT_FOUND" }, 412);
     }
     await db.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
   }
@@ -175,8 +175,8 @@ app.delete("/workspace/:workspaceId/facts/:key", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const key = c.req.param("key");
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   await db.delete(sharedFacts).where(and(eq(sharedFacts.scope, workspaceScope(workspaceId)), eq(sharedFacts.key, key)));
   await audit(agentId, "fact.delete", "shared_fact", `${workspaceScope(workspaceId)}:${key}`, { workspace_id: workspaceId, key });
@@ -189,7 +189,7 @@ app.get("/:contactId/facts", async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
 
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const scope = contactScope(agentId, contactId);
   const facts = await db
@@ -213,8 +213,8 @@ app.get("/:contactId/facts/:key", async (c) => {
   const contactId = c.req.param("contactId");
   const key = c.req.param("key");
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const [fact] = await db
     .select()
@@ -222,7 +222,7 @@ app.get("/:contactId/facts/:key", async (c) => {
     .where(and(eq(sharedFacts.scope, contactScope(agentId, contactId)), eq(sharedFacts.key, key)))
     .limit(1);
 
-  if (!fact) return c.json({ error: "Fact not found" }, 404);
+  if (!fact) return c.json({ error: "Fact not found", code: "NOT_FOUND" }, 404);
   return c.json({ key: fact.key, value: fact.value, version: fact.version, updated_by: fact.updatedBy, updated_at: fact.updatedAt });
 });
 
@@ -232,9 +232,9 @@ app.put("/:contactId/facts/:key", async (c) => {
   const key = c.req.param("key");
   const body = await c.req.json<{ value: unknown }>();
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!("value" in body)) return c.json({ error: "value is required" }, 400);
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!("value" in body)) return c.json({ error: "value is required", code: "MISSING_FIELD" }, 400);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const scope = contactScope(agentId, contactId);
   const ifMatch = c.req.header("If-Match");
@@ -246,7 +246,7 @@ app.put("/:contactId/facts/:key", async (c) => {
 
   if (existing.length > 0) {
     if (ifMatch && ifMatch !== String(existing[0].version)) {
-      return c.json({ error: "Version mismatch", current_version: existing[0].version }, 412);
+      return c.json({ error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version }, 412);
     }
     const nextVersion = existing[0].version + 1;
     await db
@@ -257,7 +257,7 @@ app.put("/:contactId/facts/:key", async (c) => {
     return c.json({ key, value: body.value, version: nextVersion, updated_by: agentId });
   } else {
     if (ifMatch && ifMatch !== "*") {
-      return c.json({ error: "Fact not found for If-Match" }, 412);
+      return c.json({ error: "Fact not found for If-Match", code: "NOT_FOUND" }, 412);
     }
     await db.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
   }
@@ -270,8 +270,8 @@ app.delete("/:contactId/facts/:key", async (c) => {
   const contactId = c.req.param("contactId");
   const key = c.req.param("key");
 
-  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key" }, 400);
-  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+  if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   await db
     .delete(sharedFacts)

@@ -371,6 +371,24 @@ describe("Hono API behavior", () => {
     expect(body).toContain("Trunk");
   });
 
+  it("health endpoint returns status, version, and uptime", async () => {
+    const client = createClient();
+    const health = await client.health();
+
+    expect(health.status).toBe("ok");
+    expect(health.version).toBe("0.1.0");
+    expect(health.uptime).toEqual(expect.any(Number));
+    expect(health.uptime).toBeGreaterThanOrEqual(0);
+  });
+
+  it("ready endpoint returns database connectivity status", async () => {
+    const client = createClient();
+    const ready = await client.ready();
+
+    expect(ready.status).toBe("ready");
+    expect(ready.database).toBe("connected");
+  });
+
   it("register returns agent_id, secret, and pairing_code", async () => {
     const client = createClient();
 
@@ -475,6 +493,24 @@ describe("Hono API behavior", () => {
 
     await expect(send).rejects.toBeInstanceOf(TrunkApiError);
     await expect(send).rejects.toMatchObject({ status: 403, message: "Not a contact. Pair first." });
+    try { await send; } catch (e) {
+      const err = e as TrunkApiError;
+      expect(err.code).toBe("NOT_MEMBER");
+    }
+  });
+
+  it("error responses include structured error codes", async () => {
+    // Unauthorized request should include UNAUTHORIZED code
+    const client = createClient("bad-secret");
+    try {
+      await client.me();
+      throw new Error("should have thrown");
+    } catch (e) {
+      const err = e as TrunkApiError;
+      expect(err.status).toBe(401);
+      expect(err.code).toBe("UNAUTHORIZED");
+      expect(err.body).toMatchObject({ error: expect.any(String), code: "UNAUTHORIZED" });
+    }
   });
 
   it("sends to a contact and the recipient sees a pending inbound message", async () => {

@@ -15,7 +15,7 @@ app.post("/", async (c) => {
   const agentId = c.get("agentId");
   const body = await c.req.json<{ name: string; metadata?: Record<string, unknown> }>();
 
-  if (!body.name) return c.json({ error: "name is required" }, 400);
+  if (!body.name) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
 
   const pairingCode = generatePairingCode();
 
@@ -41,7 +41,7 @@ app.post("/join", async (c) => {
   const agentId = c.get("agentId");
   const body = await c.req.json<{ code: string }>();
 
-  if (!body.code) return c.json({ error: "code is required" }, 400);
+  if (!body.code) return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
 
   const [room] = await db
     .select()
@@ -49,7 +49,7 @@ app.post("/join", async (c) => {
     .where(eq(rooms.pairingCode, body.code.toUpperCase()))
     .limit(1);
 
-  if (!room) return c.json({ error: "Invalid room code" }, 404);
+  if (!room) return c.json({ error: "Invalid room code", code: "ROOM_NOT_FOUND" }, 404);
 
   // Check if already a member
   const existing = await db
@@ -115,7 +115,7 @@ app.get("/:roomId/members", async (c) => {
     .limit(100);
 
   if (!myMembership.some((m) => m.agentId === agentId)) {
-    return c.json({ error: "Not a member of this room" }, 403);
+    return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   }
 
   const memberIds = myMembership.map((m) => m.agentId);
@@ -139,7 +139,7 @@ app.patch("/:roomId", async (c) => {
   const body = await c.req.json<{ name?: string; metadata?: Record<string, unknown> }>();
 
   if (!body.name && !body.metadata) {
-    return c.json({ error: "name or metadata is required" }, 400);
+    return c.json({ error: "name or metadata is required", code: "MISSING_FIELD" }, 400);
   }
 
   // Verify creator/admin role
@@ -149,9 +149,9 @@ app.patch("/:roomId", async (c) => {
     .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
     .limit(1);
 
-  if (!membership) return c.json({ error: "Not a member of this room" }, 403);
+  if (!membership) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   if (membership.role !== "creator" && membership.role !== "admin") {
-    return c.json({ error: "Only creators and admins can update rooms" }, 403);
+    return c.json({ error: "Only creators and admins can update rooms", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
   const updates: Record<string, unknown> = {};
@@ -179,8 +179,8 @@ app.post("/:roomId/kick", async (c) => {
   const roomId = c.req.param("roomId");
   const body = await c.req.json<{ agent_id: string }>();
 
-  if (!body.agent_id) return c.json({ error: "agent_id is required" }, 400);
-  if (body.agent_id === agentId) return c.json({ error: "Cannot kick yourself" }, 400);
+  if (!body.agent_id) return c.json({ error: "agent_id is required", code: "MISSING_FIELD" }, 400);
+  if (body.agent_id === agentId) return c.json({ error: "Cannot kick yourself", code: "SELF_ACTION" }, 400);
 
   // Verify caller is creator/admin
   const callerMembership = await db
@@ -190,17 +190,17 @@ app.post("/:roomId/kick", async (c) => {
     .limit(100);
 
   const caller = callerMembership.find((m) => m.agentId === agentId);
-  if (!caller) return c.json({ error: "Not a member of this room" }, 403);
+  if (!caller) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   if (caller.role !== "creator" && caller.role !== "admin") {
-    return c.json({ error: "Only creators and admins can kick members" }, 403);
+    return c.json({ error: "Only creators and admins can kick members", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
   const target = callerMembership.find((m) => m.agentId === body.agent_id);
-  if (!target) return c.json({ error: "Target is not a member" }, 404);
+  if (!target) return c.json({ error: "Target is not a member", code: "NOT_FOUND" }, 404);
 
   // Admins cannot kick creators or other admins
   if (caller.role === "admin" && (target.role === "creator" || target.role === "admin")) {
-    return c.json({ error: "Admins cannot kick creators or other admins" }, 403);
+    return c.json({ error: "Admins cannot kick creators or other admins", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
   await db
@@ -218,11 +218,11 @@ app.put("/:roomId/members/:agentId/role", async (c) => {
   const body = await c.req.json<{ role: string }>();
 
   if (!body.role || !["admin", "member"].includes(body.role)) {
-    return c.json({ error: "role must be 'admin' or 'member'" }, 400);
+    return c.json({ error: "role must be 'admin' or 'member'", code: "INVALID_INPUT" }, 400);
   }
 
   if (targetId === callerId) {
-    return c.json({ error: "Cannot change your own role" }, 400);
+    return c.json({ error: "Cannot change your own role", code: "SELF_ACTION" }, 400);
   }
 
   // Verify caller is creator
@@ -232,9 +232,9 @@ app.put("/:roomId/members/:agentId/role", async (c) => {
     .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, callerId)))
     .limit(1);
 
-  if (!callerMembership) return c.json({ error: "Not a member of this room" }, 403);
+  if (!callerMembership) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   if (callerMembership.role !== "creator") {
-    return c.json({ error: "Only the creator can change roles" }, 403);
+    return c.json({ error: "Only the creator can change roles", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
   // Verify target is a member
@@ -244,7 +244,7 @@ app.put("/:roomId/members/:agentId/role", async (c) => {
     .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, targetId)))
     .limit(1);
 
-  if (!targetMembership) return c.json({ error: "Target is not a member" }, 404);
+  if (!targetMembership) return c.json({ error: "Target is not a member", code: "NOT_FOUND" }, 404);
 
   await db
     .update(roomMembers)
@@ -266,9 +266,9 @@ app.delete("/:roomId", async (c) => {
     .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
     .limit(1);
 
-  if (!membership) return c.json({ error: "Not a member of this room" }, 403);
+  if (!membership) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   if (membership.role !== "creator") {
-    return c.json({ error: "Only the creator can delete a room" }, 403);
+    return c.json({ error: "Only the creator can delete a room", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
   // Delete all members first, then the room
@@ -291,7 +291,7 @@ app.post("/:roomId/leave", async (c) => {
     .limit(1);
 
   if (!membership) {
-    return c.json({ error: "Not a member of this room" }, 403);
+    return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   }
 
   await db

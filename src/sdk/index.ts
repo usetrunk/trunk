@@ -630,6 +630,18 @@ export type MessageEditHistoryResponse = {
   edit_count: number;
 };
 
+export type HealthResponse = {
+  status: "ok";
+  version: string;
+  uptime: number;
+};
+
+export type ReadyResponse = {
+  status: "ready" | "unavailable";
+  database: "connected" | "disconnected";
+  code?: string;
+};
+
 export type TrunkClientOptions = {
   baseUrl: string;
   secret?: string;
@@ -639,6 +651,7 @@ export type TrunkClientOptions = {
 export class TrunkApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  readonly code: string | undefined;
   readonly retryAfterSeconds: number | undefined;
 
   constructor(status: number, body: unknown, retryAfterSeconds?: number) {
@@ -650,6 +663,10 @@ export class TrunkApiError extends Error {
     this.name = "TrunkApiError";
     this.status = status;
     this.body = body;
+    this.code =
+      typeof body === "object" && body !== null && "code" in body
+        ? String((body as { code: unknown }).code)
+        : undefined;
     this.retryAfterSeconds = retryAfterSeconds;
   }
 
@@ -671,6 +688,14 @@ export class TrunkClient {
 
   setSecret(secret: string): void {
     this.secret = secret;
+  }
+
+  health(): Promise<HealthResponse> {
+    return this.request("/health", { auth: false });
+  }
+
+  ready(): Promise<ReadyResponse> {
+    return this.request("/ready", { auth: false });
   }
 
   register(input: RegisterRequest): Promise<RegisterResponse> {

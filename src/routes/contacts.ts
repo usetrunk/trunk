@@ -16,7 +16,7 @@ app.post("/pair", async (c) => {
   const body = await c.req.json<{ code: string; alias?: string }>();
 
   if (!body.code) {
-    return c.json({ error: "code is required" }, 400);
+    return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
   }
 
   const code = body.code.toUpperCase();
@@ -30,7 +30,7 @@ app.post("/pair", async (c) => {
 
   if (target) {
     if (target.id === agentId) {
-      return c.json({ error: "Cannot pair with yourself" }, 400);
+      return c.json({ error: "Cannot pair with yourself", code: "SELF_ACTION" }, 400);
     }
 
     // Check if already paired (in either direction)
@@ -46,7 +46,7 @@ app.post("/pair", async (c) => {
       .limit(1);
 
     if (existing.length > 0) {
-      return c.json({ error: "Already paired" }, 409);
+      return c.json({ error: "Already paired", code: "ALREADY_PAIRED" }, 409);
     }
 
     await db.insert(contacts).values({
@@ -72,13 +72,13 @@ app.post("/pair", async (c) => {
     .limit(1);
 
   if (!workspace) {
-    return c.json({ error: "Invalid pairing code" }, 404);
+    return c.json({ error: "Invalid pairing code", code: "NOT_FOUND" }, 404);
   }
 
   // Don't allow workspace members to pair with their own workspace
   const [callerAgent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (callerAgent?.workspaceId === workspace.id) {
-    return c.json({ error: "Cannot pair with your own workspace" }, 400);
+    return c.json({ error: "Cannot pair with your own workspace", code: "SELF_ACTION" }, 400);
   }
 
   // Check if already paired with this workspace
@@ -89,7 +89,7 @@ app.post("/pair", async (c) => {
     .limit(1);
 
   if (existingWc.length > 0) {
-    return c.json({ error: "Already paired with this workspace" }, 409);
+    return c.json({ error: "Already paired with this workspace", code: "ALREADY_PAIRED" }, 409);
   }
 
   await db.insert(workspaceContacts).values({
@@ -265,7 +265,7 @@ app.patch("/:agentId", async (c) => {
   const body = await c.req.json<{ alias: string | null }>();
 
   if (body.alias === undefined) {
-    return c.json({ error: "alias is required" }, 400);
+    return c.json({ error: "alias is required", code: "MISSING_FIELD" }, 400);
   }
 
   // Find the contact row in either direction
@@ -280,7 +280,7 @@ app.patch("/:agentId", async (c) => {
     )
     .limit(1);
 
-  if (!row) return c.json({ error: "Not a contact" }, 404);
+  if (!row) return c.json({ error: "Not a contact", code: "CONTACT_NOT_FOUND" }, 404);
 
   // Update the alias for whichever side I am
   if (row.agentA === myId) {
@@ -319,7 +319,7 @@ app.delete("/:agentId", async (c) => {
 app.post("/:agentId/block", async (c) => {
   const myId = c.get("agentId");
   const targetId = c.req.param("agentId");
-  if (myId === targetId) return c.json({ error: "Cannot block yourself" }, 400);
+  if (myId === targetId) return c.json({ error: "Cannot block yourself", code: "SELF_ACTION" }, 400);
 
   const body: { reason?: string } = await c.req.json<{ reason?: string }>().catch(() => ({}));
 
@@ -350,7 +350,7 @@ app.delete("/:agentId/block", async (c) => {
     .delete(blockedContacts)
     .where(and(eq(blockedContacts.agentId, myId), eq(blockedContacts.blockedAgentId, targetId)))
     .returning();
-  if (deleted.length === 0) return c.json({ error: "Not blocked" }, 404);
+  if (deleted.length === 0) return c.json({ error: "Not blocked", code: "NOT_FOUND" }, 404);
   await audit(myId, "contact.unblock", "agent", targetId);
   return c.json({ ok: true });
 });
@@ -361,7 +361,7 @@ app.put("/:agentId/notes", async (c) => {
   const targetId = c.req.param("agentId");
   const body = await c.req.json<{ content: string }>();
   if (!body.content || typeof body.content !== "string") {
-    return c.json({ error: "content is required" }, 400);
+    return c.json({ error: "content is required", code: "MISSING_FIELD" }, 400);
   }
 
   // Check for existing note
@@ -412,7 +412,7 @@ app.delete("/:agentId/notes", async (c) => {
     .delete(contactNotes)
     .where(and(eq(contactNotes.agentId, myId), eq(contactNotes.contactAgentId, targetId)))
     .returning();
-  if (deleted.length === 0) return c.json({ error: "No note found" }, 404);
+  if (deleted.length === 0) return c.json({ error: "No note found", code: "NOT_FOUND" }, 404);
   await audit(myId, "contact.note_delete", "agent", targetId);
   return c.json({ ok: true });
 });
@@ -454,7 +454,7 @@ app.put("/:id/notifications", async (c) => {
   }>();
 
   if (body.urgency_filter && !["all", "sync_only"].includes(body.urgency_filter)) {
-    return c.json({ error: "urgency_filter must be 'all' or 'sync_only'" }, 400);
+    return c.json({ error: "urgency_filter must be 'all' or 'sync_only'", code: "INVALID_INPUT" }, 400);
   }
 
   const [existing] = await db
@@ -511,7 +511,7 @@ app.post("/:id/tags", async (c) => {
   const body = await c.req.json<{ tag: string }>();
 
   if (!body.tag || typeof body.tag !== "string") {
-    return c.json({ error: "tag is required" }, 400);
+    return c.json({ error: "tag is required", code: "MISSING_FIELD" }, 400);
   }
 
   const tag = body.tag.toLowerCase().slice(0, 50);
@@ -555,7 +555,7 @@ app.delete("/:id/tags/:tag", async (c) => {
     ))
     .returning();
 
-  if (deleted.length === 0) return c.json({ error: "Tag not found" }, 404);
+  if (deleted.length === 0) return c.json({ error: "Tag not found", code: "NOT_FOUND" }, 404);
   await audit(agentId, "contact.tag_remove", "agent", contactId, { tag });
   return c.json({ ok: true });
 });
