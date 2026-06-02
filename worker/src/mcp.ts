@@ -25,13 +25,36 @@ export function createMcpServer() {
   server.tool(
     "trunk_register",
     "Register a new agent with Trunk. Returns your secret (save it!) and pairing code (share it with contacts).",
-    { name: z.string().describe("Display name for your agent"), owner: z.string().optional().describe("Your name (human operator)") },
-    async ({ name, owner }) => {
+    {
+      name: z.string().describe("Display name for your agent"),
+      owner: z.string().optional().describe("Your name (human operator)"),
+      role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
+      workspace_code: z.string().optional().describe("Workspace pairing code to auto-join on registration"),
+      projects: z.array(z.string()).optional().describe("Project names this agent works on"),
+      metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to attach to your profile"),
+    },
+    async ({ name, owner, role, workspace_code, projects, metadata }) => {
       const result = await relay("/agents/register", {
         method: "POST",
         body: { name, owner },
       });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+
+      // Sync extended profile fields if provided
+      if (result.secret && (role !== undefined || projects !== undefined || metadata !== undefined)) {
+        const body: Record<string, unknown> = {};
+        if (role !== undefined) body.role = role;
+        if (projects !== undefined) body.projects = projects;
+        if (metadata !== undefined) body.metadata = metadata;
+        await relay("/agents/me", { method: "PATCH", secret: result.secret, body });
+      }
+
+      // Auto-join workspace if code provided
+      let workspaceResult: unknown;
+      if (result.secret && workspace_code) {
+        workspaceResult = await relay("/workspaces/join", { method: "POST", secret: result.secret, body: { code: workspace_code } });
+      }
+
+      return { content: [{ type: "text", text: JSON.stringify({ ...result, role, projects, workspace: workspaceResult }, null, 2) }] };
     }
   );
 
@@ -41,12 +64,13 @@ export function createMcpServer() {
     {
       secret: z.string().describe("Your agent secret"),
       code: z.string().describe("The other agent's pairing code"),
+      alias: z.string().optional().describe("Friendly name for this contact"),
     },
-    async ({ secret, code }) => {
+    async ({ secret, code, alias }) => {
       const result = await relay("/contacts/pair", {
         method: "POST",
         secret,
-        body: { code },
+        body: { code, alias },
       });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
@@ -254,6 +278,61 @@ export function createMcpServer() {
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
       return { content: [{ type: "text", text: "Unknown action" }] };
+    }
+  );
+
+  server.tool(
+    "trunk_workspace",
+    "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["create", "join", "status", "members", "leave"]).describe("Action to perform"),
+      name: z.string().optional().describe("Workspace name (for create)"),
+      code: z.string().optional().describe("Workspace pairing code (for join)"),
+    },
+    async ({ secret, action, name, code }) => {
+      if (action === "create") {
+        const result = await relay("/workspaces", { method: "POST", secret, body: { name } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "join") {
+        const result = await relay("/workspaces/join", { method: "POST", secret, body: { code } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "status") {
+        const result = await relay("/workspaces/me", { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "members") {
+        const ws = await relay("/workspaces/me", { secret });
+        if (!ws.workspace?.id) return { content: [{ type: "text", text: JSON.stringify({ error: "Not in a workspace" }) }] };
+        const result = await relay(`/workspaces/${ws.workspace.id}/members`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "leave") {
+        const result = await relay("/workspaces/leave", { method: "POST", secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      return { content: [{ type: "text", text: "Unknown action" }] };
+    }
+  );
+
+  server.tool(
+    "trunk_config",
+    "Update your agent profile on the server. Set role, projects, or arbitrary metadata without re-registering.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
+      projects: z.array(z.string()).optional().describe("Project names this agent works on"),
+      metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to merge into your profile"),
+    },
+    async ({ secret, role, projects, metadata }) => {
+      const body: Record<string, unknown> = {};
+      if (role !== undefined) body.role = role;
+      if (projects !== undefined) body.projects = projects;
+      if (metadata !== undefined) body.metadata = metadata;
+      const result = await relay("/agents/me", { method: "PATCH", secret, body });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
 

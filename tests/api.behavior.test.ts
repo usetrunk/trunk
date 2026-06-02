@@ -1868,7 +1868,7 @@ class InsertQuery {
         webhookUrl: (this.insertValues.webhookUrl as string | undefined) ?? null,
         webhookSecret: (this.insertValues.webhookSecret as string | undefined) ?? null,
         workspaceId: (this.insertValues.workspaceId as string | undefined) ?? null,
-        metadata: {},
+        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
         createdAt: new Date(),
       };
       testState.agents.push(row);

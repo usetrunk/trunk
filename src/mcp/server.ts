@@ -18,17 +18,44 @@ export function createTrunkMcpServer() {
   server.tool(
     "trunk_register",
     "Register a new agent with Trunk. Returns your secret (save it!) and pairing code (share it with contacts).",
-    { name: z.string().describe("Display name for your agent"), owner: z.string().optional().describe("Your name (human operator)") },
-    async ({ name, owner }) => {
+    {
+      name: z.string().describe("Display name for your agent"),
+      owner: z.string().optional().describe("Your name (human operator)"),
+      role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
+      workspace_code: z.string().optional().describe("Workspace pairing code to auto-join on registration"),
+      projects: z.array(z.string()).optional().describe("Project names this agent works on"),
+      metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to attach to your profile"),
+    },
+    async ({ name, owner, role, workspace_code, projects, metadata: extraMeta }) => {
       const secret = generateSecret();
       const secretHash = await hashSecretAsync(secret);
       const pairingCode = generatePairingCode();
       const webhookSecret = generateSecret();
 
+      // Build metadata from extended params
+      const meta: Record<string, unknown> = {};
+      if (role !== undefined) meta.role = role;
+      if (projects !== undefined) meta.projects = projects;
+      if (extraMeta !== undefined) Object.assign(meta, extraMeta);
+
       const [agent] = await db
         .insert(agents)
-        .values({ name, owner, secretHash, pairingCode, webhookSecret })
+        .values({ name, owner, secretHash, pairingCode, webhookSecret, metadata: Object.keys(meta).length > 0 ? meta : undefined })
         .returning();
+
+      // Auto-join workspace if code provided
+      let workspaceResult: Record<string, unknown> | undefined;
+      if (workspace_code) {
+        const [workspace] = await db
+          .select()
+          .from(workspaces)
+          .where(eq(workspaces.pairingCode, workspace_code.toUpperCase()))
+          .limit(1);
+        if (workspace) {
+          await db.update(agents).set({ workspaceId: workspace.id }).where(eq(agents.id, agent.id));
+          workspaceResult = { joined: true, workspace_id: workspace.id, name: workspace.name };
+        }
+      }
 
       return {
         content: [{
@@ -38,6 +65,9 @@ export function createTrunkMcpServer() {
             secret,
             pairing_code: agent.pairingCode,
             webhook_secret: webhookSecret,
+            role,
+            projects,
+            workspace: workspaceResult,
             instructions: "Save your secret — it won't be shown again. Share your pairing_code with contacts so they can pair with you.",
           }, null, 2),
         }],
@@ -627,6 +657,42 @@ export function createTrunkMcpServer() {
       }
 
       return errorResult("Unknown action");
+    }
+  );
+
+  server.tool(
+    "trunk_config",
+    "Update your agent profile. Set role, projects, or arbitrary metadata without re-registering.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
+      projects: z.array(z.string()).optional().describe("Project names this agent works on"),
+      metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to merge into your profile"),
+    },
+    async ({ secret, role, projects, metadata }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const existing = ((agent.metadata ?? {}) as Record<string, unknown>);
+      const newMeta: Record<string, unknown> = { ...existing };
+      if (role !== undefined) newMeta.role = role;
+      if (projects !== undefined) newMeta.projects = projects;
+      if (metadata !== undefined) Object.assign(newMeta, metadata);
+
+      const [updated] = await db.update(agents).set({ metadata: newMeta }).where(eq(agents.id, agent.id)).returning();
+      const meta = ((updated.metadata ?? {}) as Record<string, unknown>);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            agent_id: updated.id,
+            name: updated.name,
+            role: meta.role,
+            projects: meta.projects,
+            metadata: meta,
+          }, null, 2),
+        }],
+      };
     }
   );
 

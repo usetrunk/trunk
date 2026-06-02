@@ -196,21 +196,15 @@ ${loopEnabled ? "while true; do" : ""}
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
 
-  echo "[harness] Loading claude (no --bare = full startup, may take 30-60s)..."
+  # Run directly on the TTY (no pipes — pipes cause stdout buffering)
   ${CLAUDE_BIN} \\
     --dangerously-skip-permissions \\
     --mcp-config '${mcpConfigPath}' \\
-    -p "$CURRENT_PROMPT" 2>&1 | tee "$LOG_FILE"
+    -p "$CURRENT_PROMPT"
 
-  EXIT_CODE=\${PIPESTATUS[0]}
+  EXIT_CODE=$?
   echo ""
   echo "[harness] ${config.name} exited with code $EXIT_CODE"
-
-  # Stop looping on credit/billing errors
-  if grep -qi "credit\\|balance.*low\\|billing\\|rate limit" "$LOG_FILE" 2>/dev/null; then
-    echo "[harness] ${config.name} hit a billing error — stopping. Fix credits and restart."
-    break
-  fi
 
 ${loopEnabled ? `
   echo "[harness] ${config.name} will respawn in ${loopDelay}s... (Ctrl+C to stop)"
