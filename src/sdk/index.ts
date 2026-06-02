@@ -724,6 +724,10 @@ export class TrunkClient {
     return this.request("/workspaces/leave", { method: "POST" });
   }
 
+  updateWorkspace(input: { name?: string; metadata?: Record<string, unknown> }): Promise<WorkspaceResponse & { metadata?: Record<string, unknown> }> {
+    return this.request("/workspaces/me", { method: "PATCH", body: input });
+  }
+
   workspaceMembers(workspaceId: string): Promise<WorkspaceMembersResponse> {
     return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/members`);
   }

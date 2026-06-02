@@ -2174,6 +2174,34 @@ describe("Hono API behavior", () => {
     expect(res.status).toBe(403);
   });
 
+  // --- Workspace update ---
+
+  it("SDK updateWorkspace changes workspace name", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Original WS" });
+    const updated = await alphaClient.updateWorkspace({ name: "Updated WS" });
+    expect(updated.name).toBe("Updated WS");
+    expect(updated.id).toBe(ws.id);
+  });
+
+  it("non-member cannot update workspace", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Protected WS" });
+
+    // Beta is not in the workspace
+    const res = await app.request("/workspaces/me", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ name: "Hacked" }),
+    });
+    expect(res.status).toBe(404); // Not in a workspace
+  });
+
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

@@ -670,14 +670,15 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_workspace",
-    "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave.",
+    "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave, update.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "status", "members", "leave"]).describe("Action to perform"),
-      name: z.string().optional().describe("Workspace name (for create)"),
+      action: z.enum(["create", "join", "status", "members", "leave", "update"]).describe("Action to perform"),
+      name: z.string().optional().describe("Workspace name (for create/update)"),
       code: z.string().optional().describe("Workspace pairing code (for join)"),
+      metadata: z.record(z.unknown()).optional().describe("Workspace metadata (for update)"),
     },
-    async ({ secret, action, name, code }) => {
+    async ({ secret, action, name, code, metadata }) => {
       if (action === "create") {
         const result = await relay("/workspaces", { method: "POST", secret, body: { name } });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -698,6 +699,10 @@ export function createMcpServer() {
       }
       if (action === "leave") {
         const result = await relay("/workspaces/leave", { method: "POST", secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "update") {
+        const result = await relay("/workspaces/me", { method: "PATCH", secret, body: { name, metadata } });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
       return { content: [{ type: "text", text: "Unknown action" }] };

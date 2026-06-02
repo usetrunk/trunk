@@ -882,13 +882,14 @@ server.tool(
 
 server.tool(
   "trunk_workspace",
-  "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave.",
+  "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave, update.",
   {
-    action: z.enum(["create", "join", "status", "members", "leave"]).describe("Action to perform"),
-    name: z.string().optional().describe("Workspace name (for create)"),
+    action: z.enum(["create", "join", "status", "members", "leave", "update"]).describe("Action to perform"),
+    name: z.string().optional().describe("Workspace name (for create/update)"),
     code: z.string().optional().describe("Workspace pairing code (for join)"),
+    metadata: z.record(z.unknown()).optional().describe("Workspace metadata (for update)"),
   },
-  async ({ action, name, code }) => {
+  async ({ action, name, code, metadata }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -914,6 +915,10 @@ server.tool(
     }
     if (action === "leave") {
       const result = await relay("/workspaces/leave", { method: "POST", secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "update") {
+      const result = await relay("/workspaces/me", { method: "PATCH", secret: config.secret, body: { name, metadata } });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     return { content: [{ type: "text", text: "Unknown action" }], isError: true };

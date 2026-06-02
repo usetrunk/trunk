@@ -122,6 +122,42 @@ app.get("/me", async (c) => {
   });
 });
 
+// Update workspace name/metadata
+app.patch("/me", async (c) => {
+  const agentId = c.get("agentId");
+
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
+  if (!agent?.workspaceId) {
+    return c.json({ error: "Not in a workspace" }, 404);
+  }
+
+  const body = await c.req.json<{ name?: string; metadata?: Record<string, unknown> }>();
+  if (!body.name && !body.metadata) {
+    return c.json({ error: "name or metadata is required" }, 400);
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (body.name) updates.name = body.name;
+  if (body.metadata) updates.metadata = body.metadata;
+
+  const [updated] = await db
+    .update(workspaces)
+    .set(updates)
+    .where(eq(workspaces.id, agent.workspaceId))
+    .returning();
+
+  await audit(agentId, "workspace.update", "workspace", agent.workspaceId, updates);
+
+  return c.json({
+    id: updated.id,
+    name: updated.name,
+    owner: updated.owner,
+    pairing_code: updated.pairingCode,
+    metadata: updated.metadata,
+    created_at: updated.createdAt,
+  });
+});
+
 // Leave workspace
 app.post("/leave", async (c) => {
   const agentId = c.get("agentId");

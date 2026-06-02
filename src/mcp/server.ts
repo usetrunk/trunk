@@ -1324,14 +1324,15 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_workspace",
-    "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave.",
+    "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave, update.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "status", "members", "leave"]).describe("Action to perform"),
-      name: z.string().optional().describe("Workspace name (for create)"),
+      action: z.enum(["create", "join", "status", "members", "leave", "update"]).describe("Action to perform"),
+      name: z.string().optional().describe("Workspace name (for create/update)"),
       code: z.string().optional().describe("Workspace pairing code (for join)"),
+      metadata: z.record(z.unknown()).optional().describe("Workspace metadata (for update)"),
     },
-    async ({ secret, action, name, code }) => {
+    async ({ secret, action, name, code, metadata }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -1437,6 +1438,16 @@ export function createTrunkMcpServer() {
         return {
           content: [{ type: "text", text: JSON.stringify({ left: true, message: "Left workspace." }, null, 2) }],
         };
+      }
+
+      if (action === "update") {
+        if (!agent.workspaceId) return errorResult("Not in a workspace");
+        if (!name && !metadata) return errorResult("name or metadata is required for update");
+        const updates: Record<string, unknown> = {};
+        if (name) updates.name = name;
+        if (metadata) updates.metadata = metadata;
+        const [updated] = await db.update(workspaces).set(updates).where(eq(workspaces.id, agent.workspaceId)).returning();
+        return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, name: updated.name, pairing_code: updated.pairingCode, metadata: updated.metadata }, null, 2) }] };
       }
 
       return errorResult("Unknown action");
