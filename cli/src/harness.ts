@@ -120,8 +120,9 @@ function spawnAgent(config: AgentConfig): ChildProcess {
     return null as unknown as ChildProcess;
   }
 
-  // Build MCP config for this agent so it gets Trunk tools in -p mode
-  const mcpConfig = JSON.stringify({
+  // Write MCP config to a temp file so claude can load Trunk tools in -p mode
+  const mcpConfigPath = join(STATE_DIR, `mcp-${config.profile}.json`);
+  writeFileSync(mcpConfigPath, JSON.stringify({
     mcpServers: {
       trunk: {
         type: "stdio",
@@ -130,14 +131,14 @@ function spawnAgent(config: AgentConfig): ChildProcess {
         env: { TRUNK_PROFILE: config.profile },
       },
     },
-  });
+  }, null, 2));
 
   const child = spawn(CLAUDE_BIN, [
     "--dangerously-skip-permissions",
     "-p",
     fullPrompt,
     "--mcp-config",
-    mcpConfig,
+    mcpConfigPath,
   ], {
     cwd: expandedCwd,
     env,
