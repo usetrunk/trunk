@@ -82,7 +82,9 @@ Commands:
   daemon start --execute
                    Execute eligible handoff/question messages through claude -p
   daemon status    Check if daemon is running
-  harness start    Spawn all agents from agents.json
+  harness start    Start agents in zellij (subscription credits)
+  harness start --api  Start agents with claude -p (API credits)
+  harness attach   Attach to the zellij agent session
   harness spawn    Spawn a single agent
   harness list     Show running agents
   harness stop     Stop an agent
