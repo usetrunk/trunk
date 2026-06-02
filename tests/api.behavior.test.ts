@@ -1701,6 +1701,35 @@ describe("Hono API behavior", () => {
     expect(thread.messages[0].editedAt).toBeDefined();
   });
 
+  // --- Inbox stats tests ---
+
+  it("returns inbox stats with unread count and type breakdown", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "msg2" } });
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "msg3" } });
+
+    const stats = await betaClient.inboxStats();
+    expect(stats.unread).toBe(3);
+    expect(stats.total).toBe(3);
+    expect(stats.by_type).toEqual({ update: 1, question: 2 });
+  });
+
+  it("inbox stats reflects acked messages correctly", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const m1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg2" } });
+
+    await betaClient.ack(m1.id);
+
+    const stats = await betaClient.inboxStats();
+    expect(stats.unread).toBe(1);
+    expect(stats.total).toBe(2);
+    expect(stats.by_status.processed).toBe(1);
+  });
+
   // --- Sent messages (outbox) tests ---
 
   it("returns sent messages for the authenticated agent", async () => {

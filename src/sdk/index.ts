@@ -439,6 +439,10 @@ export class TrunkClient {
     return this.request(`/messages/inbox${query ? `?${query}` : ""}`);
   }
 
+  inboxStats(): Promise<{ unread: number; total: number; by_type: Record<string, number>; by_status: Record<string, number> }> {
+    return this.request("/messages/inbox/stats");
+  }
+
   sent(options: SentOptions = {}): Promise<MessagesResponse> {
     const search = new URLSearchParams();
     if (options.to) search.set("to", options.to);

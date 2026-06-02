@@ -204,6 +204,33 @@ app.get("/inbox", async (c) => {
   return c.json({ messages: visible.slice(0, limit) });
 });
 
+// Get inbox stats (unread count + breakdown by type)
+app.get("/inbox/stats", async (c) => {
+  const agentId = c.get("agentId");
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.toAgent, agentId));
+
+  const unread = rows.filter((row) => row.status === "pending" || row.status === "delivered");
+  const byType: Record<string, number> = {};
+  const byStatus: Record<string, number> = {};
+  for (const row of unread) {
+    byType[row.type] = (byType[row.type] || 0) + 1;
+  }
+  for (const row of rows.filter((r) => r.status !== "deleted")) {
+    byStatus[row.status] = (byStatus[row.status] || 0) + 1;
+  }
+
+  return c.json({
+    unread: unread.length,
+    total: rows.filter((r) => r.status !== "deleted").length,
+    by_type: byType,
+    by_status: byStatus,
+  });
+});
+
 // Get sent messages (outbox)
 app.get("/sent", async (c) => {
   const agentId = c.get("agentId");

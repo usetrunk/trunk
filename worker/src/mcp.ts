@@ -122,6 +122,16 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_inbox_stats",
+    "Get inbox summary — unread count, total messages, breakdown by type and status.",
+    { secret: z.string().describe("Your agent secret") },
+    async ({ secret }) => {
+      const result = await relay("/messages/inbox/stats", { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_sent",
     "View messages you have sent (outbox). Filter by recipient or message type.",
     {

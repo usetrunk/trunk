@@ -232,6 +232,19 @@ server.tool(
 );
 
 server.tool(
+  "trunk_inbox_stats",
+  "Get inbox summary — unread count, total messages, breakdown by type and status.",
+  {},
+  async () => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/messages/inbox/stats", { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_sent",
   "View messages you have sent (outbox). Filter by recipient or message type.",
   {

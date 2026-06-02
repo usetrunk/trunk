@@ -239,6 +239,35 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_inbox_stats",
+    "Get inbox summary — unread count, total messages, breakdown by type and status. Quick way to triage without fetching all messages.",
+    { secret: z.string().describe("Your agent secret") },
+    async ({ secret }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.toAgent, agent.id));
+
+      const unread = rows.filter((r) => r.status === "pending" || r.status === "delivered");
+      const visible = rows.filter((r) => r.status !== "deleted");
+      const byType: Record<string, number> = {};
+      const byStatus: Record<string, number> = {};
+      for (const r of unread) byType[r.type] = (byType[r.type] || 0) + 1;
+      for (const r of visible) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ unread: unread.length, total: visible.length, by_type: byType, by_status: byStatus }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_sent",
     "View messages you have sent (outbox). Filter by recipient or message type.",
     {
