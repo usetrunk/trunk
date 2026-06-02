@@ -349,6 +349,52 @@ export function createMcpServer() {
     }
   );
 
+  // --- Documents ---
+
+  server.tool(
+    "trunk_document",
+    "Manage shared documents with a contact. Actions: create, list, get, update.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["create", "list", "get", "update"]).describe("Action to perform"),
+      contact_id: z.string().describe("Agent ID of the contact (documents are scoped to a contact pair)"),
+      doc_id: z.string().optional().describe("Document ID (for get, update)"),
+      name: z.string().optional().describe("Document name (for create)"),
+      body: z.string().optional().describe("Document body (for create, update)"),
+      content_type: z.string().optional().describe("Content type (for create, default: text/markdown)"),
+    },
+    async ({ secret, action, contact_id, doc_id, name, body, content_type }) => {
+      if (action === "create") {
+        if (!name || !body) return { content: [{ type: "text", text: "Error: name and body are required for create" }], isError: true };
+        const result = await relay(`/documents/${contact_id}`, { method: "POST", secret, body: { name, body, content_type } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (action === "list") {
+        const result = await relay(`/documents/${contact_id}`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (action === "get") {
+        if (!doc_id) return { content: [{ type: "text", text: "Error: doc_id is required for get" }], isError: true };
+        const result = await relay(`/documents/${contact_id}/${doc_id}`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (action === "update") {
+        if (!doc_id || !body) return { content: [{ type: "text", text: "Error: doc_id and body are required for update" }], isError: true };
+        const payload: Record<string, unknown> = { body };
+        if (name) payload.name = name;
+        const result = await relay(`/documents/${contact_id}/${doc_id}`, { method: "PUT", secret, body: payload });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      return { content: [{ type: "text", text: "Error: Unknown action" }], isError: true };
+    }
+  );
+
+  // --- Billing ---
+
   server.tool(
     "trunk_billing",
     "Check billing status, create a checkout session to upgrade, or open the billing portal. Actions: status, checkout, portal.",

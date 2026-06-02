@@ -1,7 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions } from "../db/schema.js";
+import { contactScope, verifyContactAccess } from "../lib/context.js";
 import { eq, or, and, desc } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
@@ -769,6 +770,66 @@ export function createTrunkMcpServer() {
       });
       const result = await resp.json();
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // --- Documents ---
+
+  server.tool(
+    "trunk_document",
+    "Manage shared documents with a contact. Actions: create, list, get, update.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["create", "list", "get", "update"]).describe("Action to perform"),
+      contact_id: z.string().describe("Agent ID of the contact (documents are scoped to a contact pair)"),
+      doc_id: z.string().optional().describe("Document ID (for get, update)"),
+      name: z.string().optional().describe("Document name (for create)"),
+      body: z.string().optional().describe("Document body (for create, update)"),
+      content_type: z.string().optional().describe("Content type (for create, default: text/markdown)"),
+    },
+    async ({ secret, action, contact_id, doc_id, name, body, content_type }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      if (!(await verifyContactAccess(agent.id, contact_id))) return errorResult("Not a contact");
+
+      const scope = contactScope(agent.id, contact_id);
+
+      if (action === "create") {
+        if (!name || !body) return errorResult("name and body are required for create");
+        const [doc] = await db
+          .insert(sharedDocuments)
+          .values({ scope, name, body, contentType: content_type || "text/markdown", lastEditedBy: agent.id })
+          .returning();
+        await db.insert(sharedDocumentVersions).values({ documentId: doc.id, version: 1, body, editedBy: agent.id });
+        return { content: [{ type: "text", text: JSON.stringify({ id: doc.id, name: doc.name, content_type: doc.contentType, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt }, null, 2) }] };
+      }
+
+      if (action === "list") {
+        const docs = await db.select().from(sharedDocuments).where(eq(sharedDocuments.scope, scope)).orderBy(desc(sharedDocuments.updatedAt));
+        return { content: [{ type: "text", text: JSON.stringify({ documents: docs.map(d => ({ id: d.id, name: d.name, content_type: d.contentType, version: d.version, last_edited_by: d.lastEditedBy, updated_at: d.updatedAt })) }, null, 2) }] };
+      }
+
+      if (action === "get") {
+        if (!doc_id) return errorResult("doc_id is required for get");
+        const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, doc_id)).limit(1);
+        if (!doc) return errorResult("Document not found");
+        return { content: [{ type: "text", text: JSON.stringify({ id: doc.id, name: doc.name, content_type: doc.contentType, body: doc.body, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt, updated_at: doc.updatedAt }, null, 2) }] };
+      }
+
+      if (action === "update") {
+        if (!doc_id || !body) return errorResult("doc_id and body are required for update");
+        const [existing] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, doc_id)).limit(1);
+        if (!existing) return errorResult("Document not found");
+        const newVersion = existing.version + 1;
+        await db.insert(sharedDocumentVersions).values({ documentId: doc_id, version: newVersion, body, editedBy: agent.id });
+        const updates: Record<string, unknown> = { body, version: newVersion, lastEditedBy: agent.id, updatedAt: new Date() };
+        if (name) updates.name = name;
+        const [updated] = await db.update(sharedDocuments).set(updates).where(eq(sharedDocuments.id, doc_id)).returning();
+        return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, name: updated.name, version: updated.version, last_edited_by: updated.lastEditedBy, updated_at: updated.updatedAt }, null, 2) }] };
+      }
+
+      return errorResult("Unknown action");
     }
   );
 
