@@ -239,6 +239,63 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_sent",
+    "View messages you have sent (outbox). Filter by recipient or message type.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      to: z.string().optional().describe("Filter by recipient agent ID"),
+      type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
+      limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+    },
+    async ({ secret, to, type, limit }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const conditions = [eq(messages.fromAgent, agent.id)];
+      if (to) conditions.push(eq(messages.toAgent, to));
+      if (type) conditions.push(eq(messages.type, type));
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(and(...conditions))
+        .orderBy(desc(messages.createdAt))
+        .limit(Math.min(limit ?? 50, 100));
+
+      const visible = rows.filter((r) => r.status !== "deleted");
+
+      if (visible.length === 0) {
+        return { content: [{ type: "text", text: "No sent messages found." }] };
+      }
+
+      // Resolve recipient names
+      const recipientIds = [...new Set(visible.map((r) => r.toAgent))];
+      const recipients = await db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(or(...recipientIds.map((id) => eq(agents.id, id))));
+      const recipientMap = Object.fromEntries(recipients.map((r) => [r.id, r.name]));
+
+      const formatted = visible.map((m) => ({
+        id: m.id,
+        to: recipientMap[m.toAgent] || m.toAgent,
+        thread_id: m.threadId,
+        type: m.type,
+        payload: m.payload,
+        status: m.status,
+        sent_at: m.createdAt,
+      }));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ messages: formatted, count: visible.length }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_reply",
     "Reply to a message (acknowledges the original and sends your response in the same thread).",
     {

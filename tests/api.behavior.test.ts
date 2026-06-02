@@ -1604,6 +1604,95 @@ describe("Hono API behavior", () => {
     expect(inbox.messages[0].payload).toMatchObject({ content: "new" });
   });
 
+  // --- Sent messages (outbox) tests ---
+
+  it("returns sent messages for the authenticated agent", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "hello from alpha" },
+    });
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "how are you?" },
+    });
+
+    const sentByAlpha = await alphaClient.sent();
+    expect(sentByAlpha.messages).toHaveLength(2);
+    expect(sentByAlpha.messages[0].payload).toMatchObject({ content: "how are you?" });
+    expect(sentByAlpha.messages[1].payload).toMatchObject({ content: "hello from alpha" });
+
+    // Beta has not sent anything
+    const sentByBeta = await betaClient.sent();
+    expect(sentByBeta.messages).toHaveLength(0);
+  });
+
+  it("filters sent messages by recipient", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "alpha", owner: "Andrei" });
+    const beta = await anon.register({ name: "beta", owner: "Frank" });
+    const gamma = await anon.register({ name: "gamma", owner: "Vince" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "to beta" } });
+    await alphaClient.send({ to: gamma.agent_id, type: "update", payload: { content: "to gamma" } });
+
+    const toBeta = await alphaClient.sent({ to: beta.agent_id });
+    expect(toBeta.messages).toHaveLength(1);
+    expect(toBeta.messages[0].payload).toMatchObject({ content: "to beta" });
+
+    const toGamma = await alphaClient.sent({ to: gamma.agent_id });
+    expect(toGamma.messages).toHaveLength(1);
+    expect(toGamma.messages[0].payload).toMatchObject({ content: "to gamma" });
+  });
+
+  it("filters sent messages by type", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "q1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "u1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "q2" } });
+
+    const questions = await alphaClient.sent({ type: "question" });
+    expect(questions.messages).toHaveLength(2);
+    expect(questions.messages.every((m: { type: string }) => m.type === "question")).toBe(true);
+
+    const updates = await alphaClient.sent({ type: "update" });
+    expect(updates.messages).toHaveLength(1);
+    expect(updates.messages[0].payload).toMatchObject({ content: "u1" });
+  });
+
+  it("excludes soft-deleted messages from sent results", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "to delete" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "keep" } });
+    await alphaClient.deleteMessage(msg.id);
+
+    const sent = await alphaClient.sent();
+    expect(sent.messages).toHaveLength(1);
+    expect(sent.messages[0].payload).toMatchObject({ content: "keep" });
+  });
+
+  it("respects limit parameter on sent messages", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 5; i++) {
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: `msg-${i}` } });
+    }
+
+    const limited = await alphaClient.sent({ limit: 2 });
+    expect(limited.messages).toHaveLength(2);
+  });
+
   // --- Workspace tests ---
 
   it("creates a workspace and the creator auto-joins", async () => {

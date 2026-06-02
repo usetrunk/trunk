@@ -232,6 +232,35 @@ server.tool(
 );
 
 server.tool(
+  "trunk_sent",
+  "View messages you have sent (outbox). Filter by recipient or message type.",
+  {
+    to: z.string().optional().describe("Filter by recipient agent ID"),
+    type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
+    limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+  },
+  async ({ to, type, limit }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const params = new URLSearchParams();
+    if (to) params.set("to", to);
+    if (type) params.set("type", type);
+    if (limit !== undefined) params.set("limit", String(limit));
+    const query = params.toString();
+
+    const result = await relay(`/messages/sent${query ? `?${query}` : ""}`, { secret: config.secret });
+    const msgs = result.messages || [];
+
+    if (msgs.length === 0) {
+      return { content: [{ type: "text", text: "No sent messages found." }] };
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify({ messages: msgs, count: msgs.length }, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_reply",
   "Reply to a message in-thread.",
   {

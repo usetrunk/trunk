@@ -204,6 +204,28 @@ app.get("/inbox", async (c) => {
   return c.json({ messages: visible.slice(0, limit) });
 });
 
+// Get sent messages (outbox)
+app.get("/sent", async (c) => {
+  const agentId = c.get("agentId");
+  const toFilter = c.req.query("to");
+  const typeFilter = c.req.query("type");
+  const limit = Math.min(parseInt(c.req.query("limit") || "50"), 100);
+
+  const conditions = [eq(messages.fromAgent, agentId)];
+  if (toFilter) conditions.push(eq(messages.toAgent, toFilter));
+  if (typeFilter) conditions.push(eq(messages.type, typeFilter));
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(...conditions))
+    .orderBy(desc(messages.createdAt))
+    .limit(limit);
+
+  const visible = rows.filter((row) => row.status !== "deleted");
+  return c.json({ messages: visible });
+});
+
 app.post("/purge-expired", async (c) => {
   const agentId = c.get("agentId");
   const body: { days?: number } = await c.req.json<{ days?: number }>().catch(() => ({}));

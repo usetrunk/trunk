@@ -315,6 +315,12 @@ export type InboxOptions = {
   limit?: number;
 };
 
+export type SentOptions = {
+  to?: string;
+  type?: string;
+  limit?: number;
+};
+
 export type MessagesResponse = {
   messages: TrunkMessage[];
 };
@@ -422,6 +428,15 @@ export class TrunkClient {
     if (options.limit !== undefined) search.set("limit", String(options.limit));
     const query = search.toString();
     return this.request(`/messages/inbox${query ? `?${query}` : ""}`);
+  }
+
+  sent(options: SentOptions = {}): Promise<MessagesResponse> {
+    const search = new URLSearchParams();
+    if (options.to) search.set("to", options.to);
+    if (options.type) search.set("type", options.type);
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    const query = search.toString();
+    return this.request(`/messages/sent${query ? `?${query}` : ""}`);
   }
 
   thread(threadId: string): Promise<MessagesResponse> {
