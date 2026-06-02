@@ -63,6 +63,8 @@ export const messages = pgTable("messages", {
   repliedAt: timestamp("replied_at", { withTimezone: true }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   editedAt: timestamp("edited_at", { withTimezone: true }),
+  pinnedAt: timestamp("pinned_at", { withTimezone: true }),
+  pinnedBy: text("pinned_by"),
 }, (table) => [
   uniqueIndex("messages_from_idempotency_idx").on(table.fromAgent, table.idempotencyKey),
   index("messages_inbox_idx").on(table.toAgent, table.status, table.createdAt),

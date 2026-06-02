@@ -517,6 +517,48 @@ server.tool(
 );
 
 server.tool(
+  "trunk_pin",
+  "Pin a message in a thread. Surfaces key decisions and information.",
+  {
+    message_id: z.string().describe("ID of the message to pin"),
+  },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/messages/${encodeURIComponent(message_id)}/pin`, { method: "POST", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_unpin",
+  "Unpin a message in a thread.",
+  {
+    message_id: z.string().describe("ID of the message to unpin"),
+  },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/messages/${encodeURIComponent(message_id)}/unpin`, { method: "POST", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_thread_pins",
+  "List all pinned messages in a thread. Quickly find key decisions and information.",
+  {
+    thread_id: z.string().describe("Thread ID"),
+  },
+  async ({ thread_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/messages/thread/${encodeURIComponent(thread_id)}/pins`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_thread",
   "View full thread history.",
   { thread_id: z.string().describe("Thread ID") },

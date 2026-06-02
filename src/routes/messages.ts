@@ -913,6 +913,103 @@ app.get("/:id/reactions", async (c) => {
   });
 });
 
+// Pin a message in a thread — either sender or recipient can pin
+app.post("/:id/pin", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.id, messageId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      )
+    )
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (msg.pinnedAt) return c.json({ ok: true, already_pinned: true, pinned_at: msg.pinnedAt, pinned_by: msg.pinnedBy });
+
+  const [updated] = await db
+    .update(messages)
+    .set({ pinnedAt: new Date(), pinnedBy: agentId })
+    .where(eq(messages.id, messageId))
+    .returning();
+
+  return c.json({ ok: true, pinned_at: updated.pinnedAt, pinned_by: updated.pinnedBy });
+});
+
+// Unpin a message
+app.post("/:id/unpin", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.id, messageId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      )
+    )
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (!msg.pinnedAt) return c.json({ ok: true, already_unpinned: true });
+
+  await db
+    .update(messages)
+    .set({ pinnedAt: null, pinnedBy: null })
+    .where(eq(messages.id, messageId));
+
+  return c.json({ ok: true });
+});
+
+// List pinned messages in a thread
+app.get("/thread/:threadId/pins", async (c) => {
+  const agentId = c.get("agentId");
+  const threadId = c.req.param("threadId");
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.threadId, threadId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      )
+    )
+    .orderBy(messages.createdAt);
+
+  const pinned = rows.filter((r) => r.pinnedAt && r.status !== "deleted");
+  if (pinned.length === 0) {
+    return c.json({ thread_id: threadId, pinned: [], count: 0 });
+  }
+
+  const agentIds = [...new Set(pinned.flatMap((m) => [m.fromAgent, m.toAgent, m.pinnedBy].filter(Boolean)))];
+  const agentList = agentIds.length > 0
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+    : [];
+  const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
+
+  return c.json({
+    thread_id: threadId,
+    pinned: pinned.map((m) => ({
+      id: m.id,
+      from: nameMap[m.fromAgent] || m.fromAgent,
+      type: m.type,
+      payload: m.payload,
+      pinned_at: m.pinnedAt,
+      pinned_by: m.pinnedBy ? nameMap[m.pinnedBy] || m.pinnedBy : null,
+      created_at: m.createdAt,
+    })),
+    count: pinned.length,
+  });
+});
+
 export default app;
 
 type MessageRow = typeof messages.$inferSelect;

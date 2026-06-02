@@ -630,6 +630,18 @@ export class TrunkClient {
     return this.request(`/messages/${encodeURIComponent(messageId)}/reactions`);
   }
 
+  pin(messageId: string): Promise<{ ok: true; pinned_at: string; pinned_by: string }> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/pin`, { method: "POST" });
+  }
+
+  unpin(messageId: string): Promise<{ ok: true }> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/unpin`, { method: "POST" });
+  }
+
+  threadPins(threadId: string): Promise<{ thread_id: string; pinned: Array<{ id: string; from: string; type: string; payload: Record<string, unknown>; pinned_at: string; pinned_by: string | null; created_at: string }>; count: number }> {
+    return this.request(`/messages/thread/${encodeURIComponent(threadId)}/pins`);
+  }
+
   createTask(input: CreateTaskRequest): Promise<TaskResponse> {
     return this.request("/tasks", { method: "POST", body: input });
   }

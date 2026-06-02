@@ -377,6 +377,45 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_pin",
+    "Pin a message in a thread. Surfaces key decisions and information.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to pin"),
+    },
+    async ({ secret, message_id }) => {
+      const result = await relay(`/messages/${encodeURIComponent(message_id)}/pin`, { method: "POST", secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_unpin",
+    "Unpin a message in a thread.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to unpin"),
+    },
+    async ({ secret, message_id }) => {
+      const result = await relay(`/messages/${encodeURIComponent(message_id)}/unpin`, { method: "POST", secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_thread_pins",
+    "List all pinned messages in a thread. Quickly find key decisions and information.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      thread_id: z.string().describe("Thread ID"),
+    },
+    async ({ secret, thread_id }) => {
+      const result = await relay(`/messages/thread/${encodeURIComponent(thread_id)}/pins`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {

@@ -45,6 +45,8 @@ type MessageRow = {
   repliedAt?: Date | null;
   deletedAt?: Date | null;
   editedAt?: Date | null;
+  pinnedAt?: Date | null;
+  pinnedBy?: string | null;
 };
 
 type TaskRow = {
@@ -3248,6 +3250,62 @@ describe("Hono API behavior", () => {
     expect(betaPresence).toMatchObject({ status: "away" });
   });
 
+  // --- Message pinning ---
+
+  it("pin and unpin a message, then list thread pins", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "decision",
+      payload: { content: "We'll use Postgres." },
+    });
+
+    // Pin the message
+    const pinResult = await betaClient.pin(sent.id);
+    expect(pinResult).toMatchObject({ ok: true });
+    expect(pinResult.pinned_at).toBeDefined();
+    expect(pinResult.pinned_by).toBe(beta.agent_id);
+
+    // List pins in the thread
+    const pins = await alphaClient.threadPins(sent.thread_id);
+    expect(pins.thread_id).toBe(sent.thread_id);
+    expect(pins.count).toBe(1);
+    expect(pins.pinned[0]).toMatchObject({
+      id: sent.id,
+      type: "decision",
+    });
+
+    // Unpin the message
+    const unpinResult = await betaClient.unpin(sent.id);
+    expect(unpinResult).toMatchObject({ ok: true });
+
+    // Verify no more pins
+    const pinsAfter = await alphaClient.threadPins(sent.thread_id);
+    expect(pinsAfter.count).toBe(0);
+  });
+
+  it("pin returns already_pinned for re-pins", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Important update" },
+    });
+
+    await betaClient.pin(sent.id);
+    const repin = await betaClient.pin(sent.id);
+    expect(repin).toMatchObject({ ok: true, already_pinned: true });
+  });
+
+  it("pin returns 404 for messages the agent cannot see", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(alphaClient.pin("nonexistent-id")).rejects.toMatchObject({ status: 404 });
+  });
+
   // --- Webhook test ---
 
   it("testWebhook returns 400 when no webhook URL is configured", async () => {
@@ -3707,6 +3765,8 @@ class InsertQuery {
       repliedAt: null,
       deletedAt: null,
       editedAt: null,
+      pinnedAt: null,
+      pinnedBy: null,
     };
     testState.messages.push(row);
     return row;
@@ -3941,6 +4001,8 @@ const columnToProperty: Record<string, string> = {
   document_id: "documentId",
   edited_by: "editedBy",
   edited_at: "editedAt",
+  pinned_at: "pinnedAt",
+  pinned_by: "pinnedBy",
   last_seen_at: "lastSeenAt",
   message_id: "messageId",
   stripe_customer_id: "stripeCustomerId",

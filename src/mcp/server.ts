@@ -974,6 +974,100 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_pin",
+    "Pin a message in a thread. Pinned messages surface key decisions and information. Both sender and recipient can pin.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to pin"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.id, message_id), or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))))
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+      if (msg.pinnedAt) return { content: [{ type: "text", text: JSON.stringify({ ok: true, already_pinned: true, pinned_at: msg.pinnedAt, pinned_by: msg.pinnedBy }, null, 2) }] };
+
+      const [updated] = await db
+        .update(messages)
+        .set({ pinnedAt: new Date(), pinnedBy: agent.id })
+        .where(eq(messages.id, message_id))
+        .returning();
+
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, pinned_at: updated.pinnedAt, pinned_by: updated.pinnedBy }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_unpin",
+    "Unpin a message in a thread.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to unpin"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.id, message_id), or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))))
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+      if (!msg.pinnedAt) return { content: [{ type: "text", text: JSON.stringify({ ok: true, already_unpinned: true }, null, 2) }] };
+
+      await db.update(messages).set({ pinnedAt: null, pinnedBy: null }).where(eq(messages.id, message_id));
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_thread_pins",
+    "List all pinned messages in a thread. Useful for quickly finding key decisions and information.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      thread_id: z.string().describe("Thread ID"),
+    },
+    async ({ secret, thread_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.threadId, thread_id), or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))))
+        .orderBy(messages.createdAt);
+
+      const pinned = rows.filter((r) => r.pinnedAt && r.status !== "deleted");
+      if (pinned.length === 0) return { content: [{ type: "text", text: JSON.stringify({ thread_id, pinned: [], count: 0 }, null, 2) }] };
+
+      const agentIds = [...new Set(pinned.flatMap((m) => [m.fromAgent, m.toAgent, m.pinnedBy].filter(Boolean)))];
+      const agentList = agentIds.length > 0
+        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+        : [];
+      const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            thread_id,
+            pinned: pinned.map((m) => ({ id: m.id, from: nameMap[m.fromAgent] || m.fromAgent, type: m.type, payload: m.payload, pinned_at: m.pinnedAt, pinned_by: m.pinnedBy ? nameMap[m.pinnedBy!] || m.pinnedBy : null, created_at: m.createdAt })),
+            count: pinned.length,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {
