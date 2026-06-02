@@ -43,6 +43,7 @@ type MessageRow = {
   processedAt?: Date | null;
   repliedAt?: Date | null;
   deletedAt?: Date | null;
+  editedAt?: Date | null;
 };
 
 type TaskRow = {
@@ -1642,6 +1643,64 @@ describe("Hono API behavior", () => {
     await expect(client.ackBulk([])).rejects.toMatchObject({ status: 400 });
   });
 
+  // --- Message edit tests ---
+
+  it("sender can edit a message payload", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "original" },
+    });
+
+    const edited = await alphaClient.editMessage(sent.id, { content: "corrected" });
+    expect(edited.id).toBe(sent.id);
+    expect(edited.payload).toMatchObject({ content: "corrected" });
+    expect(edited.edited_at).toBeDefined();
+  });
+
+  it("recipient cannot edit a message they received", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "original" },
+    });
+
+    await expect(betaClient.editMessage(sent.id, { content: "tampered" })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("cannot edit a deleted message", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "delete me" },
+    });
+
+    await alphaClient.deleteMessage(sent.id);
+    await expect(alphaClient.editMessage(sent.id, { content: "too late" })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("edited message shows updated payload in thread view", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "original" },
+    });
+
+    await alphaClient.editMessage(sent.id, { content: "fixed typo" });
+
+    const thread = await betaClient.thread(sent.thread_id);
+    expect(thread.messages[0].payload).toMatchObject({ content: "fixed typo" });
+    expect(thread.messages[0].editedAt).toBeDefined();
+  });
+
   // --- Sent messages (outbox) tests ---
 
   it("returns sent messages for the authenticated agent", async () => {
@@ -2838,6 +2897,7 @@ class InsertQuery {
       processedAt: null,
       repliedAt: null,
       deletedAt: null,
+      editedAt: null,
     };
     testState.messages.push(row);
     return row;

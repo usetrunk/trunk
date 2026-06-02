@@ -369,6 +369,30 @@ server.tool(
 );
 
 server.tool(
+  "trunk_edit_message",
+  "Edit a sent message's payload. Only the original sender can edit.",
+  {
+    message_id: z.string().describe("ID of the message to edit"),
+    content: z.string().describe("New message content"),
+    context: z.string().optional().describe("Updated context"),
+  },
+  async ({ message_id, content, context }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const payload: Record<string, unknown> = { content };
+    if (context) payload.context = context;
+
+    const result = await relay(`/messages/${message_id}`, {
+      method: "PATCH",
+      secret: config.secret,
+      body: { payload },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_task_create",
   "Create a task. Scoped to a contact pair, room, or workspace.",
   {

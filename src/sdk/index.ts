@@ -496,6 +496,10 @@ export class TrunkClient {
     return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
   }
 
+  editMessage(messageId: string, payload: Record<string, unknown>): Promise<{ id: string; thread_id: string; payload: Record<string, unknown>; edited_at: string; status: string }> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}`, { method: "PATCH", body: { payload } });
+  }
+
   deleteMessage(messageId: string): Promise<AckResponse> {
     return this.request(`/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
   }

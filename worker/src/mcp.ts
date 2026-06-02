@@ -232,6 +232,20 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_edit_message",
+    "Edit a sent message's payload. Only the original sender can edit.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to edit"),
+      payload: z.record(z.string(), z.unknown()).describe("New payload to replace the existing one"),
+    },
+    async ({ secret, message_id, payload }) => {
+      const result = await relay(`/messages/${message_id}`, { method: "PATCH", secret, body: { payload } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {

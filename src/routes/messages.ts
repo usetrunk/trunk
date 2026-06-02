@@ -337,6 +337,47 @@ app.delete("/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// Edit a sent message (only sender can edit, only payload)
+app.patch("/:id", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+  const body = await c.req.json<{
+    payload: Record<string, unknown>;
+  }>();
+
+  if (!body.payload) {
+    return c.json({ error: "payload is required" }, 400);
+  }
+  if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
+    return c.json({ error: "payload exceeds 1MB limit" }, 413);
+  }
+
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agentId)))
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (msg.status === "deleted") return c.json({ error: "Cannot edit a deleted message" }, 400);
+
+  const [updated] = await db
+    .update(messages)
+    .set({ payload: body.payload, editedAt: new Date() })
+    .where(eq(messages.id, messageId))
+    .returning();
+
+  await audit(agentId, "message.edit", "message", messageId);
+
+  return c.json({
+    id: updated.id,
+    thread_id: updated.threadId,
+    payload: updated.payload,
+    edited_at: updated.editedAt,
+    status: updated.status,
+  });
+});
+
 // Bulk acknowledge messages (mark multiple as read)
 app.post("/ack-bulk", async (c) => {
   const agentId = c.get("agentId");

@@ -510,6 +510,48 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_edit_message",
+    "Edit a sent message's payload. Only the original sender can edit. Returns the updated message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to edit"),
+      payload: z.record(z.string(), z.unknown()).describe("New payload to replace the existing one"),
+    },
+    async ({ secret, message_id, payload }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.id, message_id), eq(messages.fromAgent, agent.id)))
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+      if (msg.status === "deleted") return errorResult("Cannot edit a deleted message");
+
+      const [updated] = await db
+        .update(messages)
+        .set({ payload, editedAt: new Date() })
+        .where(eq(messages.id, message_id))
+        .returning();
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            id: updated.id,
+            thread_id: updated.threadId,
+            payload: updated.payload,
+            edited_at: updated.editedAt,
+            status: updated.status,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {
