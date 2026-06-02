@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { rooms, roomMembers, agents } from "../db/schema.js";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import type { AgentVariables } from "../lib/types.js";
@@ -130,6 +130,29 @@ app.get("/:roomId/members", async (c) => {
   });
 
   return c.json({ members: result });
+});
+
+// Leave a room
+app.post("/:roomId/leave", async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+
+  // Verify membership
+  const [membership] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
+
+  if (!membership) {
+    return c.json({ error: "Not a member of this room" }, 403);
+  }
+
+  await db
+    .delete(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)));
+
+  return c.json({ ok: true, room_id: roomId });
 });
 
 export default app;

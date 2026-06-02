@@ -424,12 +424,12 @@ server.tool(
 
 server.tool(
   "trunk_room",
-  "Manage rooms (projects). Actions: create, join, list, members. Rooms are shared spaces for tasks visible to all members.",
+  "Manage rooms (projects). Actions: create, join, list, members, leave. Rooms are shared spaces for tasks visible to all members.",
   {
-    action: z.enum(["create", "join", "list", "members"]).describe("What to do"),
+    action: z.enum(["create", "join", "list", "members", "leave"]).describe("What to do"),
     name: z.string().optional().describe("Room name (for create)"),
     code: z.string().optional().describe("Join code (for join)"),
-    room_id: z.string().optional().describe("Room ID (for members)"),
+    room_id: z.string().optional().describe("Room ID (for members/leave)"),
   },
   async ({ action, name, code, room_id }) => {
     const config = loadConfig();
@@ -452,6 +452,11 @@ server.tool(
     if (action === "members") {
       if (!room_id) return { content: [{ type: "text", text: "Error: room_id required for members" }], isError: true };
       const result = await relay(`/rooms/${room_id}/members`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "leave") {
+      if (!room_id) return { content: [{ type: "text", text: "Error: room_id required for leave" }], isError: true };
+      const result = await relay(`/rooms/${room_id}/leave`, { method: "POST", secret: config.secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     return { content: [{ type: "text", text: "Unknown action" }], isError: true };

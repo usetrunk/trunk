@@ -524,6 +524,10 @@ export class TrunkClient {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/members`);
   }
 
+  leaveRoom(roomId: string): Promise<{ ok: boolean; room_id: string }> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/leave`, { method: "POST" });
+  }
+
   billingStatus(): Promise<BillingStatus> {
     return this.request("/billing/status");
   }

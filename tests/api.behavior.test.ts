@@ -1232,6 +1232,68 @@ describe("Hono API behavior", () => {
     expect(second.already_member).toBe(true);
   });
 
+  // --- Room leave tests ---
+
+  it("leaves a room via POST /rooms/:id/leave", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Leave Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Beta leaves
+    const leaveRes = await app.request(`/rooms/${room.id}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(leaveRes.status).toBe(200);
+    const body = await leaveRes.json();
+    expect(body.ok).toBe(true);
+    expect(body.room_id).toBe(room.id);
+
+    // Beta no longer listed in members
+    const membersRes = await app.request(`/rooms/${room.id}/members`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    const members = await membersRes.json();
+    expect(members.members.some((m: { id: string }) => m.id === beta.agent_id)).toBe(false);
+    // Alpha still a member
+    expect(members.members.some((m: { id: string }) => m.id === alpha.agent_id)).toBe(true);
+  });
+
+  it("returns 403 when leaving a room you're not in", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Not My Room" });
+    const room = await roomRes.json();
+
+    // Beta never joined — should get 403
+    const leaveRes = await app.request(`/rooms/${room.id}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(leaveRes.status).toBe(403);
+  });
+
+  it("SDK leaveRoom removes agent from room", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "SDK Leave Room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const result = await betaClient.leaveRoom(room.id);
+    expect(result.ok).toBe(true);
+
+    // Beta should not see the room anymore
+    const betaRooms = await betaClient.listRooms();
+    expect(betaRooms.rooms.some(r => r.id === room.id)).toBe(false);
+
+    // Alpha still sees it
+    const alphaRooms = await alphaClient.listRooms();
+    expect(alphaRooms.rooms.some(r => r.id === room.id)).toBe(true);
+  });
+
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

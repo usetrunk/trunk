@@ -658,13 +658,13 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_room",
-    "Manage rooms (projects). Actions: create, join, list, members.",
+    "Manage rooms (projects). Actions: create, join, list, members, leave.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "list", "members"]).describe("What to do"),
+      action: z.enum(["create", "join", "list", "members", "leave"]).describe("What to do"),
       name: z.string().optional().describe("Room name (for create)"),
       code: z.string().optional().describe("Join code (for join)"),
-      room_id: z.string().optional().describe("Room ID (for members)"),
+      room_id: z.string().optional().describe("Room ID (for members/leave)"),
     },
     async ({ secret, action, name, code, room_id }) => {
       const agent = await resolveAgent(secret);
@@ -703,6 +703,14 @@ export function createTrunkMcpServer() {
         const agentList = agentIds.length > 0 ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner }).from(agents).where(or(...agentIds.map(id => eq(agents.id, id)))) : [];
         const agentMap = Object.fromEntries(agentList.map(a => [a.id, a]));
         return { content: [{ type: "text", text: JSON.stringify({ members: members.map(m => ({ ...agentMap[m.agentId], role: m.role, joined_at: m.joinedAt })) }, null, 2) }] };
+      }
+
+      if (action === "leave") {
+        if (!room_id) return errorResult("room_id is required for leave");
+        const [membership] = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
+        if (!membership) return errorResult("Not a member of this room");
+        await db.delete(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id)));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, room_id }) }] };
       }
 
       return errorResult("Unknown action");
