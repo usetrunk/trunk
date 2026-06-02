@@ -110,6 +110,12 @@ function spawnAgent(config: AgentConfig): ChildProcess {
 
   console.log(`[harness] spawning ${config.name} (profile: ${config.profile}, cwd: ${expandedCwd})`);
 
+  // Verify cwd exists
+  if (!existsSync(expandedCwd)) {
+    console.error(`[harness] ERROR: cwd does not exist: ${expandedCwd}`);
+    return null as unknown as ChildProcess;
+  }
+
   const child = spawn(CLAUDE_BIN, [
     "--dangerously-skip-permissions",
     "-p",
@@ -117,8 +123,7 @@ function spawnAgent(config: AgentConfig): ChildProcess {
   ], {
     cwd: expandedCwd,
     env,
-    stdio: ["pipe", "pipe", "pipe"],
-    shell: true,
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
   child.on("error", (err: Error) => {
