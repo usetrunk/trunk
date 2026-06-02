@@ -46,10 +46,14 @@ type AgentConfig = {
   prompt: string;
   workspace?: string;
   model?: string;
+  loop?: boolean;         // respawn after exit (default: true in start mode)
+  loopDelay?: number;     // seconds between respawns (default: 30)
 };
 
 type HarnessConfig = {
   workspace?: string;
+  loop?: boolean;         // default loop setting for all agents
+  loopDelay?: number;     // default delay for all agents
   agents: AgentConfig[];
 };
 
@@ -148,6 +152,19 @@ function spawnAgent(config: AgentConfig): ChildProcess {
   child.on("exit", (code) => {
     console.log(`[harness] ${config.name} exited with code ${code}`);
     removeAgent(config.name);
+
+    // Respawn if looping
+    if (config.loop !== false) {
+      const delay = config.loopDelay ?? 30;
+      console.log(`[harness] ${config.name} will respawn in ${delay}s (loop mode)`);
+      setTimeout(() => {
+        console.log(`[harness] respawning ${config.name}...`);
+        spawnAgent({
+          ...config,
+          prompt: `You are resuming work. Check your Trunk inbox for new messages and the project room for tasks. Pick up where you left off or claim the next available task. ${config.prompt}`,
+        });
+      }, delay * 1000);
+    }
   });
 
   // Track the process
@@ -222,15 +239,20 @@ if (command === "start") {
   const config: HarnessConfig = JSON.parse(readFileSync(configPath, "utf-8"));
   console.log(`[harness] starting ${config.agents.length} agents from ${configPath}`);
 
+  const loopMode = args.includes("--no-loop") ? false : (config.loop ?? true);
+  const loopDelay = config.loopDelay ?? 30;
+
   const children: ChildProcess[] = [];
   for (const agentConfig of config.agents) {
     if (config.workspace && !agentConfig.workspace) {
       agentConfig.workspace = config.workspace;
     }
+    if (agentConfig.loop === undefined) agentConfig.loop = loopMode;
+    if (agentConfig.loopDelay === undefined) agentConfig.loopDelay = loopDelay;
     children.push(spawnAgent(agentConfig));
   }
 
-  console.log(`[harness] ${children.length} agents spawned. Output streaming below.`);
+  console.log(`[harness] ${children.length} agents spawned (loop: ${loopMode}, delay: ${loopDelay}s). Output streaming below.`);
   console.log(`[harness] use "trunk harness list" to check status`);
   console.log(`[harness] use "trunk harness stop <name>" to stop an agent`);
   console.log(`[harness] use "trunk harness stop-all" to stop everything`);
