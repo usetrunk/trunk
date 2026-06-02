@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -2956,6 +2956,56 @@ export function createTrunkMcpServer() {
           count: visible.length,
         }, null, 2) }],
       };
+    }
+  );
+
+  // --- Saved Searches ---
+
+  server.tool(
+    "trunk_saved_searches",
+    "List, save, or delete saved message searches.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["list", "save", "delete"]).describe("Action to perform"),
+      name: z.string().optional().describe("Name for the search (for save)"),
+      query: z.record(z.string(), z.string()).optional().describe("Search params: q, type, contact, after, before (for save)"),
+      search_id: z.string().optional().describe("ID of search to delete"),
+    },
+    async ({ secret, action, name, query, search_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      if (action === "list") {
+        const rows = await db.select().from(savedSearches).where(eq(savedSearches.agentId, agent.id));
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              searches: rows.map((r) => ({ id: r.id, name: r.name, query: r.query, created_at: r.createdAt })),
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (action === "save") {
+        if (!name || !query) return errorResult("name and query are required for save");
+        const [existing] = await db.select().from(savedSearches)
+          .where(and(eq(savedSearches.agentId, agent.id), eq(savedSearches.name, name))).limit(1);
+        if (existing) return errorResult("Search with this name already exists");
+        const [row] = await db.insert(savedSearches).values({ agentId: agent.id, name, query }).returning();
+        return { content: [{ type: "text", text: JSON.stringify({ id: row.id, name: row.name, query: row.query }, null, 2) }] };
+      }
+
+      if (action === "delete") {
+        if (!search_id) return errorResult("search_id is required for delete");
+        const [search] = await db.select().from(savedSearches)
+          .where(and(eq(savedSearches.id, search_id), eq(savedSearches.agentId, agent.id))).limit(1);
+        if (!search) return errorResult("Saved search not found");
+        await db.delete(savedSearches).where(eq(savedSearches.id, search_id));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }] };
+      }
+
+      return errorResult("Invalid action");
     }
   );
 

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, reactions, messageLabels } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, reactions, messageLabels, savedSearches } from "../db/schema.js";
 import { eq, or, and, desc, lt } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -460,6 +460,68 @@ app.get("/search", async (c) => {
 
   const page = paginateResults(filtered, limit);
   return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+});
+
+// --- Saved searches ---
+
+// List saved searches
+app.get("/searches", async (c) => {
+  const agentId = c.get("agentId");
+  const rows = await db.select().from(savedSearches).where(eq(savedSearches.agentId, agentId));
+  return c.json({
+    searches: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      query: r.query,
+      created_at: r.createdAt,
+    })),
+  });
+});
+
+// Save a search
+app.post("/searches", async (c) => {
+  const agentId = c.get("agentId");
+  const body = await c.req.json<{ name: string; query: Record<string, string> }>();
+
+  if (!body.name || !body.query) {
+    return c.json({ error: "name and query are required" }, 400);
+  }
+
+  const [existing] = await db
+    .select()
+    .from(savedSearches)
+    .where(and(eq(savedSearches.agentId, agentId), eq(savedSearches.name, body.name)))
+    .limit(1);
+
+  if (existing) {
+    return c.json({ error: "Search with this name already exists" }, 409);
+  }
+
+  const [row] = await db
+    .insert(savedSearches)
+    .values({ agentId, name: body.name, query: body.query })
+    .returning();
+
+  await audit(agentId, "search.save", "search", row.id, { name: body.name });
+  return c.json({ id: row.id, name: row.name, query: row.query, created_at: row.createdAt }, 201);
+});
+
+// Delete a saved search
+app.delete("/searches/:id", async (c) => {
+  const agentId = c.get("agentId");
+  const searchId = c.req.param("id");
+
+  const [search] = await db
+    .select()
+    .from(savedSearches)
+    .where(and(eq(savedSearches.id, searchId), eq(savedSearches.agentId, agentId)))
+    .limit(1);
+
+  if (!search) return c.json({ error: "Saved search not found" }, 404);
+
+  await db.delete(savedSearches).where(eq(savedSearches.id, searchId));
+  await audit(agentId, "search.delete", "search", searchId);
+  return c.json({ ok: true });
 });
 
 // List scheduled messages (pending future delivery)

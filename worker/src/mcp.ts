@@ -1235,6 +1235,35 @@ export function createMcpServer() {
     }
   );
 
+  // --- Saved Searches ---
+
+  server.tool(
+    "trunk_saved_searches",
+    "List, save, or delete saved message searches.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["list", "save", "delete"]).describe("Action to perform"),
+      name: z.string().optional().describe("Name for the search (for save)"),
+      query: z.record(z.string(), z.string()).optional().describe("Search params: q, type, contact, after, before"),
+      search_id: z.string().optional().describe("ID of search to delete"),
+    },
+    async ({ secret, action, name, query, search_id }) => {
+      if (action === "list") {
+        const result = await relay("/messages/searches", { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "save") {
+        const result = await relay("/messages/searches", { method: "POST", body: { name, query }, secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "delete" && search_id) {
+        const result = await relay(`/messages/searches/${search_id}`, { method: "DELETE", secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      return { content: [{ type: "text", text: "Error: Invalid action or missing params." }], isError: true };
+    }
+  );
+
   // --- Templates ---
 
   server.tool(

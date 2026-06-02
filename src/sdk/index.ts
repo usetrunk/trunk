@@ -535,6 +535,13 @@ export type AuditLogResponse = {
   events: AuditEvent[];
 };
 
+export type SavedSearchResponse = {
+  id: string;
+  name: string;
+  query: Record<string, string>;
+  created_at: string;
+};
+
 export type NotificationPrefsResponse = {
   muted: boolean;
   urgency_filter: string;
@@ -1054,6 +1061,20 @@ export class TrunkClient {
     if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/audit-events${query ? `?${query}` : ""}`);
+  }
+
+  // --- Saved searches ---
+
+  listSavedSearches(): Promise<{ searches: SavedSearchResponse[] }> {
+    return this.request("/messages/searches");
+  }
+
+  saveSearch(name: string, query: Record<string, string>): Promise<SavedSearchResponse> {
+    return this.request("/messages/searches", { method: "POST", body: { name, query } });
+  }
+
+  deleteSavedSearch(searchId: string): Promise<{ ok: true }> {
+    return this.request(`/messages/searches/${encodeURIComponent(searchId)}`, { method: "DELETE" });
   }
 
   // --- Templates ---

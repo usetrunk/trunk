@@ -211,6 +211,14 @@ type ContactNoteRow = {
   updatedAt: Date;
 };
 
+type SavedSearchRow = {
+  id: string;
+  agentId: string;
+  name: string;
+  query: Record<string, string>;
+  createdAt: Date;
+};
+
 type ContactTagRow = {
   id: string;
   agentId: string;
@@ -262,7 +270,8 @@ type TableName =
   | "contact_notes"
   | "message_templates"
   | "notification_preferences"
-  | "contact_tags";
+  | "contact_tags"
+  | "saved_searches";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -287,6 +296,7 @@ const testState = vi.hoisted(() => ({
   "message_templates": [] as MessageTemplateRow[],
   "notification_preferences": [] as NotificationPrefRow[],
   "contact_tags": [] as ContactTagRow[],
+  "saved_searches": [] as SavedSearchRow[],
   idCounter: 0,
 }));
 
@@ -323,6 +333,7 @@ describe("Hono API behavior", () => {
     testState["message_templates"].length = 0;
     testState["notification_preferences"].length = 0;
     testState["contact_tags"].length = 0;
+    testState["saved_searches"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -4671,6 +4682,55 @@ describe("Hono API behavior", () => {
     const betaTags = await betaClient.contactTags(alpha.agent_id);
     expect(betaTags.tags).toHaveLength(0);
   });
+
+  // --- Saved search tests ---
+
+  it("saves and lists searches", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const search = await client.saveSearch("unread-questions", { type: "question" });
+    expect(search.name).toBe("unread-questions");
+    expect(search.query).toMatchObject({ type: "question" });
+
+    const list = await client.listSavedSearches();
+    expect(list.searches).toHaveLength(1);
+    expect(list.searches[0].name).toBe("unread-questions");
+  });
+
+  it("deletes a saved search", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const search = await client.saveSearch("temp-search", { q: "test" });
+    const result = await client.deleteSavedSearch(search.id);
+    expect(result).toMatchObject({ ok: true });
+
+    const list = await client.listSavedSearches();
+    expect(list.searches).toHaveLength(0);
+  });
+
+  it("rejects duplicate search names", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await client.saveSearch("my-search", { q: "hello" });
+    await expect(
+      client.saveSearch("my-search", { q: "world" })
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("saved searches are private to each agent", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    await alphaClient.saveSearch("private-search", { type: "handoff" });
+
+    const betaList = await betaClient.listSavedSearches();
+    expect(betaList.searches).toHaveLength(0);
+  });
 });
 
 async function registerPair(): Promise<{
@@ -5172,6 +5232,18 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "saved_searches") {
+      const row: SavedSearchRow = {
+        id: nextId("search"),
+        agentId: this.insertValues.agentId as string,
+        name: this.insertValues.name as string,
+        query: this.insertValues.query as Record<string, string>,
+        createdAt: new Date(),
+      };
+      testState["saved_searches"].push(row);
+      return row;
+    }
+
     if (this.table === "contact_tags") {
       const row: ContactTagRow = {
         id: nextId("ctag"),
@@ -5311,7 +5383,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow> {
   return testState[table];
 }
 
@@ -5348,7 +5420,8 @@ function getTableName(table: unknown): TableName {
     name === "contact_notes" ||
     name === "message_templates" ||
     name === "notification_preferences" ||
-    name === "contact_tags"
+    name === "contact_tags" ||
+    name === "saved_searches"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }

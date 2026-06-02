@@ -256,6 +256,17 @@ export const messageTemplates = pgTable("message_templates", {
   index("message_templates_agent_idx").on(table.agentId),
 ]);
 
+export const savedSearches = pgTable("saved_searches", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  name: text("name").notNull(),
+  query: jsonb("query").$type<Record<string, string>>().notNull(), // { q?, type?, contact?, after?, before? }
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("saved_searches_agent_name_idx").on(table.agentId, table.name),
+  index("saved_searches_agent_idx").on(table.agentId),
+]);
+
 export const contactTags = pgTable("contact_tags", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   agentId: text("agent_id").notNull().references(() => agents.id),
