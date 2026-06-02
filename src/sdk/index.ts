@@ -153,13 +153,18 @@ export type CreateTaskRequest = {
   priority?: "critical" | "high" | "medium" | "low";
   owner?: string;
   due?: string;
+  start_date?: string;
+  group?: string;
+  depends_on?: string[];
+  sequence?: number;
+  estimate?: number;
   context_ref?: string;
   metadata?: Record<string, unknown>;
 };
 
 export type TaskResponse = {
   id: string;
-  scope: string;
+  scope?: string;
   title: string;
   description: string | null;
   status: string;
@@ -167,6 +172,11 @@ export type TaskResponse = {
   owner: string | null;
   created_by: string;
   due: string | null;
+  start_date: string | null;
+  group: string | null;
+  depends_on: string[];
+  sequence: number | null;
+  estimate: number | null;
   context_ref: string | null;
   created_at: string | Date;
   updated_at?: string | Date;
@@ -183,6 +193,11 @@ export type UpdateTaskRequest = {
   priority?: "critical" | "high" | "medium" | "low";
   owner?: string;
   due?: string;
+  start_date?: string;
+  group?: string;
+  depends_on?: string[];
+  sequence?: number;
+  estimate?: number;
   context_ref?: string;
   metadata?: Record<string, unknown>;
 };
@@ -190,6 +205,7 @@ export type UpdateTaskRequest = {
 export type TaskListOptions = {
   status?: string;
   owner?: string;
+  group?: string;
 };
 
 export type CreateRoomRequest = {
@@ -456,6 +472,7 @@ export class TrunkClient {
     const search = new URLSearchParams();
     if (options.status) search.set("status", options.status);
     if (options.owner) search.set("owner", options.owner);
+    if (options.group) search.set("group", options.group);
     const query = search.toString();
     return this.request(`/tasks/${encodeURIComponent(contactId)}${query ? `?${query}` : ""}`);
   }
@@ -464,6 +481,7 @@ export class TrunkClient {
     const search = new URLSearchParams();
     if (options.status) search.set("status", options.status);
     if (options.owner) search.set("owner", options.owner);
+    if (options.group) search.set("group", options.group);
     const query = search.toString();
     return this.request(`/tasks/room/${encodeURIComponent(roomId)}${query ? `?${query}` : ""}`);
   }
@@ -472,6 +490,7 @@ export class TrunkClient {
     const search = new URLSearchParams();
     if (options.status) search.set("status", options.status);
     if (options.owner) search.set("owner", options.owner);
+    if (options.group) search.set("group", options.group);
     const query = search.toString();
     return this.request(`/tasks/workspace/${encodeURIComponent(workspaceId)}${query ? `?${query}` : ""}`);
   }

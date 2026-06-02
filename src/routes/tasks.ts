@@ -10,6 +10,28 @@ const app = new Hono<AgentVariables>();
 
 app.use("/*", authMiddleware);
 
+// Shared response mapper for task rows
+function taskToJson(t: typeof tasks.$inferSelect) {
+  return {
+    id: t.id,
+    title: t.title,
+    description: t.description,
+    status: t.status,
+    priority: t.priority,
+    owner: t.owner,
+    created_by: t.createdBy,
+    due: t.due,
+    start_date: t.startDate,
+    group: t.group,
+    depends_on: t.dependsOn,
+    sequence: t.sequence,
+    estimate: t.estimate,
+    context_ref: t.contextRef,
+    created_at: t.createdAt,
+    updated_at: t.updatedAt,
+  };
+}
+
 // Helper: build scope string for a contact pair (sorted for consistency)
 function contactScope(a: string, b: string): string {
   return `contact:${[a, b].sort().join("-")}`;
@@ -43,6 +65,11 @@ app.post("/", async (c) => {
     priority?: string;
     owner?: string;
     due?: string;
+    start_date?: string;
+    group?: string;
+    depends_on?: string[];
+    sequence?: number;
+    estimate?: number;
     context_ref?: string;
     metadata?: Record<string, unknown>;
   }>();
@@ -76,24 +103,17 @@ app.post("/", async (c) => {
       owner: body.owner || body.contact_id || undefined,
       createdBy: agentId,
       due: body.due,
+      startDate: body.start_date,
+      group: body.group,
+      dependsOn: body.depends_on || [],
+      sequence: body.sequence,
+      estimate: body.estimate,
       contextRef: body.context_ref,
       metadata: body.metadata || {},
     })
     .returning();
 
-  return c.json({
-    id: task.id,
-    scope: task.scope,
-    title: task.title,
-    description: task.description,
-    status: task.status,
-    priority: task.priority,
-    owner: task.owner,
-    created_by: task.createdBy,
-    due: task.due,
-    context_ref: task.contextRef,
-    created_at: task.createdAt,
-  }, 201);
+  return c.json({ scope: task.scope, ...taskToJson(task) }, 201);
 });
 
 // List tasks for a contact pair
@@ -102,6 +122,7 @@ app.get("/:contactId", async (c) => {
   const contactId = c.req.param("contactId");
   const status = c.req.query("status");
   const ownerFilter = c.req.query("owner");
+  const groupFilter = c.req.query("group");
 
   const hasAccess = await verifyAccess(agentId, contactId);
   if (!hasAccess) return c.json({ error: "Not a contact" }, 403);
@@ -120,23 +141,11 @@ app.get("/:contactId", async (c) => {
 
   const rows = await query;
 
-  // Filter by owner in JS if requested (avoids complex query building)
-  const filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
+  let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
+  if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
 
   return c.json({
-    tasks: filtered.map(t => ({
-      id: t.id,
-      title: t.title,
-      description: t.description,
-      status: t.status,
-      priority: t.priority,
-      owner: t.owner,
-      created_by: t.createdBy,
-      due: t.due,
-      context_ref: t.contextRef,
-      created_at: t.createdAt,
-      updated_at: t.updatedAt,
-    })),
+    tasks: filtered.map(taskToJson),
   });
 });
 
@@ -146,6 +155,7 @@ app.get("/room/:roomId", async (c) => {
   const roomId = c.req.param("roomId");
   const status = c.req.query("status");
   const ownerFilter = c.req.query("owner");
+  const groupFilter = c.req.query("group");
 
   const hasAccess = await verifyRoomAccess(agentId, roomId);
   if (!hasAccess) return c.json({ error: "Not a room member" }, 403);
@@ -161,22 +171,11 @@ app.get("/room/:roomId", async (c) => {
     )
     .orderBy(desc(tasks.createdAt));
 
-  const filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
+  let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
+  if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
 
   return c.json({
-    tasks: filtered.map(t => ({
-      id: t.id,
-      title: t.title,
-      description: t.description,
-      status: t.status,
-      priority: t.priority,
-      owner: t.owner,
-      created_by: t.createdBy,
-      due: t.due,
-      context_ref: t.contextRef,
-      created_at: t.createdAt,
-      updated_at: t.updatedAt,
-    })),
+    tasks: filtered.map(taskToJson),
   });
 });
 
@@ -186,6 +185,7 @@ app.get("/workspace/:workspaceId", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const status = c.req.query("status");
   const ownerFilter = c.req.query("owner");
+  const groupFilter = c.req.query("group");
 
   const hasAccess = await verifyWorkspaceAccess(agentId, workspaceId);
   if (!hasAccess) return c.json({ error: "Not a workspace member" }, 403);
@@ -201,22 +201,11 @@ app.get("/workspace/:workspaceId", async (c) => {
     )
     .orderBy(desc(tasks.createdAt));
 
-  const filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
+  let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
+  if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
 
   return c.json({
-    tasks: filtered.map(t => ({
-      id: t.id,
-      title: t.title,
-      description: t.description,
-      status: t.status,
-      priority: t.priority,
-      owner: t.owner,
-      created_by: t.createdBy,
-      due: t.due,
-      context_ref: t.contextRef,
-      created_at: t.createdAt,
-      updated_at: t.updatedAt,
-    })),
+    tasks: filtered.map(taskToJson),
   });
 });
 
@@ -239,6 +228,11 @@ app.patch("/:scopeId/:taskId", async (c) => {
     priority?: string;
     owner?: string;
     due?: string;
+    start_date?: string;
+    group?: string;
+    depends_on?: string[];
+    sequence?: number;
+    estimate?: number;
     context_ref?: string;
     metadata?: Record<string, unknown>;
   }>();
@@ -250,6 +244,11 @@ app.patch("/:scopeId/:taskId", async (c) => {
   if (body.priority !== undefined) updates.priority = body.priority;
   if (body.owner !== undefined) updates.owner = body.owner;
   if (body.due !== undefined) updates.due = body.due;
+  if (body.start_date !== undefined) updates.startDate = body.start_date;
+  if (body.group !== undefined) updates.group = body.group;
+  if (body.depends_on !== undefined) updates.dependsOn = body.depends_on;
+  if (body.sequence !== undefined) updates.sequence = body.sequence;
+  if (body.estimate !== undefined) updates.estimate = body.estimate;
   if (body.context_ref !== undefined) updates.contextRef = body.context_ref;
   if (body.metadata !== undefined) updates.metadata = body.metadata;
 
@@ -261,18 +260,7 @@ app.patch("/:scopeId/:taskId", async (c) => {
 
   if (!updated) return c.json({ error: "Task not found" }, 404);
 
-  return c.json({
-    id: updated.id,
-    title: updated.title,
-    description: updated.description,
-    status: updated.status,
-    priority: updated.priority,
-    owner: updated.owner,
-    created_by: updated.createdBy,
-    due: updated.due,
-    context_ref: updated.contextRef,
-    updated_at: updated.updatedAt,
-  });
+  return c.json(taskToJson(updated));
 });
 
 export default app;

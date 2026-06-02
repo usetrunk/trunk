@@ -98,6 +98,11 @@ export const tasks = pgTable("tasks", {
   owner: text("owner").references(() => agents.id),
   createdBy: text("created_by").notNull().references(() => agents.id),
   due: date("due"),
+  startDate: date("start_date"), // for Gantt: when work begins
+  group: text("group"), // module/epic grouping (e.g., "payments", "auth", "onboarding")
+  dependsOn: jsonb("depends_on").$type<string[]>().default([]), // array of task IDs that must be done first
+  sequence: integer("sequence"), // ordering within a group
+  estimate: integer("estimate"), // estimated hours/days for Gantt bar width
   contextRef: text("context_ref"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -105,6 +110,7 @@ export const tasks = pgTable("tasks", {
 }, (table) => [
   index("tasks_scope_idx").on(table.scope, table.status),
   index("tasks_owner_idx").on(table.owner, table.status),
+  index("tasks_group_idx").on(table.scope, table.group),
 ]);
 
 export const sharedFacts = pgTable("shared_facts", {

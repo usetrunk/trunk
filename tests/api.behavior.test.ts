@@ -55,6 +55,11 @@ type TaskRow = {
   owner: string | null;
   createdBy: string;
   due: string | null;
+  startDate: string | null;
+  group: string | null;
+  dependsOn: string[];
+  sequence: number | null;
+  estimate: number | null;
   contextRef: string | null;
   metadata: Record<string, unknown>;
   createdAt: Date;
@@ -714,6 +719,122 @@ describe("Hono API behavior", () => {
     });
     const updated = await updateRes.json();
     expect(updated.priority).toBe("high");
+  });
+
+  // --- Planning / Gantt field tests ---
+
+  it("creates a task with planning fields (start_date, group, depends_on, sequence, estimate)", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Build auth module",
+      start_date: "2026-06-05",
+      group: "auth",
+      depends_on: ["fake-task-id-1", "fake-task-id-2"],
+      sequence: 1,
+      estimate: 8,
+    });
+    expect(res.status).toBe(201);
+    const task = await res.json();
+    expect(task.start_date).toBe("2026-06-05");
+    expect(task.group).toBe("auth");
+    expect(task.depends_on).toEqual(["fake-task-id-1", "fake-task-id-2"]);
+    expect(task.sequence).toBe(1);
+    expect(task.estimate).toBe(8);
+  });
+
+  it("updates planning fields on an existing task", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Plan me" });
+    const task = await createRes.json();
+    expect(task.start_date).toBeNull();
+    expect(task.group).toBeNull();
+
+    const updateRes = await updateTaskRaw(beta.secret, alpha.agent_id, task.id, {
+      start_date: "2026-07-01",
+      group: "payments",
+      depends_on: [task.id],
+      sequence: 3,
+      estimate: 16,
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.start_date).toBe("2026-07-01");
+    expect(updated.group).toBe("payments");
+    expect(updated.depends_on).toEqual([task.id]);
+    expect(updated.sequence).toBe(3);
+    expect(updated.estimate).toBe(16);
+  });
+
+  it("filters tasks by group", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await createTaskRaw(alpha.secret, beta.agent_id, { title: "Auth task", group: "auth" });
+    await createTaskRaw(alpha.secret, beta.agent_id, { title: "Payment task", group: "payments" });
+    await createTaskRaw(alpha.secret, beta.agent_id, { title: "Ungrouped task" });
+
+    const authRes = await app.request(`/tasks/${beta.agent_id}?group=auth`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const authTasks = await authRes.json();
+    expect(authTasks.tasks).toHaveLength(1);
+    expect(authTasks.tasks[0].title).toBe("Auth task");
+    expect(authTasks.tasks[0].group).toBe("auth");
+  });
+
+  it("SDK createTask with planning fields round-trip", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const task = await alphaClient.createTask({
+      contact_id: beta.agent_id,
+      title: "SDK planning task",
+      start_date: "2026-06-10",
+      group: "onboarding",
+      depends_on: [],
+      sequence: 0,
+      estimate: 4,
+    });
+
+    expect(task.start_date).toBe("2026-06-10");
+    expect(task.group).toBe("onboarding");
+    expect(task.depends_on).toEqual([]);
+    expect(task.sequence).toBe(0);
+    expect(task.estimate).toBe(4);
+
+    // Verify fields persist through list
+    const list = await alphaClient.listTasks(beta.agent_id);
+    const found = list.tasks.find(t => t.id === task.id)!;
+    expect(found.group).toBe("onboarding");
+    expect(found.estimate).toBe(4);
+  });
+
+  it("SDK updateTask with planning fields", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const task = await alphaClient.createTask({
+      contact_id: beta.agent_id,
+      title: "Update planning fields",
+    });
+
+    const updated = await betaClient.updateTask(alpha.agent_id, task.id, {
+      group: "infra",
+      estimate: 24,
+      sequence: 5,
+      start_date: "2026-08-01",
+      depends_on: ["dep-1"],
+    });
+
+    expect(updated.group).toBe("infra");
+    expect(updated.estimate).toBe(24);
+    expect(updated.sequence).toBe(5);
+    expect(updated.start_date).toBe("2026-08-01");
+    expect(updated.depends_on).toEqual(["dep-1"]);
   });
 
   // --- SDK task method tests ---
@@ -2278,6 +2399,11 @@ class InsertQuery {
         owner: (this.insertValues.owner as string | undefined) ?? null,
         createdBy: this.insertValues.createdBy as string,
         due: (this.insertValues.due as string | undefined) ?? null,
+        startDate: (this.insertValues.startDate as string | undefined) ?? null,
+        group: (this.insertValues.group as string | undefined) ?? null,
+        dependsOn: (this.insertValues.dependsOn as string[] | undefined) ?? [],
+        sequence: (this.insertValues.sequence as number | undefined) ?? null,
+        estimate: (this.insertValues.estimate as number | undefined) ?? null,
         contextRef: (this.insertValues.contextRef as string | undefined) ?? null,
         metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
         createdAt: new Date(),

@@ -297,16 +297,21 @@ server.tool(
     priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("Task priority (default: medium)"),
     owner: z.string().optional().describe("Agent ID of who's responsible"),
     due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
+    start_date: z.string().optional().describe("Start date for planning (YYYY-MM-DD)"),
+    group: z.string().optional().describe("Module/epic grouping (e.g. 'payments', 'auth')"),
+    depends_on: z.array(z.string()).optional().describe("Array of task IDs that must be done first"),
+    sequence: z.number().optional().describe("Ordering within a group"),
+    estimate: z.number().optional().describe("Estimated hours/days"),
     context_ref: z.string().optional().describe("Reference to a thread or message"),
   },
-  async ({ title, contact_id, room_id, workspace_id, description, priority, owner, due, context_ref }) => {
+  async ({ title, contact_id, room_id, workspace_id, description, priority, owner, due, start_date, group, depends_on, sequence, estimate, context_ref }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
     const result = await relay("/tasks", {
       method: "POST",
       secret: config.secret,
-      body: { contact_id, room_id, workspace_id, title, description, priority, owner, due, context_ref },
+      body: { contact_id, room_id, workspace_id, title, description, priority, owner, due, start_date, group, depends_on, sequence, estimate, context_ref },
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
@@ -321,8 +326,9 @@ server.tool(
     workspace_id: z.string().optional().describe("Workspace ID"),
     status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
     owner: z.string().optional().describe("Filter by owner agent ID"),
+    group: z.string().optional().describe("Filter by group/epic"),
   },
-  async ({ contact_id, room_id, workspace_id, status, owner }) => {
+  async ({ contact_id, room_id, workspace_id, status, owner, group }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -330,6 +336,7 @@ server.tool(
     const params = new URLSearchParams();
     if (status) params.set("status", status);
     if (owner) params.set("owner", owner);
+    if (group) params.set("group", group);
     const query = params.toString();
     if (workspace_id) {
       path = `/tasks/workspace/${workspace_id}${query ? `?${query}` : ""}`;
@@ -358,8 +365,13 @@ server.tool(
     title: z.string().optional().describe("Update the title"),
     description: z.string().optional().describe("Update the description"),
     due: z.string().optional().describe("Update due date (YYYY-MM-DD)"),
+    start_date: z.string().optional().describe("Update start date (YYYY-MM-DD)"),
+    group: z.string().optional().describe("Update group/epic"),
+    depends_on: z.array(z.string()).optional().describe("Update dependency task IDs"),
+    sequence: z.number().optional().describe("Update ordering within group"),
+    estimate: z.number().optional().describe("Update estimate (hours/days)"),
   },
-  async ({ contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due }) => {
+  async ({ contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due, start_date, group, depends_on, sequence, estimate }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -371,6 +383,11 @@ server.tool(
     if (title !== undefined) body.title = title;
     if (description !== undefined) body.description = description;
     if (due !== undefined) body.due = due;
+    if (start_date !== undefined) body.start_date = start_date;
+    if (group !== undefined) body.group = group;
+    if (depends_on !== undefined) body.depends_on = depends_on;
+    if (sequence !== undefined) body.sequence = sequence;
+    if (estimate !== undefined) body.estimate = estimate;
 
     const result = await relay(`/tasks/${scopeId}/${task_id}`, {
       method: "PATCH",

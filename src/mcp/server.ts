@@ -490,9 +490,14 @@ export function createTrunkMcpServer() {
       priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("Task priority (default: medium)"),
       owner: z.string().optional().describe("Agent ID of who's responsible"),
       due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
+      start_date: z.string().optional().describe("Start date for planning (YYYY-MM-DD)"),
+      group: z.string().optional().describe("Module/epic grouping (e.g. 'payments', 'auth')"),
+      depends_on: z.array(z.string()).optional().describe("Array of task IDs that must be done first"),
+      sequence: z.number().optional().describe("Ordering within a group"),
+      estimate: z.number().optional().describe("Estimated hours/days"),
       context_ref: z.string().optional().describe("Reference to a thread or message"),
     },
-    async ({ secret, title, contact_id, room_id, workspace_id, description, priority, owner, due, context_ref }) => {
+    async ({ secret, title, contact_id, room_id, workspace_id, description, priority, owner, due, start_date, group, depends_on, sequence, estimate, context_ref }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
       if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
@@ -516,10 +521,12 @@ export function createTrunkMcpServer() {
       const [task] = await db.insert(tasks).values({
         scope, title, description, priority: priority || "medium",
         owner: owner || contact_id || undefined,
-        createdBy: agent.id, due, contextRef: context_ref,
+        createdBy: agent.id, due, startDate: start_date, group,
+        dependsOn: depends_on || [], sequence, estimate,
+        contextRef: context_ref,
       }).returning();
 
-      return { content: [{ type: "text", text: JSON.stringify({ id: task.id, scope: task.scope, title: task.title, status: task.status, priority: task.priority, owner: task.owner, due: task.due }, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ id: task.id, scope: task.scope, title: task.title, status: task.status, priority: task.priority, owner: task.owner, due: task.due, start_date: task.startDate, group: task.group, depends_on: task.dependsOn, sequence: task.sequence, estimate: task.estimate }, null, 2) }] };
     }
   );
 
@@ -533,8 +540,9 @@ export function createTrunkMcpServer() {
       workspace_id: z.string().optional().describe("Workspace ID"),
       status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
       owner: z.string().optional().describe("Filter by owner agent ID"),
+      group: z.string().optional().describe("Filter by group/epic"),
     },
-    async ({ secret, contact_id, room_id, workspace_id, status, owner }) => {
+    async ({ secret, contact_id, room_id, workspace_id, status, owner, group }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
       if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
@@ -559,8 +567,9 @@ export function createTrunkMcpServer() {
         .where(status ? and(eq(tasks.scope, scope), eq(tasks.status, status)) : eq(tasks.scope, scope))
         .orderBy(desc(tasks.createdAt));
       if (owner) rows = rows.filter(t => t.owner === owner);
+      if (group) rows = rows.filter(t => t.group === group);
 
-      return { content: [{ type: "text", text: JSON.stringify({ tasks: rows.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, owner: t.owner, due: t.due, created_at: t.createdAt, updated_at: t.updatedAt })) }, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ tasks: rows.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, owner: t.owner, due: t.due, start_date: t.startDate, group: t.group, depends_on: t.dependsOn, sequence: t.sequence, estimate: t.estimate, created_at: t.createdAt, updated_at: t.updatedAt })) }, null, 2) }] };
     }
   );
 
@@ -579,8 +588,13 @@ export function createTrunkMcpServer() {
       title: z.string().optional().describe("Update the title"),
       description: z.string().optional().describe("Update the description"),
       due: z.string().optional().describe("Update due date (YYYY-MM-DD)"),
+      start_date: z.string().optional().describe("Update start date (YYYY-MM-DD)"),
+      group: z.string().optional().describe("Update group/epic"),
+      depends_on: z.array(z.string()).optional().describe("Update dependency task IDs"),
+      sequence: z.number().optional().describe("Update ordering within group"),
+      estimate: z.number().optional().describe("Update estimate (hours/days)"),
     },
-    async ({ secret, contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due }) => {
+    async ({ secret, contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due, start_date, group, depends_on, sequence, estimate }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -600,11 +614,16 @@ export function createTrunkMcpServer() {
       if (priority !== undefined) updates.priority = priority;
       if (owner !== undefined) updates.owner = owner;
       if (due !== undefined) updates.due = due;
+      if (start_date !== undefined) updates.startDate = start_date;
+      if (group !== undefined) updates.group = group;
+      if (depends_on !== undefined) updates.dependsOn = depends_on;
+      if (sequence !== undefined) updates.sequence = sequence;
+      if (estimate !== undefined) updates.estimate = estimate;
 
       const [updated] = await db.update(tasks).set(updates).where(eq(tasks.id, task_id)).returning();
       if (!updated) return errorResult("Task not found");
 
-      return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, title: updated.title, status: updated.status, priority: updated.priority, owner: updated.owner, due: updated.due, updated_at: updated.updatedAt }, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, title: updated.title, status: updated.status, priority: updated.priority, owner: updated.owner, due: updated.due, start_date: updated.startDate, group: updated.group, depends_on: updated.dependsOn, sequence: updated.sequence, estimate: updated.estimate, updated_at: updated.updatedAt }, null, 2) }] };
     }
   );
 
