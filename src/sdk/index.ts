@@ -553,6 +553,10 @@ export class TrunkClient {
     return this.request("/messages/purge-expired", { method: "POST", body: { days } });
   }
 
+  forward(messageId: string, to: string, comment?: string): Promise<SendResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/forward`, { method: "POST", body: { to, comment } });
+  }
+
   react(messageId: string, emoji: string): Promise<{ id: string; message_id: string; emoji: string; created_at: string }> {
     return this.request(`/messages/${encodeURIComponent(messageId)}/react`, { method: "POST", body: { emoji } });
   }
@@ -712,7 +716,7 @@ export class TrunkClient {
 }
 
 function requiresIdempotencyKey(path: string, method: string): boolean {
-  return method === "POST" && (path === "/messages" || /^\/messages\/[^/]+\/reply$/.test(path));
+  return method === "POST" && (path === "/messages" || /^\/messages\/[^/]+\/reply$/.test(path) || /^\/messages\/[^/]+\/forward$/.test(path));
 }
 
 async function readJson(response: Response): Promise<unknown> {

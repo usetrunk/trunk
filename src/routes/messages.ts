@@ -680,6 +680,97 @@ app.post("/:id/reply", async (c) => {
   return c.json(receipt(reply), 201);
 });
 
+// Forward a message to another contact
+app.post("/:id/forward", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+  const body = await c.req.json<{ to: string; comment?: string }>();
+  const idempotencyKey = requireIdempotencyKey(c);
+  if (idempotencyKey instanceof Response) return idempotencyKey;
+
+  if (!body.to) {
+    return c.json({ error: "to is required" }, 400);
+  }
+
+  // Verify original message exists and agent is sender or recipient
+  const [original] = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.id, messageId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      )
+    )
+    .limit(1);
+
+  if (!original) return c.json({ error: "Message not found" }, 404);
+
+  // Verify forwarder can message the target
+  const allowed = await canMessage(agentId, body.to);
+  if (!allowed) {
+    return c.json({ error: "Not a contact. Pair first." }, 403);
+  }
+
+  const existing = await findIdempotentMessage(agentId, idempotencyKey);
+  if (existing) {
+    return c.json(receipt(existing), 200);
+  }
+
+  // Build forwarded payload
+  const forwardedPayload: Record<string, unknown> = {
+    ...original.payload,
+    forwarded_from: original.fromAgent,
+    original_message_id: original.id,
+  };
+  if (body.comment) {
+    forwardedPayload.forward_comment = body.comment;
+  }
+
+  const [forwarded] = await db
+    .insert(messages)
+    .values({
+      fromAgent: agentId,
+      toAgent: body.to,
+      idempotencyKey,
+      type: original.type,
+      payload: forwardedPayload,
+    })
+    .returning();
+
+  if (!forwarded.threadId) {
+    await db
+      .update(messages)
+      .set({ threadId: forwarded.id })
+      .where(eq(messages.id, forwarded.id));
+    forwarded.threadId = forwarded.id;
+  }
+
+  await audit(agentId, "message.forward", "message", forwarded.id, {
+    original_message_id: original.id,
+    forwarded_to: body.to,
+  });
+
+  // Deliver
+  const [recipient] = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.id, body.to))
+    .limit(1);
+
+  if (recipient) {
+    await notifyRealtime(body.to, forwarded);
+    await db
+      .update(messages)
+      .set({ status: "delivered", deliveredAt: new Date() })
+      .where(eq(messages.id, forwarded.id));
+    forwarded.status = "delivered";
+    deliverWebhook(forwarded, recipient).catch(() => {});
+  }
+
+  return c.json(receipt(forwarded), 201);
+});
+
 // Add a reaction to a message
 app.post("/:id/react", async (c) => {
   const agentId = c.get("agentId");

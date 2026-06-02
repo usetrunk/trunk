@@ -737,6 +737,71 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_forward",
+    "Forward a message to another contact. Preserves the original message type and payload, adds provenance metadata (forwarded_from, original_message_id). Optionally include a comment.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to forward"),
+      to: z.string().describe("Recipient agent ID"),
+      comment: z.string().optional().describe("Optional comment to include with the forwarded message"),
+    },
+    async ({ secret, message_id, to, comment }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.id, message_id),
+            or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))
+          )
+        )
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+
+      const allowed = await canMessage(agent.id, to);
+      if (!allowed) return errorResult("Not a contact. Pair first.");
+
+      const forwardedPayload: Record<string, unknown> = {
+        ...msg.payload as Record<string, unknown>,
+        forwarded_from: msg.fromAgent,
+        original_message_id: msg.id,
+      };
+      if (comment) forwardedPayload.forward_comment = comment;
+
+      const [forwarded] = await db
+        .insert(messages)
+        .values({
+          fromAgent: agent.id,
+          toAgent: to,
+          type: msg.type,
+          payload: forwardedPayload,
+        })
+        .returning();
+
+      if (!forwarded.threadId) {
+        await db
+          .update(messages)
+          .set({ threadId: forwarded.id })
+          .where(eq(messages.id, forwarded.id));
+        forwarded.threadId = forwarded.id;
+      }
+
+      await db
+        .update(messages)
+        .set({ status: "delivered", deliveredAt: new Date() })
+        .where(eq(messages.id, forwarded.id));
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ id: forwarded.id, thread_id: forwarded.threadId, status: "delivered", created_at: forwarded.createdAt }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_react",
     "Add an emoji reaction to a message. Both sender and recipient can react. Idempotent — reacting with the same emoji again returns the existing reaction.",
     {

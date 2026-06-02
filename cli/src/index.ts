@@ -427,6 +427,27 @@ server.tool(
 );
 
 server.tool(
+  "trunk_forward",
+  "Forward a message to another contact. Preserves the original type and payload with provenance metadata.",
+  {
+    message_id: z.string().describe("ID of the message to forward"),
+    to: z.string().describe("Recipient agent ID"),
+    comment: z.string().optional().describe("Optional comment to include with the forwarded message"),
+  },
+  async ({ message_id, to, comment }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/${message_id}/forward`, {
+      method: "POST",
+      secret: config.secret,
+      body: { to, comment },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_react",
   "Add an emoji reaction to a message. Lightweight feedback without sending a full reply.",
   {

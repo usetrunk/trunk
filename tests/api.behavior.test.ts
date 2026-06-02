@@ -2761,6 +2761,109 @@ describe("Hono API behavior", () => {
     expect(page2.next_cursor).toBeNull();
   });
 
+  // --- Message Forwarding ---
+
+  it("forward sends a message to another contact with provenance metadata", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const gamma = await createClient().register({ name: "gamma" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    await betaClient.pair({ code: gamma.pairing_code });
+
+    // Alpha sends to beta
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Important info" },
+    });
+
+    // Beta forwards to gamma
+    const forwarded = await betaClient.forward(sent.id, gamma.agent_id, "FYI");
+
+    expect(forwarded).toMatchObject({
+      id: expect.any(String),
+      thread_id: expect.any(String),
+      status: "delivered",
+    });
+
+    // Gamma sees the forwarded message with provenance
+    const inbox = await gammaClient.inbox();
+    expect(inbox.messages).toHaveLength(1);
+    expect(inbox.messages[0].payload).toMatchObject({
+      content: "Important info",
+      forwarded_from: alpha.agent_id,
+      original_message_id: sent.id,
+      forward_comment: "FYI",
+    });
+  });
+
+  it("forward preserves original message type", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const gamma = await createClient().register({ name: "gamma" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    await betaClient.pair({ code: gamma.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "decision",
+      payload: { content: "We ship Monday" },
+    });
+
+    const forwarded = await betaClient.forward(sent.id, gamma.agent_id);
+
+    const gammaClient = createClient(gamma.secret);
+    const inbox = await gammaClient.inbox();
+    expect(inbox.messages[0].type).toBe("decision");
+  });
+
+  it("forward rejects if target is not a contact", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const gamma = await createClient().register({ name: "gamma" });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+
+    await expect(alphaClient.forward(sent.id, gamma.agent_id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("forward returns 404 for messages the agent cannot see", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(alphaClient.forward("nonexistent-id", beta.agent_id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("sender can forward their own sent message", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const gamma = await createClient().register({ name: "gamma" });
+    const alphaClient = createClient(alpha.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Shared update" },
+    });
+
+    const forwarded = await alphaClient.forward(sent.id, gamma.agent_id);
+    expect(forwarded.status).toBe("delivered");
+  });
+
   // --- Message Reactions ---
 
   it("react adds an emoji reaction to a message", async () => {
