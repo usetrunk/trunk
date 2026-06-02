@@ -1544,6 +1544,37 @@ describe("Hono API behavior", () => {
     ).rejects.toMatchObject({ status: 412, message: "Version mismatch" });
   });
 
+  it("listFacts returns all facts for a contact pair", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.putFact(beta.agent_id, "project.name", "Trunk");
+    await alphaClient.putFact(beta.agent_id, "project.status", "active");
+    await betaClient.putFact(alpha.agent_id, "role", "developer");
+
+    const result = await alphaClient.listFacts(beta.agent_id);
+
+    expect(result.facts).toHaveLength(3);
+    const keys = result.facts.map((f: { key: string }) => f.key).sort();
+    expect(keys).toEqual(["project.name", "project.status", "role"]);
+  });
+
+  it("listFacts returns empty array when no facts exist", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.listFacts(beta.agent_id);
+    expect(result.facts).toHaveLength(0);
+  });
+
+  it("listFacts rejects non-contacts", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+
+    await expect(alphaClient.listFacts(beta.agent_id)).rejects.toMatchObject({ status: 403 });
+  });
+
   it("rate limits registrations to 10 per hour per IP", async () => {
     for (let i = 0; i < 10; i += 1) {
       const res = await app.request("/agents/register", {

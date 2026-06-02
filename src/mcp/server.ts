@@ -1623,22 +1623,29 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_fact",
-    "Manage shared facts (key-value context) with a contact. Actions: get, put, delete.",
+    "Manage shared facts (key-value context) with a contact. Actions: list, get, put, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["get", "put", "delete"]).describe("Action to perform"),
+      action: z.enum(["list", "get", "put", "delete"]).describe("Action to perform"),
       contact_id: z.string().describe("Agent ID of the contact"),
-      key: z.string().describe("Fact key (alphanumeric, dots, hyphens, underscores)"),
+      key: z.string().optional().describe("Fact key (required for get/put/delete, not needed for list)"),
       value: z.unknown().optional().describe("Fact value (for put)"),
     },
     async ({ secret, action, contact_id, key, value }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
-      if (!isValidFactKey(key)) return errorResult("Invalid fact key");
       if (!(await verifyContactAccess(agent.id, contact_id))) return errorResult("Not a contact");
 
       const scope = contactScope(agent.id, contact_id);
+
+      if (action === "list") {
+        const facts = await db.select().from(sharedFacts).where(eq(sharedFacts.scope, scope));
+        return { content: [{ type: "text", text: JSON.stringify({ facts: facts.map((f) => ({ key: f.key, value: f.value, version: f.version, updated_by: f.updatedBy, updated_at: f.updatedAt })) }, null, 2) }] };
+      }
+
+      if (!key) return errorResult("key is required for get/put/delete actions");
+      if (!isValidFactKey(key)) return errorResult("Invalid fact key");
 
       if (action === "get") {
         const [fact] = await db.select().from(sharedFacts).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key))).limit(1);

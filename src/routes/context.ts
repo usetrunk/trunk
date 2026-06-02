@@ -11,6 +11,29 @@ const app = new Hono<AgentVariables>();
 
 app.use("/*", authMiddleware);
 
+app.get("/:contactId/facts", async (c) => {
+  const agentId = c.get("agentId");
+  const contactId = c.req.param("contactId");
+
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+
+  const scope = contactScope(agentId, contactId);
+  const facts = await db
+    .select()
+    .from(sharedFacts)
+    .where(eq(sharedFacts.scope, scope));
+
+  return c.json({
+    facts: facts.map((f) => ({
+      key: f.key,
+      value: f.value,
+      version: f.version,
+      updated_by: f.updatedBy,
+      updated_at: f.updatedAt,
+    })),
+  });
+});
+
 app.get("/:contactId/facts/:key", async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");

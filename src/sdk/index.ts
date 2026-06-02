@@ -525,6 +525,10 @@ export class TrunkClient {
     });
   }
 
+  listFacts(contactId: string): Promise<{ facts: Array<{ key: string; value: unknown; version: number; updated_by: string; updated_at: string }> }> {
+    return this.request(`/context/${encodeURIComponent(contactId)}/facts`);
+  }
+
   getFact(contactId: string, key: string): Promise<{ key: string; value: unknown; version: number; updated_by: string; updated_at?: string | Date }> {
     return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`);
   }

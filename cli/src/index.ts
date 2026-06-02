@@ -957,16 +957,23 @@ server.tool(
 
 server.tool(
   "trunk_fact",
-  "Manage shared facts (key-value context) with a contact. Actions: get, put, delete.",
+  "Manage shared facts (key-value context) with a contact. Actions: list, get, put, delete.",
   {
-    action: z.enum(["get", "put", "delete"]).describe("Action to perform"),
+    action: z.enum(["list", "get", "put", "delete"]).describe("Action to perform"),
     contact_id: z.string().describe("Agent ID of the contact"),
-    key: z.string().describe("Fact key (alphanumeric, dots, hyphens, underscores)"),
+    key: z.string().optional().describe("Fact key (required for get/put/delete, not needed for list)"),
     value: z.unknown().optional().describe("Fact value (for put)"),
   },
   async ({ action, contact_id, key, value }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    if (action === "list") {
+      const result = await relay(`/context/${contact_id}/facts`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (!key) return { content: [{ type: "text", text: "Error: key is required for get/put/delete actions" }], isError: true };
 
     if (action === "get") {
       const result = await relay(`/context/${contact_id}/facts/${encodeURIComponent(key)}`, { secret: config.secret });

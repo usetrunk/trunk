@@ -670,15 +670,22 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_fact",
-    "Manage shared facts (key-value context) with a contact. Actions: get, put, delete.",
+    "Manage shared facts (key-value context) with a contact. Actions: list, get, put, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["get", "put", "delete"]).describe("Action to perform"),
+      action: z.enum(["list", "get", "put", "delete"]).describe("Action to perform"),
       contact_id: z.string().describe("Agent ID of the contact"),
-      key: z.string().describe("Fact key (alphanumeric, dots, hyphens, underscores)"),
+      key: z.string().optional().describe("Fact key (required for get/put/delete, not needed for list)"),
       value: z.unknown().optional().describe("Fact value (for put)"),
     },
     async ({ secret, action, contact_id, key, value }) => {
+      if (action === "list") {
+        const result = await relay(`/context/${contact_id}/facts`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (!key) return { content: [{ type: "text", text: "Error: key is required for get/put/delete actions" }], isError: true };
+
       if (action === "get") {
         const result = await relay(`/context/${contact_id}/facts/${encodeURIComponent(key)}`, { secret });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
