@@ -10,10 +10,31 @@
  *   trunk harness stop-all                        — stop all agents
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+
+// Resolve claude binary path — needed because child_process may not inherit full PATH
+function findClaude(): string {
+  try {
+    return execSync("which claude", { encoding: "utf-8" }).trim();
+  } catch {
+    // Common locations
+    const candidates = [
+      "/opt/homebrew/bin/claude",
+      "/usr/local/bin/claude",
+      join(homedir(), ".npm-global/bin/claude"),
+      join(homedir(), ".local/bin/claude"),
+    ];
+    for (const c of candidates) {
+      if (existsSync(c)) return c;
+    }
+    return "claude"; // fall back, let it fail with a clear error
+  }
+}
+
+const CLAUDE_BIN = findClaude();
 
 const STATE_DIR = join(homedir(), ".trunk");
 const STATE_FILE = join(STATE_DIR, "harness-state.json");
@@ -89,7 +110,7 @@ function spawnAgent(config: AgentConfig): ChildProcess {
 
   console.log(`[harness] spawning ${config.name} (profile: ${config.profile}, cwd: ${expandedCwd})`);
 
-  const child = spawn("claude", [
+  const child = spawn(CLAUDE_BIN, [
     "--dangerously-skip-permissions",
     "-p",
     fullPrompt,
