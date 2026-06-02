@@ -992,6 +992,78 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_scheduled_messages",
+    "List your scheduled messages that haven't been delivered yet.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      limit: z.number().optional().describe("Max results (default 20)"),
+      cursor: z.string().optional().describe("Pagination cursor"),
+    },
+    async ({ secret, limit, cursor }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const conditions = [eq(messages.fromAgent, agent.id), eq(messages.status, "scheduled")];
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(and(...conditions))
+        .orderBy(desc(messages.createdAt))
+        .limit((limit ?? 20) + 1);
+
+      const pageLimit = limit ?? 20;
+      const has_more = rows.length > pageLimit;
+      const items = has_more ? rows.slice(0, pageLimit) : rows;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            messages: items,
+            has_more,
+            next_cursor: has_more && items.length > 0 ? `${items[items.length - 1].createdAt.toISOString()}_${items[items.length - 1].id}` : null,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_cancel_scheduled",
+    "Cancel a scheduled message before it is delivered. Only the sender can cancel.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the scheduled message to cancel"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.id, message_id), eq(messages.fromAgent, agent.id)))
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+      if (msg.status !== "scheduled") return errorResult("Only scheduled messages can be cancelled");
+
+      await db
+        .update(messages)
+        .set({ status: "cancelled", deletedAt: new Date() })
+        .where(eq(messages.id, message_id));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, message_id }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_forward",
     "Forward a message to another contact. Preserves the original message type and payload, adds provenance metadata (forwarded_from, original_message_id). Optionally include a comment.",
     {

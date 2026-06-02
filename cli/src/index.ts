@@ -506,6 +506,45 @@ server.tool(
 );
 
 server.tool(
+  "trunk_scheduled_messages",
+  "List your scheduled messages that haven't been delivered yet.",
+  {
+    limit: z.number().optional().describe("Max results (default 20)"),
+    cursor: z.string().optional().describe("Pagination cursor"),
+  },
+  async ({ limit, cursor }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set("limit", String(limit));
+    if (cursor) params.set("cursor", cursor);
+    const query = params.toString();
+    const result = await relay(`/messages/scheduled${query ? `?${query}` : ""}`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_cancel_scheduled",
+  "Cancel a scheduled message before it is delivered. Only the sender can cancel.",
+  {
+    message_id: z.string().describe("ID of the scheduled message to cancel"),
+  },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/${message_id}/cancel`, {
+      method: "POST",
+      secret: config.secret,
+      body: {},
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_forward",
   "Forward a message to another contact. Preserves the original type and payload with provenance metadata.",
   {
