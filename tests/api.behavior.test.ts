@@ -193,6 +193,14 @@ type MessageLabelRow = {
   createdAt: Date;
 };
 
+type BlockedContactRow = {
+  id: string;
+  agentId: string;
+  blockedAgentId: string;
+  reason: string | null;
+  createdAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -210,7 +218,8 @@ type TableName =
   | "subscriptions"
   | "reactions"
   | "webhook_deliveries"
-  | "message_labels";
+  | "message_labels"
+  | "blocked_contacts";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -230,6 +239,7 @@ const testState = vi.hoisted(() => ({
   reactions: [] as ReactionRow[],
   "webhook_deliveries": [] as WebhookDeliveryRow[],
   "message_labels": [] as MessageLabelRow[],
+  "blocked_contacts": [] as BlockedContactRow[],
   idCounter: 0,
 }));
 
@@ -261,6 +271,7 @@ describe("Hono API behavior", () => {
     testState.reactions.length = 0;
     testState["webhook_deliveries"].length = 0;
     testState["message_labels"].length = 0;
+    testState["blocked_contacts"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -3980,6 +3991,92 @@ describe("Hono API behavior", () => {
     const gammaClient = createClient(gamma.secret);
     await expect(gammaClient.addLabel(msg.id, "snoop")).rejects.toThrow(TrunkApiError);
   });
+
+  // ── Contact Blocking ──
+  it("can block and unblock a contact", async () => {
+    const { alpha, alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Beta blocks alpha
+    const block = await betaClient.blockContact(alpha.agent_id, "spam");
+    expect(block.ok).toBe(true);
+
+    // List blocked
+    const blocked = await betaClient.blockedContacts();
+    expect(blocked.count).toBe(1);
+    expect(blocked.blocked[0].agent_id).toBe(alpha.agent_id);
+    expect(blocked.blocked[0].reason).toBe("spam");
+
+    // Unblock
+    const unblock = await betaClient.unblockContact(alpha.agent_id);
+    expect(unblock.ok).toBe(true);
+
+    const afterUnblock = await betaClient.blockedContacts();
+    expect(afterUnblock.count).toBe(0);
+  });
+
+  it("blocked agent cannot send messages", async () => {
+    const { alpha, alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Beta blocks alpha
+    await betaClient.blockContact(alpha.agent_id, "unwanted");
+
+    // Alpha tries to send to beta — should fail
+    await expect(
+      alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "hello" },
+      })
+    ).rejects.toThrow(TrunkApiError);
+  });
+
+  it("unblocked agent can send messages again", async () => {
+    const { alpha, alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await betaClient.blockContact(alpha.agent_id);
+    await betaClient.unblockContact(alpha.agent_id);
+
+    // Should succeed now
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "hello again" },
+    });
+    expect(sent.id).toBeDefined();
+  });
+
+  it("blocking is one-directional", async () => {
+    const { alpha, alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Beta blocks alpha
+    await betaClient.blockContact(alpha.agent_id);
+
+    // Beta can still send to alpha (block is one-way)
+    const sent = await betaClient.send({
+      to: alpha.agent_id,
+      type: "update",
+      payload: { content: "I blocked you but I can still write" },
+    });
+    expect(sent.id).toBeDefined();
+  });
+
+  it("returns already_blocked on duplicate block", async () => {
+    const { alpha, alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await betaClient.blockContact(alpha.agent_id);
+    const duplicate = await betaClient.blockContact(alpha.agent_id);
+    expect(duplicate.already_blocked).toBe(true);
+  });
+
+  it("returns 404 when unblocking a non-blocked agent", async () => {
+    const { alpha, betaClient } = await registerPair();
+    await expect(betaClient.unblockContact(alpha.agent_id)).rejects.toThrow(TrunkApiError);
+  });
 });
 
 async function registerPair(): Promise<{
@@ -4438,6 +4535,18 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "blocked_contacts") {
+      const row: BlockedContactRow = {
+        id: nextId("block"),
+        agentId: this.insertValues.agentId as string,
+        blockedAgentId: this.insertValues.blockedAgentId as string,
+        reason: (this.insertValues.reason as string | undefined) ?? null,
+        createdAt: new Date(),
+      };
+      testState["blocked_contacts"].push(row);
+      return row;
+    }
+
     if (this.table === "webhook_deliveries") {
       const row: WebhookDeliveryRow = {
         id: nextId("whd"),
@@ -4553,7 +4662,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow> {
   return testState[table];
 }
 
@@ -4585,7 +4694,8 @@ function getTableName(table: unknown): TableName {
     name === "subscriptions" ||
     name === "reactions" ||
     name === "webhook_deliveries" ||
-    name === "message_labels"
+    name === "message_labels" ||
+    name === "blocked_contacts"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -4744,4 +4854,5 @@ const columnToProperty: Record<string, string> = {
   latency_ms: "latencyMs",
   start_date: "startDate",
   depends_on: "dependsOn",
+  blocked_agent_id: "blockedAgentId",
 };

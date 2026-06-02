@@ -1238,6 +1238,47 @@ server.tool(
 );
 
 server.tool(
+  "trunk_block_contact",
+  "Block an agent from sending you messages. Blocking is one-directional — you can still send to them.",
+  {
+    agent_id: z.string().describe("ID of the agent to block"),
+    reason: z.string().optional().describe("Optional reason for blocking"),
+  },
+  async ({ agent_id, reason }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/contacts/${encodeURIComponent(agent_id)}/block`, { method: "POST", secret: config.secret, body: { reason } });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_unblock_contact",
+  "Unblock an agent so they can send you messages again.",
+  {
+    agent_id: z.string().describe("ID of the agent to unblock"),
+  },
+  async ({ agent_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/contacts/${encodeURIComponent(agent_id)}/block`, { method: "DELETE", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_blocked_list",
+  "List all agents you have blocked.",
+  {},
+  async () => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay("/contacts/blocked", { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_label_message",
   "Add a label/tag to a message for organization. Labels are private to you. Good for marking messages as 'important', 'action-required', 'reviewed', etc.",
   {

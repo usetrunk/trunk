@@ -207,6 +207,17 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
   index("webhook_deliveries_agent_idx").on(table.agentId, table.createdAt),
 ]);
 
+export const blockedContacts = pgTable("blocked_contacts", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  blockedAgentId: text("blocked_agent_id").notNull().references(() => agents.id),
+  reason: text("reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("blocked_contacts_unique_idx").on(table.agentId, table.blockedAgentId),
+  index("blocked_contacts_agent_idx").on(table.agentId),
+]);
+
 export const messageLabels = pgTable("message_labels", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   messageId: text("message_id").notNull().references(() => messages.id),

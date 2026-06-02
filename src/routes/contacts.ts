@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, workspaces, workspaceContacts } from "../db/schema.js";
+import { agents, contacts, workspaces, workspaceContacts, blockedContacts } from "../db/schema.js";
 import { eq, or, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -232,6 +232,32 @@ app.get("/", async (c) => {
   return c.json({ contacts: result });
 });
 
+// List blocked agents
+app.get("/blocked", async (c) => {
+  const myId = c.get("agentId");
+
+  const rows = await db
+    .select()
+    .from(blockedContacts)
+    .where(eq(blockedContacts.agentId, myId));
+
+  const agentIds = rows.map((r) => r.blockedAgentId);
+  const agentRows = agentIds.length > 0
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+    : [];
+  const nameMap = new Map(agentRows.map((a) => [a.id, a.name]));
+
+  return c.json({
+    blocked: rows.map((r) => ({
+      agent_id: r.blockedAgentId,
+      name: nameMap.get(r.blockedAgentId) ?? null,
+      reason: r.reason,
+      blocked_at: r.createdAt,
+    })),
+    count: rows.length,
+  });
+});
+
 // Update contact alias
 app.patch("/:agentId", async (c) => {
   const myId = c.get("agentId");
@@ -286,6 +312,46 @@ app.delete("/:agentId", async (c) => {
     );
   await audit(myId, "contact.unpair", "agent", targetId);
 
+  return c.json({ ok: true });
+});
+
+// Block an agent
+app.post("/:agentId/block", async (c) => {
+  const myId = c.get("agentId");
+  const targetId = c.req.param("agentId");
+  if (myId === targetId) return c.json({ error: "Cannot block yourself" }, 400);
+
+  const body = await c.req.json<{ reason?: string }>().catch(() => ({}));
+
+  // Check if already blocked
+  const existing = await db
+    .select()
+    .from(blockedContacts)
+    .where(and(eq(blockedContacts.agentId, myId), eq(blockedContacts.blockedAgentId, targetId)));
+  if (existing.length > 0) {
+    return c.json({ ok: true, already_blocked: true, blocked_at: existing[0].createdAt });
+  }
+
+  const [row] = await db.insert(blockedContacts).values({
+    agentId: myId,
+    blockedAgentId: targetId,
+    reason: body.reason ?? null,
+  }).returning();
+  await audit(myId, "contact.block", "agent", targetId, { reason: body.reason });
+  return c.json({ ok: true, id: row.id, blocked_at: row.createdAt }, 201);
+});
+
+// Unblock an agent
+app.delete("/:agentId/block", async (c) => {
+  const myId = c.get("agentId");
+  const targetId = c.req.param("agentId");
+
+  const deleted = await db
+    .delete(blockedContacts)
+    .where(and(eq(blockedContacts.agentId, myId), eq(blockedContacts.blockedAgentId, targetId)))
+    .returning();
+  if (deleted.length === 0) return c.json({ error: "Not blocked" }, 404);
+  await audit(myId, "contact.unblock", "agent", targetId);
   return c.json({ ok: true });
 });
 

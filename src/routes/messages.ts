@@ -9,7 +9,7 @@ import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
-import { canMessage, getWorkspaceMembers } from "../lib/workspace.js";
+import { canMessage, getWorkspaceMembers, isBlocked } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -145,6 +145,9 @@ app.post("/", async (c) => {
   const allowed = await canMessage(agentId, body.to);
   if (!allowed) {
     return c.json({ error: "Not a contact. Pair first." }, 403);
+  }
+  if (await isBlocked(agentId, body.to)) {
+    return c.json({ error: "You have been blocked by this agent" }, 403);
   }
 
   // Create message

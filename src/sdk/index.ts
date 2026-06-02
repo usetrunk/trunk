@@ -497,6 +497,18 @@ export type LabelListResponse = {
   labels: LabelSummary[];
 };
 
+export type BlockedContact = {
+  agent_id: string;
+  name: string | null;
+  reason: string | null;
+  blocked_at: string | Date;
+};
+
+export type BlockedListResponse = {
+  blocked: BlockedContact[];
+  count: number;
+};
+
 export type AuditLogOptions = {
   action?: string;
   target_type?: string;
@@ -905,6 +917,18 @@ export class TrunkClient {
     if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/messages/threads${query ? `?${query}` : ""}`);
+  }
+
+  blockContact(agentId: string, reason?: string): Promise<{ ok: true; id?: string; blocked_at?: string; already_blocked?: boolean }> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/block`, { method: "POST", body: { reason } });
+  }
+
+  unblockContact(agentId: string): Promise<AckResponse> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}/block`, { method: "DELETE" });
+  }
+
+  blockedContacts(): Promise<BlockedListResponse> {
+    return this.request("/contacts/blocked");
   }
 
   addLabel(messageId: string, label: string): Promise<{ id: string; message_id: string; label: string; created_at: string }> {

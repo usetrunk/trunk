@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -2313,6 +2313,80 @@ export function createTrunkMcpServer() {
             has_more: paginated.has_more,
           }, null, 2),
         }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_block_contact",
+    "Block an agent from sending you messages. Blocking is one-directional — you can still send to them.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      agent_id: z.string().describe("ID of the agent to block"),
+      reason: z.string().optional().describe("Optional reason for blocking"),
+    },
+    async ({ secret, agent_id, reason }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+      if (agent.id === agent_id) return errorResult("Cannot block yourself");
+
+      const existing = await db.select().from(blockedContacts)
+        .where(and(eq(blockedContacts.agentId, agent.id), eq(blockedContacts.blockedAgentId, agent_id)));
+      if (existing.length > 0) {
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, already_blocked: true, blocked_at: existing[0].createdAt }, null, 2) }] };
+      }
+
+      const [row] = await db.insert(blockedContacts).values({ agentId: agent.id, blockedAgentId: agent_id, reason: reason ?? null }).returning();
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, id: row.id, blocked_at: row.createdAt }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_unblock_contact",
+    "Unblock an agent so they can send you messages again.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      agent_id: z.string().describe("ID of the agent to unblock"),
+    },
+    async ({ secret, agent_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const deleted = await db.delete(blockedContacts)
+        .where(and(eq(blockedContacts.agentId, agent.id), eq(blockedContacts.blockedAgentId, agent_id)))
+        .returning();
+      if (deleted.length === 0) return errorResult("Not blocked");
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_blocked_list",
+    "List all agents you have blocked.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const rows = await db.select().from(blockedContacts).where(eq(blockedContacts.agentId, agent.id));
+      const agentIds = rows.map((r) => r.blockedAgentId);
+      const agentList = agentIds.length > 0
+        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+        : [];
+      const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          blocked: rows.map((r) => ({
+            agent_id: r.blockedAgentId,
+            name: nameMap[r.blockedAgentId] ?? null,
+            reason: r.reason,
+            blocked_at: r.createdAt,
+          })),
+          count: rows.length,
+        }, null, 2) }],
       };
     }
   );
