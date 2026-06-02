@@ -172,6 +172,8 @@ export type SendMessageRequest = {
   reply_to?: string;
   idempotency_key?: string;
   scheduled_at?: string;
+  expires_at?: string;
+  ttl_seconds?: number;
 };
 
 export type MessageReceipt = {
@@ -181,6 +183,7 @@ export type MessageReceipt = {
   created_at: string | Date;
   recipients?: number;
   scheduled_at?: string;
+  expires_at?: string | Date;
 };
 
 export type TrunkMessage = {

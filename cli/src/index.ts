@@ -189,8 +189,10 @@ server.tool(
     urgency: z.enum(["sync", "async"]).optional(),
     finality: z.enum(["proposed", "decided", "fyi"]).optional(),
     scheduled_at: z.string().optional().describe("ISO 8601 date for deferred delivery (must be in the future)"),
+    expires_at: z.string().optional().describe("ISO 8601 date when message expires"),
+    ttl_seconds: z.number().optional().describe("Time-to-live in seconds (alternative to expires_at)"),
   },
-  async ({ to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality, scheduled_at }) => {
+  async ({ to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality, scheduled_at, expires_at, ttl_seconds }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -203,7 +205,7 @@ server.tool(
       method: "POST",
       secret: config.secret,
       idempotencyKey: idempotency_key ?? crypto.randomUUID(),
-      body: { to, type, payload, thread_id, reply_to, ...(scheduled_at ? { scheduled_at } : {}) },
+      body: { to, type, payload, thread_id, reply_to, ...(scheduled_at ? { scheduled_at } : {}), ...(expires_at ? { expires_at } : {}), ...(ttl_seconds ? { ttl_seconds } : {}) },
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }

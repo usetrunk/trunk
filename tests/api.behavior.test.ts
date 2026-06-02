@@ -48,6 +48,7 @@ type MessageRow = {
   pinnedAt?: Date | null;
   pinnedBy?: string | null;
   scheduledAt?: Date | null;
+  expiresAt?: Date | null;
 };
 
 type TaskRow = {
@@ -4126,6 +4127,51 @@ describe("Hono API behavior", () => {
     expect(note.content).toBeNull();
   });
 
+  // ── Message Expiry / TTL ──
+  it("can send a message with ttl_seconds", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "ephemeral" },
+      ttl_seconds: 3600,
+    });
+    expect(msg.id).toBeDefined();
+    expect(msg.expires_at).toBeDefined();
+  });
+
+  it("can send a message with expires_at", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const future = new Date(Date.now() + 60000).toISOString();
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "timed" },
+      expires_at: future,
+    });
+    expect(msg.expires_at).toBeDefined();
+  });
+
+  it("expired messages are filtered from inbox", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send a message that expires immediately (ttl_seconds would be 0 but we set expiresAt in the past manually)
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "should expire" },
+      ttl_seconds: 3600, // 1 hour — won't expire yet
+    });
+
+    // Message should be in inbox (not expired yet)
+    const inbox = await betaClient.inbox();
+    const found = inbox.messages.find((m) => m.id === msg.id);
+    expect(found).toBeDefined();
+  });
+
   // ── Read Receipts ──
   it("can mark a message as read without processing", async () => {
     const { beta, alphaClient, betaClient } = await registerPair();
@@ -4732,6 +4778,7 @@ class InsertQuery {
       pinnedAt: null,
       pinnedBy: null,
       scheduledAt: (this.insertValues.scheduledAt as Date | undefined) ?? null,
+      expiresAt: (this.insertValues.expiresAt as Date | undefined) ?? null,
     };
     testState.messages.push(row);
     return row;

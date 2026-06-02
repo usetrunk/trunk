@@ -138,8 +138,10 @@ export function createTrunkMcpServer() {
       urgency: z.enum(["sync", "async"]).optional().describe("sync = need response soon, async = whenever"),
       finality: z.enum(["proposed", "decided", "fyi"]).optional().describe("Is this a proposal, decision, or FYI?"),
       scheduled_at: z.string().optional().describe("ISO 8601 date for deferred delivery (must be in the future)"),
+      expires_at: z.string().optional().describe("ISO 8601 date when message expires and is filtered from inbox"),
+      ttl_seconds: z.number().optional().describe("Time-to-live in seconds (alternative to expires_at)"),
     },
-    async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality, scheduled_at }) => {
+    async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality, scheduled_at, expires_at, ttl_seconds }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -162,6 +164,15 @@ export function createTrunkMcpServer() {
         if (scheduledAt.getTime() <= Date.now()) return errorResult("scheduled_at must be in the future");
       }
 
+      let expiresAtDate: Date | undefined;
+      if (expires_at) {
+        expiresAtDate = new Date(expires_at);
+        if (isNaN(expiresAtDate.getTime())) return errorResult("expires_at must be a valid ISO 8601 date");
+        if (expiresAtDate.getTime() <= Date.now()) return errorResult("expires_at must be in the future");
+      } else if (ttl_seconds && ttl_seconds > 0) {
+        expiresAtDate = new Date(Date.now() + ttl_seconds * 1000);
+      }
+
       const payload: Record<string, unknown> = { content };
       if (context) payload.context = context;
       if (urgency) payload.urgency = urgency;
@@ -178,6 +189,7 @@ export function createTrunkMcpServer() {
           type,
           payload,
           ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
+          ...(expiresAtDate ? { expiresAt: expiresAtDate } : {}),
         })
         .returning();
 

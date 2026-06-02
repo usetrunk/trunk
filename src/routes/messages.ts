@@ -28,6 +28,8 @@ app.post("/", async (c) => {
     thread_id?: string;
     reply_to?: string;
     scheduled_at?: string;
+    expires_at?: string;
+    ttl_seconds?: number;
   }>();
   const idempotencyKey = requireIdempotencyKey(c);
   if (idempotencyKey instanceof Response) return idempotencyKey;
@@ -49,6 +51,20 @@ app.post("/", async (c) => {
     if (scheduledAt.getTime() <= Date.now()) {
       return c.json({ error: "scheduled_at must be in the future" }, 400);
     }
+  }
+
+  // Validate expiry (expires_at or ttl_seconds)
+  let expiresAt: Date | undefined;
+  if (body.expires_at) {
+    expiresAt = new Date(body.expires_at);
+    if (isNaN(expiresAt.getTime())) {
+      return c.json({ error: "expires_at must be a valid ISO 8601 date" }, 400);
+    }
+    if (expiresAt.getTime() <= Date.now()) {
+      return c.json({ error: "expires_at must be in the future" }, 400);
+    }
+  } else if (body.ttl_seconds && body.ttl_seconds > 0) {
+    expiresAt = new Date(Date.now() + body.ttl_seconds * 1000);
   }
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -109,6 +125,7 @@ app.post("/", async (c) => {
           idempotencyKey: `${idempotencyKey}:${recipientId}`,
           type: body.type,
           payload: body.payload,
+          ...(expiresAt ? { expiresAt } : {}),
         })
         .returning();
 
@@ -162,6 +179,7 @@ app.post("/", async (c) => {
       type: body.type,
       payload: body.payload,
       ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
+      ...(expiresAt ? { expiresAt } : {}),
     })
     .returning();
 
@@ -237,9 +255,11 @@ app.get("/inbox", async (c) => {
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit + 1);
 
-  const visible = status
+  const now = new Date();
+  const visible = (status
     ? rows.filter((row) => row.status !== "deleted")
-    : rows.filter((row) => row.status === "pending" || row.status === "delivered");
+    : rows.filter((row) => row.status === "pending" || row.status === "delivered")
+  ).filter((row) => !row.expiresAt || row.expiresAt > now);
 
   const page = paginateResults(visible, limit);
   return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
@@ -1367,6 +1387,7 @@ function receipt(message: MessageRow) {
     thread_id: message.threadId,
     status: message.status,
     created_at: message.createdAt,
+    ...(message.expiresAt ? { expires_at: message.expiresAt } : {}),
   };
 }
 
