@@ -175,6 +175,17 @@ export const subscriptions = pgTable("subscriptions", {
   index("subscriptions_stripe_sub_idx").on(table.stripeSubscriptionId),
 ]);
 
+export const reactions = pgTable("reactions", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  messageId: text("message_id").notNull().references(() => messages.id),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  emoji: text("emoji").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("reactions_unique_idx").on(table.messageId, table.agentId, table.emoji),
+  index("reactions_message_idx").on(table.messageId),
+]);
+
 export const sharedDocumentVersions = pgTable("shared_document_versions", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   documentId: text("document_id").notNull().references(() => sharedDocuments.id),

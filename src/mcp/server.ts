@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -732,6 +732,143 @@ export function createTrunkMcpServer() {
           type: "text",
           text: JSON.stringify({ purged: expired.length, cutoff: new Date(cutoff).toISOString() }, null, 2),
         }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_react",
+    "Add an emoji reaction to a message. Both sender and recipient can react. Idempotent — reacting with the same emoji again returns the existing reaction.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to react to"),
+      emoji: z.string().describe("Emoji or short text reaction (e.g. '👍', 'ack', 'lgtm')"),
+    },
+    async ({ secret, message_id, emoji }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+      if (emoji.length > 32) return errorResult("Emoji too long");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.id, message_id),
+            or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))
+          )
+        )
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+
+      const existing = await db
+        .select()
+        .from(reactions)
+        .where(
+          and(
+            eq(reactions.messageId, message_id),
+            eq(reactions.agentId, agent.id),
+            eq(reactions.emoji, emoji)
+          )
+        );
+
+      if (existing.length > 0) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ id: existing[0].id, message_id, emoji, created_at: existing[0].createdAt }, null, 2) }],
+        };
+      }
+
+      const [reaction] = await db
+        .insert(reactions)
+        .values({ messageId: message_id, agentId: agent.id, emoji })
+        .returning();
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ id: reaction.id, message_id: reaction.messageId, emoji: reaction.emoji, created_at: reaction.createdAt }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_unreact",
+    "Remove an emoji reaction from a message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+      emoji: z.string().describe("Emoji to remove"),
+    },
+    async ({ secret, message_id, emoji }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const existing = await db
+        .select()
+        .from(reactions)
+        .where(
+          and(
+            eq(reactions.messageId, message_id),
+            eq(reactions.agentId, agent.id),
+            eq(reactions.emoji, emoji)
+          )
+        );
+
+      if (existing.length === 0) return errorResult("Reaction not found");
+
+      await db
+        .delete(reactions)
+        .where(
+          and(
+            eq(reactions.messageId, message_id),
+            eq(reactions.agentId, agent.id),
+            eq(reactions.emoji, emoji)
+          )
+        );
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_reactions",
+    "List all reactions on a message, grouped by emoji with agent counts.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.id, message_id),
+            or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))
+          )
+        )
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+
+      const rows = await db
+        .select()
+        .from(reactions)
+        .where(eq(reactions.messageId, message_id));
+
+      const summary: Record<string, { count: number; agents: string[] }> = {};
+      for (const row of rows) {
+        if (!summary[row.emoji]) summary[row.emoji] = { count: 0, agents: [] };
+        summary[row.emoji].count++;
+        summary[row.emoji].agents.push(row.agentId);
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ message_id, reactions: rows.map((r) => ({ id: r.id, emoji: r.emoji, agent_id: r.agentId, created_at: r.createdAt })), summary }, null, 2) }],
       };
     }
   );

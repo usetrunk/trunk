@@ -553,6 +553,18 @@ export class TrunkClient {
     return this.request("/messages/purge-expired", { method: "POST", body: { days } });
   }
 
+  react(messageId: string, emoji: string): Promise<{ id: string; message_id: string; emoji: string; created_at: string }> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/react`, { method: "POST", body: { emoji } });
+  }
+
+  unreact(messageId: string, emoji: string): Promise<AckResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/react/${encodeURIComponent(emoji)}`, { method: "DELETE" });
+  }
+
+  reactions(messageId: string): Promise<{ message_id: string; reactions: Array<{ id: string; emoji: string; agent_id: string; created_at: string }>; summary: Record<string, { count: number; agents: string[] }> }> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/reactions`);
+  }
+
   createTask(input: CreateTaskRequest): Promise<TaskResponse> {
     return this.request("/tasks", { method: "POST", body: input });
   }

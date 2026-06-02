@@ -308,6 +308,47 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_react",
+    "Add an emoji reaction to a message. Lightweight feedback without sending a full reply. Idempotent — reacting with the same emoji again returns the existing reaction.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to react to"),
+      emoji: z.string().describe("Emoji or short text reaction (e.g. '👍', 'ack', 'lgtm')"),
+    },
+    async ({ secret, message_id, emoji }) => {
+      const result = await relay(`/messages/${message_id}/react`, { method: "POST", secret, body: { emoji } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_unreact",
+    "Remove an emoji reaction from a message.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+      emoji: z.string().describe("Emoji to remove"),
+    },
+    async ({ secret, message_id, emoji }) => {
+      const result = await relay(`/messages/${message_id}/react/${encodeURIComponent(emoji)}`, { method: "DELETE", secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_reactions",
+    "List all reactions on a message, grouped by emoji with agent counts.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+    },
+    async ({ secret, message_id }) => {
+      const result = await relay(`/messages/${message_id}/reactions`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {

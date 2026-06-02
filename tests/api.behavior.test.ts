@@ -159,6 +159,14 @@ type SubscriptionRow = {
   updatedAt: Date;
 };
 
+type ReactionRow = {
+  id: string;
+  messageId: string;
+  agentId: string;
+  emoji: string;
+  createdAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -173,7 +181,8 @@ type TableName =
   | "shared_document_versions"
   | "audit_events"
   | "rate_limits"
-  | "subscriptions";
+  | "subscriptions"
+  | "reactions";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -190,6 +199,7 @@ const testState = vi.hoisted(() => ({
   "audit_events": [] as AuditEventRow[],
   "rate_limits": [] as RateLimitRow[],
   subscriptions: [] as SubscriptionRow[],
+  reactions: [] as ReactionRow[],
   idCounter: 0,
 }));
 
@@ -218,6 +228,7 @@ describe("Hono API behavior", () => {
     testState["audit_events"].length = 0;
     testState["rate_limits"].length = 0;
     testState.subscriptions.length = 0;
+    testState.reactions.length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -2749,6 +2760,135 @@ describe("Hono API behavior", () => {
     expect(page2.has_more).toBe(false);
     expect(page2.next_cursor).toBeNull();
   });
+
+  // --- Message Reactions ---
+
+  it("react adds an emoji reaction to a message", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Nice work!" },
+    });
+
+    const reaction = await alphaClient.react(sent.id, "👍");
+
+    expect(reaction).toMatchObject({
+      id: expect.any(String),
+      message_id: sent.id,
+      emoji: "👍",
+      created_at: expect.any(String),
+    });
+  });
+
+  it("react is idempotent — same emoji returns existing reaction", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+
+    const first = await alphaClient.react(sent.id, "🎉");
+    const second = await alphaClient.react(sent.id, "🎉");
+
+    expect(second.id).toBe(first.id);
+  });
+
+  it("recipient can react to a received message", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "Thoughts?" },
+    });
+
+    const reaction = await betaClient.react(sent.id, "👀");
+
+    expect(reaction).toMatchObject({
+      message_id: sent.id,
+      emoji: "👀",
+    });
+  });
+
+  it("react returns 404 for messages the agent cannot see", async () => {
+    const { alphaClient } = await registerPair();
+
+    await expect(alphaClient.react("nonexistent-id", "👍")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("react rejects emoji longer than 32 chars", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+
+    await expect(alphaClient.react(sent.id, "x".repeat(33))).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("unreact removes a reaction", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+    await alphaClient.react(sent.id, "👍");
+
+    const result = await alphaClient.unreact(sent.id, "👍");
+    expect(result).toMatchObject({ ok: true });
+
+    const list = await alphaClient.reactions(sent.id);
+    expect(list.reactions).toHaveLength(0);
+  });
+
+  it("unreact returns 404 for non-existent reaction", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+
+    await expect(alphaClient.unreact(sent.id, "👍")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("reactions lists all reactions grouped by emoji", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Ship it!" },
+    });
+
+    await alphaClient.react(sent.id, "🚀");
+    await betaClient.react(sent.id, "🚀");
+    await alphaClient.react(sent.id, "👍");
+
+    const list = await alphaClient.reactions(sent.id);
+
+    expect(list.message_id).toBe(sent.id);
+    expect(list.reactions).toHaveLength(3);
+    expect(list.summary["🚀"]).toMatchObject({ count: 2 });
+    expect(list.summary["🚀"].agents).toContain(alpha.agent_id);
+    expect(list.summary["🚀"].agents).toContain(beta.agent_id);
+    expect(list.summary["👍"]).toMatchObject({ count: 1 });
+  });
+
+  it("reactions returns 404 for messages the agent cannot see", async () => {
+    const { alphaClient } = await registerPair();
+
+    await expect(alphaClient.reactions("nonexistent-id")).rejects.toMatchObject({ status: 404 });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -3162,6 +3302,18 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "reactions") {
+      const row: ReactionRow = {
+        id: nextId("reaction"),
+        messageId: this.insertValues.messageId as string,
+        agentId: this.insertValues.agentId as string,
+        emoji: this.insertValues.emoji as string,
+        createdAt: new Date(),
+      };
+      testState.reactions.push(row);
+      return row;
+    }
+
     const row: MessageRow = {
       id: nextId("message"),
       fromAgent: this.insertValues.fromAgent as string,
@@ -3256,7 +3408,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow> {
   return testState[table];
 }
 
@@ -3285,7 +3437,8 @@ function getTableName(table: unknown): TableName {
     name === "shared_document_versions" ||
     name === "audit_events" ||
     name === "rate_limits" ||
-    name === "subscriptions"
+    name === "subscriptions" ||
+    name === "reactions"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -3412,6 +3565,7 @@ const columnToProperty: Record<string, string> = {
   last_edited_by: "lastEditedBy",
   document_id: "documentId",
   edited_by: "editedBy",
+  message_id: "messageId",
   stripe_customer_id: "stripeCustomerId",
   stripe_subscription_id: "stripeSubscriptionId",
   current_period_start: "currentPeriodStart",

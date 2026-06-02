@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, reactions } from "../db/schema.js";
 import { eq, or, and, desc, lt } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -678,6 +678,146 @@ app.post("/:id/reply", async (c) => {
   }
 
   return c.json(receipt(reply), 201);
+});
+
+// Add a reaction to a message
+app.post("/:id/react", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+  const body = await c.req.json<{ emoji: string }>();
+
+  if (!body.emoji || typeof body.emoji !== "string") {
+    return c.json({ error: "emoji is required" }, 400);
+  }
+  if (body.emoji.length > 32) {
+    return c.json({ error: "emoji too long" }, 400);
+  }
+
+  // Verify message exists and agent is sender or recipient
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.id, messageId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      )
+    )
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+
+  // Check for existing reaction (idempotent)
+  const existing = await db
+    .select()
+    .from(reactions)
+    .where(
+      and(
+        eq(reactions.messageId, messageId),
+        eq(reactions.agentId, agentId),
+        eq(reactions.emoji, body.emoji)
+      )
+    );
+
+  if (existing.length > 0) {
+    return c.json({ id: existing[0].id, message_id: messageId, emoji: body.emoji, created_at: existing[0].createdAt }, 200);
+  }
+
+  const [reaction] = await db
+    .insert(reactions)
+    .values({ messageId, agentId, emoji: body.emoji })
+    .returning();
+
+  await audit(agentId, "message.react", "message", messageId, { emoji: body.emoji });
+
+  return c.json({
+    id: reaction.id,
+    message_id: reaction.messageId,
+    emoji: reaction.emoji,
+    created_at: reaction.createdAt,
+  }, 201);
+});
+
+// Remove a reaction from a message
+app.delete("/:id/react/:emoji", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+  const emoji = decodeURIComponent(c.req.param("emoji"));
+
+  const existing = await db
+    .select()
+    .from(reactions)
+    .where(
+      and(
+        eq(reactions.messageId, messageId),
+        eq(reactions.agentId, agentId),
+        eq(reactions.emoji, emoji)
+      )
+    );
+
+  if (existing.length === 0) {
+    return c.json({ error: "Reaction not found" }, 404);
+  }
+
+  await db
+    .delete(reactions)
+    .where(
+      and(
+        eq(reactions.messageId, messageId),
+        eq(reactions.agentId, agentId),
+        eq(reactions.emoji, emoji)
+      )
+    );
+
+  await audit(agentId, "message.unreact", "message", messageId, { emoji });
+
+  return c.json({ ok: true });
+});
+
+// List reactions for a message
+app.get("/:id/reactions", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+
+  // Verify message exists and agent is sender or recipient
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.id, messageId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      )
+    )
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+
+  const rows = await db
+    .select()
+    .from(reactions)
+    .where(eq(reactions.messageId, messageId));
+
+  // Group by emoji for summary
+  const summary: Record<string, { count: number; agents: string[] }> = {};
+  for (const row of rows) {
+    if (!summary[row.emoji]) {
+      summary[row.emoji] = { count: 0, agents: [] };
+    }
+    summary[row.emoji].count++;
+    summary[row.emoji].agents.push(row.agentId);
+  }
+
+  return c.json({
+    message_id: messageId,
+    reactions: rows.map((r) => ({
+      id: r.id,
+      emoji: r.emoji,
+      agent_id: r.agentId,
+      created_at: r.createdAt,
+    })),
+    summary,
+  });
 });
 
 export default app;

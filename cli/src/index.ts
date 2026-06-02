@@ -427,6 +427,60 @@ server.tool(
 );
 
 server.tool(
+  "trunk_react",
+  "Add an emoji reaction to a message. Lightweight feedback without sending a full reply.",
+  {
+    message_id: z.string().describe("ID of the message to react to"),
+    emoji: z.string().describe("Emoji or short text reaction (e.g. '👍', 'ack', 'lgtm')"),
+  },
+  async ({ message_id, emoji }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/${message_id}/react`, {
+      method: "POST",
+      secret: config.secret,
+      body: { emoji },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_unreact",
+  "Remove an emoji reaction from a message.",
+  {
+    message_id: z.string().describe("ID of the message"),
+    emoji: z.string().describe("Emoji to remove"),
+  },
+  async ({ message_id, emoji }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/${message_id}/react/${encodeURIComponent(emoji)}`, {
+      method: "DELETE",
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_reactions",
+  "List all reactions on a message, grouped by emoji.",
+  {
+    message_id: z.string().describe("ID of the message"),
+  },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/${message_id}/reactions`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_thread",
   "View full thread history.",
   { thread_id: z.string().describe("Thread ID") },
