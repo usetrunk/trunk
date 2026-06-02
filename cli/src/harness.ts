@@ -272,13 +272,22 @@ if (command === "start") {
   const loopMode = args.includes("--no-loop") ? false : (config.loop ?? true);
   const loopDelay = config.loopDelay ?? 30;
 
+  // Stagger agent spawns to avoid resource contention
+  const STAGGER_DELAY_MS = 10000; // 10s between spawns
   const children: ChildProcess[] = [];
-  for (const agentConfig of config.agents) {
+
+  for (let i = 0; i < config.agents.length; i++) {
+    const agentConfig = config.agents[i];
     if (config.workspace && !agentConfig.workspace) {
       agentConfig.workspace = config.workspace;
     }
     if (agentConfig.loop === undefined) agentConfig.loop = loopMode;
     if (agentConfig.loopDelay === undefined) agentConfig.loopDelay = loopDelay;
+
+    if (i > 0) {
+      console.log(`[harness] waiting ${STAGGER_DELAY_MS / 1000}s before next spawn...`);
+      await new Promise(r => setTimeout(r, STAGGER_DELAY_MS));
+    }
     children.push(spawnAgent(agentConfig));
   }
 
