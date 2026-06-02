@@ -119,6 +119,27 @@ type RateLimitRow = {
   updatedAt: Date;
 };
 
+type SharedDocumentRow = {
+  id: string;
+  scope: string;
+  name: string;
+  contentType: string;
+  body: string;
+  version: number;
+  lastEditedBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type SharedDocumentVersionRow = {
+  id: string;
+  documentId: string;
+  version: number;
+  body: string;
+  editedBy: string;
+  createdAt: Date;
+};
+
 type SubscriptionRow = {
   id: string;
   workspaceId: string;
@@ -142,6 +163,8 @@ type TableName =
   | "workspaces"
   | "workspace_contacts"
   | "shared_facts"
+  | "shared_documents"
+  | "shared_document_versions"
   | "audit_events"
   | "rate_limits"
   | "subscriptions";
@@ -156,6 +179,8 @@ const testState = vi.hoisted(() => ({
   workspaces: [] as WorkspaceRow[],
   "workspace_contacts": [] as WorkspaceContactRow[],
   "shared_facts": [] as SharedFactRow[],
+  "shared_documents": [] as SharedDocumentRow[],
+  "shared_document_versions": [] as SharedDocumentVersionRow[],
   "audit_events": [] as AuditEventRow[],
   "rate_limits": [] as RateLimitRow[],
   subscriptions: [] as SubscriptionRow[],
@@ -182,6 +207,8 @@ describe("Hono API behavior", () => {
     testState.workspaces.length = 0;
     testState["workspace_contacts"].length = 0;
     testState["shared_facts"].length = 0;
+    testState["shared_documents"].length = 0;
+    testState["shared_document_versions"].length = 0;
     testState["audit_events"].length = 0;
     testState["rate_limits"].length = 0;
     testState.subscriptions.length = 0;
@@ -1752,6 +1779,193 @@ describe("Hono API behavior", () => {
     expect(upgraded.plan).toBe("team");
     expect(upgraded.stripe_customer_id).toBe("cus_test123");
   });
+
+  // --- Unpair tests ---
+
+  it("unpair removes the contact relationship", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Verify paired
+    const before = await alphaClient.contacts();
+    expect(before.contacts.some((c) => c.agent_id === beta.agent_id)).toBe(true);
+
+    // Unpair
+    await expect(alphaClient.unpair(beta.agent_id)).resolves.toEqual({ ok: true });
+
+    // Neither side sees the other as a contact
+    const alphaContacts = await alphaClient.contacts();
+    const betaContacts = await betaClient.contacts();
+    expect(alphaContacts.contacts.some((c) => c.agent_id === beta.agent_id)).toBe(false);
+    expect(betaContacts.contacts.some((c) => c.agent_id === alpha.agent_id)).toBe(false);
+  });
+
+  it("unpair blocks messaging between formerly paired agents", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.unpair(beta.agent_id);
+
+    await expect(
+      alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "hello" } })
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  // --- Workspace members endpoint ---
+
+  it("workspaceMembers returns all members for a workspace member", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-m1", owner: "A" });
+    const beta = await anon.register({ name: "ws-m2", owner: "B" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "MembersTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const result = await alphaClient.workspaceMembers(ws.id);
+    expect(result.members).toHaveLength(2);
+    const ids = result.members.map((m) => m.agent_id);
+    expect(ids).toContain(alpha.agent_id);
+    expect(ids).toContain(beta.agent_id);
+  });
+
+  it("workspaceMembers rejects non-members", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-owner" });
+    const outsider = await anon.register({ name: "outsider" });
+    const alphaClient = createClient(alpha.secret);
+    const outsiderClient = createClient(outsider.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "PrivateTeam" });
+
+    await expect(outsiderClient.workspaceMembers(ws.id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  // --- SDK contact-scoped task list ---
+
+  it("SDK listTasks returns contact-scoped tasks", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const task = await alphaClient.createTask({
+      contact_id: beta.agent_id,
+      title: "SDK list test",
+      priority: "high",
+    });
+    expect(task.title).toBe("SDK list test");
+
+    const alphaList = await alphaClient.listTasks(beta.agent_id);
+    const betaList = await betaClient.listTasks(alpha.agent_id);
+    expect(alphaList.tasks).toHaveLength(1);
+    expect(betaList.tasks).toHaveLength(1);
+    expect(alphaList.tasks[0].title).toBe("SDK list test");
+    expect(alphaList.tasks[0].priority).toBe("high");
+  });
+
+  it("SDK listTasks filters by status", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const task = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Open task" });
+    await alphaClient.updateTask(beta.agent_id, task.id, { status: "done" });
+
+    const open = await alphaClient.listTasks(beta.agent_id, { status: "open" });
+    const done = await alphaClient.listTasks(beta.agent_id, { status: "done" });
+    expect(open.tasks).toHaveLength(0);
+    expect(done.tasks).toHaveLength(1);
+  });
+
+  // --- Documents CRUD ---
+
+  it("creates a shared document and lists it for both contacts", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "Design Doc",
+      body: "# Architecture\nInitial draft.",
+    });
+    expect(doc.name).toBe("Design Doc");
+    expect(doc.version).toBe(1);
+    expect(doc.last_edited_by).toBe(alpha.agent_id);
+
+    // Both contacts can list it
+    const alphaList = await alphaClient.listDocuments(beta.agent_id);
+    const betaList = await betaClient.listDocuments(alpha.agent_id);
+    expect(alphaList.documents).toHaveLength(1);
+    expect(betaList.documents).toHaveLength(1);
+    expect(alphaList.documents[0].name).toBe("Design Doc");
+  });
+
+  it("gets a document by id with body included", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const created = await alphaClient.createDocument(beta.agent_id, {
+      name: "Spec",
+      body: "Full content here.",
+    });
+
+    const doc = await alphaClient.getDocument(beta.agent_id, created.id);
+    expect(doc.body).toBe("Full content here.");
+    expect(doc.name).toBe("Spec");
+    expect(doc.version).toBe(1);
+  });
+
+  it("updates a document and increments version", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "Living Doc",
+      body: "v1 content",
+    });
+
+    const updated = await betaClient.updateDocument(alpha.agent_id, doc.id, {
+      body: "v2 content",
+    });
+    expect(updated.version).toBe(2);
+    expect(updated.last_edited_by).toBe(beta.agent_id);
+
+    // Verify the body was updated
+    const fetched = await alphaClient.getDocument(beta.agent_id, doc.id);
+    expect(fetched.body).toBe("v2 content");
+  });
+
+  it("tracks document version history", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "Versioned Doc",
+      body: "first draft",
+    });
+    await betaClient.updateDocument(alpha.agent_id, doc.id, { body: "second draft" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "third draft" });
+
+    const versions = await alphaClient.documentVersions(beta.agent_id, doc.id);
+    expect(versions.versions).toHaveLength(3);
+    expect(versions.versions[0].version).toBe(3); // desc order
+    expect(versions.versions[2].version).toBe(1);
+
+    // Retrieve specific version
+    const v1 = await betaClient.documentVersion(alpha.agent_id, doc.id, 1);
+    expect(v1.body).toBe("first draft");
+    expect(v1.version).toBe(1);
+
+    const v2 = await betaClient.documentVersion(alpha.agent_id, doc.id, 2);
+    expect(v2.body).toBe("second draft");
+  });
+
+  it("rejects document creation for non-contacts", async () => {
+    const alpha = await createClient().register({ name: "doc-alpha" });
+    const beta = await createClient().register({ name: "doc-beta" });
+    const alphaClient = createClient(alpha.secret);
+
+    await expect(
+      alphaClient.createDocument(beta.agent_id, { name: "Forbidden", body: "nope" })
+    ).rejects.toMatchObject({ status: 403 });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -1916,6 +2130,22 @@ class SelectQuery {
       rows.sort((a, b) => {
         const left = (a as MessageRow).createdAt.getTime();
         const right = (b as MessageRow).createdAt.getTime();
+        return this.orderDirection === "desc" ? right - left : left - right;
+      });
+    }
+
+    if (this.table === "shared_documents") {
+      rows.sort((a, b) => {
+        const left = (a as SharedDocumentRow).updatedAt.getTime();
+        const right = (b as SharedDocumentRow).updatedAt.getTime();
+        return this.orderDirection === "desc" ? right - left : left - right;
+      });
+    }
+
+    if (this.table === "shared_document_versions") {
+      rows.sort((a, b) => {
+        const left = (a as SharedDocumentVersionRow).version;
+        const right = (b as SharedDocumentVersionRow).version;
         return this.orderDirection === "desc" ? right - left : left - right;
       });
     }
@@ -2087,6 +2317,35 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "shared_documents") {
+      const row: SharedDocumentRow = {
+        id: nextId("doc"),
+        scope: this.insertValues.scope as string,
+        name: this.insertValues.name as string,
+        contentType: (this.insertValues.contentType as string) ?? "text/markdown",
+        body: this.insertValues.body as string,
+        version: (this.insertValues.version as number | undefined) ?? 1,
+        lastEditedBy: this.insertValues.lastEditedBy as string,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      testState["shared_documents"].push(row);
+      return row;
+    }
+
+    if (this.table === "shared_document_versions") {
+      const row: SharedDocumentVersionRow = {
+        id: nextId("docver"),
+        documentId: this.insertValues.documentId as string,
+        version: this.insertValues.version as number,
+        body: this.insertValues.body as string,
+        editedBy: this.insertValues.editedBy as string,
+        createdAt: new Date(),
+      };
+      testState["shared_document_versions"].push(row);
+      return row;
+    }
+
     if (this.table === "audit_events") {
       const row: AuditEventRow = {
         id: nextId("audit"),
@@ -2187,7 +2446,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | AuditEventRow | RateLimitRow | SubscriptionRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow> {
   return testState[table];
 }
 
@@ -2212,6 +2471,8 @@ function getTableName(table: unknown): TableName {
     name === "workspaces" ||
     name === "workspace_contacts" ||
     name === "shared_facts" ||
+    name === "shared_documents" ||
+    name === "shared_document_versions" ||
     name === "audit_events" ||
     name === "rate_limits" ||
     name === "subscriptions"
@@ -2322,6 +2583,10 @@ const columnToProperty: Record<string, string> = {
   window_start: "windowStart",
   workspace_id: "workspaceId",
   to_workspace: "toWorkspace",
+  content_type: "contentType",
+  last_edited_by: "lastEditedBy",
+  document_id: "documentId",
+  edited_by: "editedBy",
   stripe_customer_id: "stripeCustomerId",
   stripe_subscription_id: "stripeSubscriptionId",
   current_period_start: "currentPeriodStart",

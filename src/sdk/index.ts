@@ -511,6 +511,30 @@ export class TrunkClient {
     return this.request("/billing/portal", { method: "POST" });
   }
 
+  createDocument(contactId: string, input: CreateDocumentRequest): Promise<DocumentResponse> {
+    return this.request(`/documents/${encodeURIComponent(contactId)}`, { method: "POST", body: input });
+  }
+
+  listDocuments(contactId: string): Promise<DocumentListResponse> {
+    return this.request(`/documents/${encodeURIComponent(contactId)}`);
+  }
+
+  getDocument(contactId: string, docId: string): Promise<DocumentResponse> {
+    return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}`);
+  }
+
+  updateDocument(contactId: string, docId: string, input: UpdateDocumentRequest): Promise<DocumentResponse> {
+    return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}`, { method: "PUT", body: input });
+  }
+
+  documentVersions(contactId: string, docId: string): Promise<DocumentVersionsResponse> {
+    return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}/versions`);
+  }
+
+  documentVersion(contactId: string, docId: string, version: number): Promise<DocumentVersionResponse> {
+    return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}/versions/${version}`);
+  }
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string } = {}
