@@ -321,6 +321,15 @@ export type SentOptions = {
   limit?: number;
 };
 
+export type SearchOptions = {
+  q?: string;
+  type?: string;
+  contact?: string;
+  after?: string;
+  before?: string;
+  limit?: number;
+};
+
 export type MessagesResponse = {
   messages: TrunkMessage[];
 };
@@ -437,6 +446,18 @@ export class TrunkClient {
     if (options.limit !== undefined) search.set("limit", String(options.limit));
     const query = search.toString();
     return this.request(`/messages/sent${query ? `?${query}` : ""}`);
+  }
+
+  search(options: SearchOptions = {}): Promise<MessagesResponse> {
+    const search = new URLSearchParams();
+    if (options.q) search.set("q", options.q);
+    if (options.type) search.set("type", options.type);
+    if (options.contact) search.set("contact", options.contact);
+    if (options.after) search.set("after", options.after);
+    if (options.before) search.set("before", options.before);
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    const query = search.toString();
+    return this.request(`/messages/search${query ? `?${query}` : ""}`);
   }
 
   thread(threadId: string): Promise<MessagesResponse> {

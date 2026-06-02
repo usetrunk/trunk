@@ -1731,6 +1731,88 @@ describe("Hono API behavior", () => {
     expect(limited.messages).toHaveLength(2);
   });
 
+  // --- Message search tests ---
+
+  it("searches messages by content text", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "deploy the feature" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "review the PR" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "deploy to staging" } });
+
+    const results = await alphaClient.search({ q: "deploy" });
+    expect(results.messages).toHaveLength(2);
+    expect(results.messages.every((m: { payload: { content: string } }) => (m.payload.content as string).includes("deploy"))).toBe(true);
+  });
+
+  it("searches messages by type filter", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "q1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "u1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "q2" } });
+
+    const results = await alphaClient.search({ type: "question" });
+    expect(results.messages).toHaveLength(2);
+    expect(results.messages.every((m: { type: string }) => m.type === "question")).toBe(true);
+  });
+
+  it("searches messages by contact filter", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "alpha", owner: "Andrei" });
+    const beta = await anon.register({ name: "beta", owner: "Frank" });
+    const gamma = await anon.register({ name: "gamma", owner: "Vince" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "to beta" } });
+    await alphaClient.send({ to: gamma.agent_id, type: "update", payload: { content: "to gamma" } });
+
+    const withBeta = await alphaClient.search({ contact: beta.agent_id });
+    expect(withBeta.messages).toHaveLength(1);
+    expect(withBeta.messages[0].payload).toMatchObject({ content: "to beta" });
+  });
+
+  it("searches messages with combined filters", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "deploy question" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "deploy update" } });
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "review question" } });
+
+    const results = await alphaClient.search({ q: "deploy", type: "question" });
+    expect(results.messages).toHaveLength(1);
+    expect(results.messages[0].payload).toMatchObject({ content: "deploy question" });
+  });
+
+  it("excludes deleted messages from search results", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "to delete" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "keep" } });
+    await alphaClient.deleteMessage(msg.id);
+
+    const results = await alphaClient.search({ q: "delete" });
+    expect(results.messages).toHaveLength(0);
+  });
+
+  it("respects limit parameter on search", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 5; i++) {
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: `search-msg-${i}` } });
+    }
+
+    const limited = await alphaClient.search({ q: "search-msg", limit: 2 });
+    expect(limited.messages).toHaveLength(2);
+  });
+
   // --- Workspace tests ---
 
   it("creates a workspace and the creator auto-joins", async () => {

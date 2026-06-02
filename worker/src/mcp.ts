@@ -147,6 +147,38 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_search",
+    "Search your messages by content, type, contact, and date range.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      q: z.string().optional().describe("Text to search for in message content"),
+      type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
+      contact: z.string().optional().describe("Filter to messages with a specific agent ID"),
+      after: z.string().optional().describe("Only messages after this ISO date"),
+      before: z.string().optional().describe("Only messages before this ISO date"),
+      limit: z.number().optional().describe("Max results (default 50, max 100)"),
+    },
+    async ({ secret, q, type, contact, after, before, limit }) => {
+      const search = new URLSearchParams();
+      if (q) search.set("q", q);
+      if (type) search.set("type", type);
+      if (contact) search.set("contact", contact);
+      if (after) search.set("after", after);
+      if (before) search.set("before", before);
+      if (limit !== undefined) search.set("limit", String(limit));
+      const query = search.toString();
+
+      const result = await relay(`/messages/search${query ? `?${query}` : ""}`, { secret });
+      if (result.error) return { content: [{ type: "text", text: `Error: ${result.error}` }], isError: true };
+      const msgs = result.messages || [];
+      if (msgs.length === 0) {
+        return { content: [{ type: "text", text: "No messages found matching your search." }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_reply",
     "Reply to a message (acknowledges the original and sends your response in the same thread).",
     {

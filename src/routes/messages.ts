@@ -226,6 +226,59 @@ app.get("/sent", async (c) => {
   return c.json({ messages: visible });
 });
 
+// Search messages by content, type, contact, and date range
+app.get("/search", async (c) => {
+  const agentId = c.get("agentId");
+  const q = c.req.query("q")?.toLowerCase();
+  const type = c.req.query("type");
+  const contact = c.req.query("contact");
+  const after = c.req.query("after");
+  const before = c.req.query("before");
+  const limit = Math.min(parseInt(c.req.query("limit") || "50"), 100);
+
+  // Build DB-level conditions for indexed fields
+  const conditions = [
+    or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId)),
+  ];
+  if (type) {
+    conditions.push(eq(messages.type, type));
+  }
+  if (contact) {
+    conditions.push(or(
+      and(eq(messages.fromAgent, agentId), eq(messages.toAgent, contact)),
+      and(eq(messages.fromAgent, contact), eq(messages.toAgent, agentId)),
+    ));
+  }
+
+  // Fetch a larger set when JS filtering is needed
+  const fetchLimit = (q || after || before) ? 500 : limit;
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(...conditions))
+    .orderBy(desc(messages.createdAt))
+    .limit(fetchLimit);
+
+  // JS-level filtering for text search and date range
+  let filtered = rows.filter((row) => row.status !== "deleted");
+  if (q) {
+    filtered = filtered.filter((row) => {
+      const content = (row.payload as Record<string, unknown>).content;
+      return typeof content === "string" && content.toLowerCase().includes(q);
+    });
+  }
+  if (after) {
+    const afterDate = new Date(after);
+    filtered = filtered.filter((row) => row.createdAt >= afterDate);
+  }
+  if (before) {
+    const beforeDate = new Date(before);
+    filtered = filtered.filter((row) => row.createdAt <= beforeDate);
+  }
+
+  return c.json({ messages: filtered.slice(0, limit) });
+});
+
 app.post("/purge-expired", async (c) => {
   const agentId = c.get("agentId");
   const body: { days?: number } = await c.req.json<{ days?: number }>().catch(() => ({}));

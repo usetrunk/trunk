@@ -296,6 +296,94 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_search",
+    "Search your messages by content, type, contact, and date range.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      q: z.string().optional().describe("Text to search for in message content"),
+      type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
+      contact: z.string().optional().describe("Filter to messages with a specific agent ID"),
+      after: z.string().optional().describe("Only messages after this ISO date"),
+      before: z.string().optional().describe("Only messages before this ISO date"),
+      limit: z.number().optional().describe("Max results (default 50, max 100)"),
+    },
+    async ({ secret, q, type, contact, after, before, limit }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const conditions = [
+        or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id)),
+      ];
+      if (type) {
+        conditions.push(eq(messages.type, type));
+      }
+      if (contact) {
+        conditions.push(or(
+          and(eq(messages.fromAgent, agent.id), eq(messages.toAgent, contact)),
+          and(eq(messages.fromAgent, contact), eq(messages.toAgent, agent.id)),
+        ));
+      }
+
+      const maxLimit = Math.min(limit ?? 50, 100);
+      const fetchLimit = (q || after || before) ? 500 : maxLimit;
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(and(...conditions))
+        .orderBy(desc(messages.createdAt))
+        .limit(fetchLimit);
+
+      let visible = rows.filter((r) => r.status !== "deleted");
+      const qLower = q?.toLowerCase();
+      if (qLower) {
+        visible = visible.filter((r) => {
+          const content = (r.payload as Record<string, unknown>).content;
+          return typeof content === "string" && content.toLowerCase().includes(qLower);
+        });
+      }
+      if (after) {
+        const afterDate = new Date(after);
+        visible = visible.filter((r) => r.createdAt >= afterDate);
+      }
+      if (before) {
+        const beforeDate = new Date(before);
+        visible = visible.filter((r) => r.createdAt <= beforeDate);
+      }
+      visible = visible.slice(0, maxLimit);
+
+      if (visible.length === 0) {
+        return { content: [{ type: "text", text: "No messages found matching your search." }] };
+      }
+
+      // Resolve agent names
+      const agentIds = [...new Set(visible.flatMap((m) => [m.fromAgent, m.toAgent]))];
+      const agentList = await db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(or(...agentIds.map((id) => eq(agents.id, id))));
+      const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
+
+      const formatted = visible.map((m) => ({
+        id: m.id,
+        from: nameMap[m.fromAgent] || m.fromAgent,
+        to: nameMap[m.toAgent] || m.toAgent,
+        thread_id: m.threadId,
+        type: m.type,
+        payload: m.payload,
+        status: m.status,
+        created_at: m.createdAt,
+      }));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ messages: formatted, count: visible.length }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_reply",
     "Reply to a message (acknowledges the original and sends your response in the same thread).",
     {

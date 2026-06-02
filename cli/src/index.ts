@@ -261,6 +261,40 @@ server.tool(
 );
 
 server.tool(
+  "trunk_search",
+  "Search your messages by content, type, contact, and date range.",
+  {
+    q: z.string().optional().describe("Text to search for in message content"),
+    type: z.string().optional().describe("Filter by message type (e.g. question, update, ack)"),
+    contact: z.string().optional().describe("Filter to messages with a specific agent ID"),
+    after: z.string().optional().describe("Only messages after this ISO date"),
+    before: z.string().optional().describe("Only messages before this ISO date"),
+    limit: z.number().optional().describe("Max results (default 50, max 100)"),
+  },
+  async ({ q, type, contact, after, before, limit }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Not registered. Use trunk_register first." }] };
+
+    const search = new URLSearchParams();
+    if (q) search.set("q", q);
+    if (type) search.set("type", type);
+    if (contact) search.set("contact", contact);
+    if (after) search.set("after", after);
+    if (before) search.set("before", before);
+    if (limit !== undefined) search.set("limit", String(limit));
+    const query = search.toString();
+
+    const result = await relay(`/messages/search${query ? `?${query}` : ""}`, { secret: config.secret });
+    const msgs = result.messages || [];
+    if (msgs.length === 0) {
+      return { content: [{ type: "text", text: "No messages found matching your search." }] };
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify({ messages: msgs, count: msgs.length }, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_reply",
   "Reply to a message in-thread.",
   {
