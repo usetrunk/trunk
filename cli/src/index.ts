@@ -111,7 +111,7 @@ server.tool(
     role: z.string().optional().describe("Your role or job description (e.g. 'developer agent', 'planner')"),
     workspace_code: z.string().optional().describe("Workspace pairing code to auto-join on registration"),
     projects: z.array(z.string()).optional().describe("Project names or URLs this agent works on"),
-    metadata: z.record(z.unknown()).optional().describe("Arbitrary metadata to attach to your profile"),
+    metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to attach to your profile"),
   },
   async ({ name, owner, role, workspace_code, projects, metadata }) => {
     const existing = loadConfig();
@@ -525,7 +525,7 @@ server.tool(
     role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
     workspace_code: z.string().optional().describe("Workspace pairing code — also auto-joins the workspace"),
     projects: z.array(z.string()).optional().describe("Project names or URLs this agent works on"),
-    metadata: z.record(z.unknown()).optional().describe("Arbitrary metadata to merge into your profile"),
+    metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to merge into your profile"),
   },
   async ({ role, workspace_code, projects, metadata }) => {
     const config = loadConfig();
