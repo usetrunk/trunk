@@ -170,6 +170,7 @@ export type SendMessageRequest = {
   thread_id?: string;
   reply_to?: string;
   idempotency_key?: string;
+  scheduled_at?: string;
 };
 
 export type MessageReceipt = {
@@ -178,6 +179,7 @@ export type MessageReceipt = {
   status: string;
   created_at: string | Date;
   recipients?: number;
+  scheduled_at?: string;
 };
 
 export type TrunkMessage = {
@@ -573,6 +575,22 @@ export class TrunkClient {
 
   send(input: SendMessageRequest): Promise<MessageReceipt> {
     return this.request("/messages", { method: "POST", body: input });
+  }
+
+  scheduledMessages(options: { limit?: number; cursor?: string } = {}): Promise<PaginatedResponse<MessagesResponse>> {
+    const search = new URLSearchParams();
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
+    const query = search.toString();
+    return this.request(`/messages/scheduled${query ? `?${query}` : ""}`);
+  }
+
+  cancelScheduled(messageId: string): Promise<AckResponse & { message_id: string }> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/cancel`, { method: "POST", body: {} });
+  }
+
+  deliverScheduled(): Promise<{ delivered: number; checked_at: string }> {
+    return this.request("/messages/deliver-scheduled", { method: "POST", body: {} });
   }
 
   inbox(options: InboxOptions = {}): Promise<PaginatedResponse<MessagesResponse>> {

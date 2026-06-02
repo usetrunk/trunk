@@ -27,6 +27,7 @@ app.post("/", async (c) => {
     payload: Record<string, unknown>;
     thread_id?: string;
     reply_to?: string;
+    scheduled_at?: string;
   }>();
   const idempotencyKey = requireIdempotencyKey(c);
   if (idempotencyKey instanceof Response) return idempotencyKey;
@@ -36,6 +37,18 @@ app.post("/", async (c) => {
   }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
     return c.json({ error: "payload exceeds 1MB limit" }, 413);
+  }
+
+  // Validate scheduled_at if provided
+  let scheduledAt: Date | undefined;
+  if (body.scheduled_at) {
+    scheduledAt = new Date(body.scheduled_at);
+    if (isNaN(scheduledAt.getTime())) {
+      return c.json({ error: "scheduled_at must be a valid ISO 8601 date" }, 400);
+    }
+    if (scheduledAt.getTime() <= Date.now()) {
+      return c.json({ error: "scheduled_at must be in the future" }, 400);
+    }
   }
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -145,6 +158,7 @@ app.post("/", async (c) => {
       idempotencyKey,
       type: body.type,
       payload: body.payload,
+      ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
     })
     .returning();
 
@@ -158,11 +172,17 @@ app.post("/", async (c) => {
   }
 
   await applyFactUpdates(agentId, body.to, body.payload.updates_facts);
-  await audit(agentId, "message.send", "message", message.id, {
+  await audit(agentId, scheduledAt ? "message.schedule" : "message.send", "message", message.id, {
     to: body.to,
     thread_id: message.threadId,
     reply_to: body.reply_to,
+    ...(scheduledAt ? { scheduled_at: scheduledAt.toISOString() } : {}),
   });
+
+  // Scheduled messages skip immediate delivery
+  if (scheduledAt) {
+    return c.json({ ...receipt(message), scheduled_at: scheduledAt.toISOString() }, 201);
+  }
 
   // Push notification is best-effort. Durable inbox delivery must not depend on it.
   await notifyRealtime(body.to, message);
@@ -346,6 +366,94 @@ app.get("/search", async (c) => {
 
   const page = paginateResults(filtered, limit);
   return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+});
+
+// List scheduled messages (pending future delivery)
+app.get("/scheduled", async (c) => {
+  const agentId = c.get("agentId");
+  const { limit, cursor } = parsePaginationQuery({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
+
+  const conditions = [eq(messages.fromAgent, agentId), eq(messages.status, "scheduled")];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(messages.createdAt, cursor.createdAt),
+        and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id))
+      )!
+    );
+  }
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(...conditions))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(limit + 1);
+
+  const page = paginateResults(rows, limit);
+  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+});
+
+// Cancel a scheduled message (only sender, only if still scheduled)
+app.post("/:id/cancel", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agentId)))
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (msg.status !== "scheduled") {
+    return c.json({ error: "Only scheduled messages can be cancelled" }, 400);
+  }
+
+  await db
+    .update(messages)
+    .set({ status: "cancelled", deletedAt: new Date() })
+    .where(eq(messages.id, messageId));
+  await audit(agentId, "message.cancel_scheduled", "message", messageId);
+
+  return c.json({ ok: true, message_id: messageId });
+});
+
+// Process due scheduled messages (delivers all messages past their scheduled_at)
+app.post("/deliver-scheduled", async (c) => {
+  const now = new Date();
+
+  // Find all scheduled messages that are due
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.status, "scheduled"));
+
+  const due = rows.filter((row) => row.scheduledAt && row.scheduledAt.getTime() <= now.getTime());
+
+  let delivered = 0;
+  for (const msg of due) {
+    await notifyRealtime(msg.toAgent, msg);
+    await db
+      .update(messages)
+      .set({ status: "delivered", deliveredAt: now })
+      .where(eq(messages.id, msg.id));
+
+    const [recipient] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, msg.toAgent))
+      .limit(1);
+    if (recipient?.webhookUrl) {
+      deliverWebhook(msg, recipient).catch(() => {});
+    }
+    delivered++;
+  }
+
+  return c.json({ delivered, checked_at: now.toISOString() });
 });
 
 app.post("/purge-expired", async (c) => {

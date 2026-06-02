@@ -137,8 +137,9 @@ export function createTrunkMcpServer() {
       context: z.string().optional().describe("Background context for the recipient"),
       urgency: z.enum(["sync", "async"]).optional().describe("sync = need response soon, async = whenever"),
       finality: z.enum(["proposed", "decided", "fyi"]).optional().describe("Is this a proposal, decision, or FYI?"),
+      scheduled_at: z.string().optional().describe("ISO 8601 date for deferred delivery (must be in the future)"),
     },
-    async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality }) => {
+    async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality, scheduled_at }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -153,6 +154,13 @@ export function createTrunkMcpServer() {
         .limit(1);
 
       if (contact.length === 0) return errorResult("Not a contact. Pair first.");
+
+      let scheduledAt: Date | undefined;
+      if (scheduled_at) {
+        scheduledAt = new Date(scheduled_at);
+        if (isNaN(scheduledAt.getTime())) return errorResult("scheduled_at must be a valid ISO 8601 date");
+        if (scheduledAt.getTime() <= Date.now()) return errorResult("scheduled_at must be in the future");
+      }
 
       const payload: Record<string, unknown> = { content };
       if (context) payload.context = context;
@@ -169,6 +177,7 @@ export function createTrunkMcpServer() {
           idempotencyKey: idempotency_key ?? crypto.randomUUID(),
           type,
           payload,
+          ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
         })
         .returning();
 
@@ -177,17 +186,21 @@ export function createTrunkMcpServer() {
         message.threadId = message.id;
       }
 
-      // Deliver webhook
-      const [recipient] = await db.select().from(agents).where(eq(agents.id, to)).limit(1);
-      if (recipient) deliverWebhook(message, recipient).catch(() => {});
+      // Skip delivery for scheduled messages
+      if (!scheduledAt) {
+        const [recipient] = await db.select().from(agents).where(eq(agents.id, to)).limit(1);
+        if (recipient) deliverWebhook(message, recipient).catch(() => {});
+      }
 
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
-            sent: true,
+            sent: !scheduledAt,
+            scheduled: !!scheduledAt,
             message_id: message.id,
             thread_id: message.threadId,
+            ...(scheduledAt ? { scheduled_at: scheduledAt.toISOString() } : {}),
           }, null, 2),
         }],
       };

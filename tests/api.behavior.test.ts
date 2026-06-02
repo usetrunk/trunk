@@ -47,6 +47,7 @@ type MessageRow = {
   editedAt?: Date | null;
   pinnedAt?: Date | null;
   pinnedBy?: string | null;
+  scheduledAt?: Date | null;
 };
 
 type TaskRow = {
@@ -3465,6 +3466,146 @@ describe("Hono API behavior", () => {
 
     await expect(client.presence()).rejects.toMatchObject({ status: 400 });
   });
+
+  // --- Message Scheduling ---
+
+  it("send with scheduled_at creates a scheduled message that is not delivered immediately", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour from now
+    const receipt = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "scheduled message" },
+      scheduled_at: futureDate,
+    });
+
+    expect(receipt.status).toBe("scheduled");
+    expect(receipt.scheduled_at).toBeDefined();
+
+    // Message should NOT appear in beta's inbox (not delivered yet)
+    const inbox = await betaClient.inbox();
+    const found = inbox.messages.filter((m: { id: string }) => m.id === receipt.id);
+    expect(found.length).toBe(0);
+  });
+
+  it("scheduledMessages lists only scheduled messages for the sender", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send a normal message
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "immediate" },
+    });
+
+    // Send a scheduled message
+    const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const scheduled = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "later" },
+      scheduled_at: futureDate,
+    });
+
+    const list = await alphaClient.scheduledMessages();
+    expect(list.messages.length).toBe(1);
+    expect(list.messages[0].id).toBe(scheduled.id);
+  });
+
+  it("cancelScheduled cancels a scheduled message", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const scheduled = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "will be cancelled" },
+      scheduled_at: futureDate,
+    });
+
+    const result = await alphaClient.cancelScheduled(scheduled.id);
+    expect(result.ok).toBe(true);
+    expect(result.message_id).toBe(scheduled.id);
+
+    // Should no longer appear in scheduled list
+    const list = await alphaClient.scheduledMessages();
+    expect(list.messages.length).toBe(0);
+  });
+
+  it("cancelScheduled rejects non-scheduled messages", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const receipt = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "already sent" },
+    });
+
+    await expect(alphaClient.cancelScheduled(receipt.id)).rejects.toMatchObject({
+      status: 400,
+      message: "Only scheduled messages can be cancelled",
+    });
+  });
+
+  it("deliverScheduled delivers due messages and skips future ones", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create a scheduled message with a time in the past (simulate it becoming due)
+    const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const scheduled = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "due soon" },
+      scheduled_at: futureDate,
+    });
+
+    // Manually set scheduledAt to the past to simulate it becoming due
+    const msg = testState.messages.find((m) => m.id === scheduled.id);
+    if (msg) msg.scheduledAt = new Date(Date.now() - 1000);
+
+    const result = await alphaClient.deliverScheduled();
+    expect(result.delivered).toBe(1);
+
+    // Should now be in beta's inbox
+    const inbox = await betaClient.inbox();
+    const found = inbox.messages.filter((m: { id: string }) => m.id === scheduled.id);
+    expect(found.length).toBe(1);
+  });
+
+  it("send rejects scheduled_at in the past", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const pastDate = new Date(Date.now() - 60 * 1000).toISOString();
+    await expect(
+      alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "too late" },
+        scheduled_at: pastDate,
+      })
+    ).rejects.toMatchObject({ status: 400, message: "scheduled_at must be in the future" });
+  });
+
+  it("send rejects invalid scheduled_at format", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(
+      alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "bad date" },
+        scheduled_at: "not-a-date",
+      })
+    ).rejects.toMatchObject({ status: 400, message: "scheduled_at must be a valid ISO 8601 date" });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -3929,7 +4070,7 @@ class InsertQuery {
       idempotencyKey: (this.insertValues.idempotencyKey as string | undefined) ?? null,
       type: this.insertValues.type as string,
       payload: this.insertValues.payload as Record<string, unknown>,
-      status: "pending",
+      status: (this.insertValues.status as string | undefined) ?? "pending",
       createdAt: new Date(Date.now() + testState.idCounter),
       readAt: null,
       deliveredAt: null,
@@ -3939,6 +4080,7 @@ class InsertQuery {
       editedAt: null,
       pinnedAt: null,
       pinnedBy: null,
+      scheduledAt: (this.insertValues.scheduledAt as Date | undefined) ?? null,
     };
     testState.messages.push(row);
     return row;
@@ -4176,6 +4318,7 @@ const columnToProperty: Record<string, string> = {
   edited_at: "editedAt",
   pinned_at: "pinnedAt",
   pinned_by: "pinnedBy",
+  scheduled_at: "scheduledAt",
   last_seen_at: "lastSeenAt",
   message_id: "messageId",
   stripe_customer_id: "stripeCustomerId",

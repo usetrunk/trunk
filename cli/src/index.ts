@@ -188,8 +188,9 @@ server.tool(
     context: z.string().optional().describe("Background context"),
     urgency: z.enum(["sync", "async"]).optional(),
     finality: z.enum(["proposed", "decided", "fyi"]).optional(),
+    scheduled_at: z.string().optional().describe("ISO 8601 date for deferred delivery (must be in the future)"),
   },
-  async ({ to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality }) => {
+  async ({ to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality, scheduled_at }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -202,7 +203,7 @@ server.tool(
       method: "POST",
       secret: config.secret,
       idempotencyKey: idempotency_key ?? crypto.randomUUID(),
-      body: { to, type, payload, thread_id, reply_to },
+      body: { to, type, payload, thread_id, reply_to, ...(scheduled_at ? { scheduled_at } : {}) },
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }

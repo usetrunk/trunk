@@ -90,8 +90,9 @@ export function createMcpServer() {
       context: z.string().optional().describe("Background context for the recipient"),
       urgency: z.enum(["sync", "async"]).optional().describe("sync = need response soon, async = whenever"),
       finality: z.enum(["proposed", "decided", "fyi"]).optional().describe("Is this a proposal, decision, or FYI?"),
+      scheduled_at: z.string().optional().describe("ISO 8601 date for deferred delivery (must be in the future)"),
     },
-    async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality }) => {
+    async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality, scheduled_at }) => {
       const payload: Record<string, unknown> = { content };
       if (context) payload.context = context;
       if (urgency) payload.urgency = urgency;
@@ -101,7 +102,7 @@ export function createMcpServer() {
         method: "POST",
         secret,
         idempotencyKey: idempotency_key ?? crypto.randomUUID(),
-        body: { to, type, payload, thread_id, reply_to },
+        body: { to, type, payload, thread_id, reply_to, ...(scheduled_at ? { scheduled_at } : {}) },
       });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }

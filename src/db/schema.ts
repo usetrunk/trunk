@@ -65,12 +65,14 @@ export const messages = pgTable("messages", {
   editedAt: timestamp("edited_at", { withTimezone: true }),
   pinnedAt: timestamp("pinned_at", { withTimezone: true }),
   pinnedBy: text("pinned_by"),
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
 }, (table) => [
   uniqueIndex("messages_from_idempotency_idx").on(table.fromAgent, table.idempotencyKey),
   index("messages_inbox_idx").on(table.toAgent, table.status, table.createdAt),
   index("messages_thread_idx").on(table.threadId, table.createdAt),
   index("messages_reply_to_idx").on(table.replyTo),
   index("messages_workspace_inbox_idx").on(table.toWorkspace, table.status, table.createdAt),
+  index("messages_scheduled_idx").on(table.status, table.scheduledAt),
 ]);
 
 export const rooms = pgTable("rooms", {
