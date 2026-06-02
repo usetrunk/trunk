@@ -495,6 +495,12 @@ export class TrunkClient {
     return this.request(`/tasks/workspace/${encodeURIComponent(workspaceId)}${query ? `?${query}` : ""}`);
   }
 
+  deleteTask(scopeId: string, taskId: string): Promise<{ ok: true; deleted_id: string }> {
+    return this.request(`/tasks/${encodeURIComponent(scopeId)}/${encodeURIComponent(taskId)}`, {
+      method: "DELETE",
+    });
+  }
+
   updateTask(scopeId: string, taskId: string, input: UpdateTaskRequest): Promise<TaskResponse> {
     return this.request(`/tasks/${encodeURIComponent(scopeId)}/${encodeURIComponent(taskId)}`, {
       method: "PATCH",

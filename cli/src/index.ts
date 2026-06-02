@@ -398,6 +398,28 @@ server.tool(
   }
 );
 
+server.tool(
+  "trunk_task_delete",
+  "Delete a task permanently.",
+  {
+    contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped tasks)"),
+    room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
+    workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
+    task_id: z.string().describe("Task ID to delete"),
+  },
+  async ({ contact_id, room_id, workspace_id, task_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const scopeId = contact_id || room_id || workspace_id;
+    const result = await relay(`/tasks/${scopeId}/${task_id}`, {
+      method: "DELETE",
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 // --- Room tools (consolidated) ---
 
 server.tool(

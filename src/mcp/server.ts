@@ -628,6 +628,35 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_task_delete",
+    "Delete a task permanently.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped tasks)"),
+      room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
+      workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
+      task_id: z.string().describe("Task ID to delete"),
+    },
+    async ({ secret, contact_id, room_id, workspace_id, task_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const scopeId = contact_id || room_id || workspace_id;
+      if (!scopeId) return errorResult("contact_id, room_id, or workspace_id is required");
+
+      const hasContact = contact_id ? await canMessage(agent.id, contact_id) : false;
+      const hasRoom = room_id ? (await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1)).length > 0 : false;
+      const hasWs = workspace_id ? await verifyWorkspaceAccess(agent.id, workspace_id) : false;
+      if (!hasContact && !hasRoom && !hasWs) return errorResult("No access");
+
+      const [deleted] = await db.delete(tasks).where(eq(tasks.id, task_id)).returning();
+      if (!deleted) return errorResult("Task not found");
+
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted_id: deleted.id }, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_room",
     "Manage rooms (projects). Actions: create, join, list, members.",
     {

@@ -263,4 +263,25 @@ app.patch("/:scopeId/:taskId", async (c) => {
   return c.json(taskToJson(updated));
 });
 
+// Delete a task (works for contact, room, and workspace scoped tasks)
+app.delete("/:scopeId/:taskId", async (c) => {
+  const agentId = c.get("agentId");
+  const scopeId = c.req.param("scopeId");
+  const taskId = c.req.param("taskId");
+
+  const hasContactAccess = await verifyAccess(agentId, scopeId);
+  const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
+  const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
+  if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access" }, 403);
+
+  const [deleted] = await db
+    .delete(tasks)
+    .where(eq(tasks.id, taskId))
+    .returning();
+
+  if (!deleted) return c.json({ error: "Task not found" }, 404);
+
+  return c.json({ ok: true, deleted_id: deleted.id });
+});
+
 export default app;

@@ -837,6 +837,70 @@ describe("Hono API behavior", () => {
     expect(updated.depends_on).toEqual(["dep-1"]);
   });
 
+  // --- Task deletion tests ---
+
+  it("deletes a task and confirms it's gone", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Ephemeral task" });
+    const task = await createRes.json();
+
+    const deleteRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(deleteRes.status).toBe(200);
+    const result = await deleteRes.json();
+    expect(result.ok).toBe(true);
+    expect(result.deleted_id).toBe(task.id);
+
+    // Confirm it's gone from list
+    const listRes = await listTasksRaw(alpha.secret, beta.agent_id);
+    const list = await listRes.json();
+    expect(list.tasks).toHaveLength(0);
+  });
+
+  it("returns 404 when deleting a non-existent task", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const deleteRes = await app.request(`/tasks/${beta.agent_id}/nonexistent-id`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(deleteRes.status).toBe(404);
+  });
+
+  it("rejects task deletion for non-contacts", async () => {
+    const { alpha, beta } = await registerPair();
+    // Not paired
+
+    const deleteRes = await app.request(`/tasks/${beta.agent_id}/some-id`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(deleteRes.status).toBe(403);
+  });
+
+  it("SDK deleteTask round-trip", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const task = await alphaClient.createTask({
+      contact_id: beta.agent_id,
+      title: "SDK delete test",
+    });
+
+    const result = await betaClient.deleteTask(alpha.agent_id, task.id);
+    expect(result.ok).toBe(true);
+    expect(result.deleted_id).toBe(task.id);
+
+    // Confirm gone
+    const list = await alphaClient.listTasks(beta.agent_id);
+    expect(list.tasks).toHaveLength(0);
+  });
+
   // --- SDK task method tests ---
 
   it("SDK createTask + listTasks round-trip", async () => {
@@ -2548,11 +2612,17 @@ class UpdateQuery {
 
 class DeleteQuery {
   private condition?: SQL;
+  private useReturning = false;
 
   constructor(private readonly table: TableName) {}
 
   where(condition: SQL): this {
     this.condition = condition;
+    return this;
+  }
+
+  returning(): this {
+    this.useReturning = true;
     return this;
   }
 
@@ -2565,10 +2635,11 @@ class DeleteQuery {
 
   private apply(): unknown[] {
     const rows = rowsFor(this.table);
+    const removed = rows.filter((row) => evaluateCondition(this.condition, row));
     const kept = rows.filter((row) => !evaluateCondition(this.condition, row));
-    const removed = rows.length - kept.length;
     rows.splice(0, rows.length, ...kept);
-    return [{ rowCount: removed }];
+    if (this.useReturning) return removed;
+    return [{ rowCount: removed.length }];
   }
 }
 
