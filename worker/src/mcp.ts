@@ -503,12 +503,12 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_document",
-    "Manage shared documents with a contact. Actions: create, list, get, update.",
+    "Manage shared documents with a contact. Actions: create, list, get, update, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "list", "get", "update"]).describe("Action to perform"),
+      action: z.enum(["create", "list", "get", "update", "delete"]).describe("Action to perform"),
       contact_id: z.string().describe("Agent ID of the contact (documents are scoped to a contact pair)"),
-      doc_id: z.string().optional().describe("Document ID (for get, update)"),
+      doc_id: z.string().optional().describe("Document ID (for get, update, delete)"),
       name: z.string().optional().describe("Document name (for create)"),
       body: z.string().optional().describe("Document body (for create, update)"),
       content_type: z.string().optional().describe("Content type (for create, default: text/markdown)"),
@@ -536,6 +536,12 @@ export function createMcpServer() {
         const payload: Record<string, unknown> = { body };
         if (name) payload.name = name;
         const result = await relay(`/documents/${contact_id}/${doc_id}`, { method: "PUT", secret, body: payload });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (action === "delete") {
+        if (!doc_id) return { content: [{ type: "text", text: "Error: doc_id is required for delete" }], isError: true };
+        const result = await relay(`/documents/${contact_id}/${doc_id}`, { method: "DELETE", secret });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 

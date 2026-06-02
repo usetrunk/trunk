@@ -215,4 +215,33 @@ app.get("/:contactId/:docId/versions/:version", async (c) => {
   });
 });
 
+// Delete a document and all its versions
+app.delete("/:contactId/:docId", async (c) => {
+  const agentId = c.get("agentId");
+  const contactId = c.req.param("contactId");
+  const docId = c.req.param("docId");
+
+  if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact" }, 403);
+
+  const [doc] = await db
+    .select()
+    .from(sharedDocuments)
+    .where(eq(sharedDocuments.id, docId))
+    .limit(1);
+
+  if (!doc) return c.json({ error: "Document not found" }, 404);
+
+  // Verify document belongs to this contact scope
+  const scope = contactScope(agentId, contactId);
+  if (doc.scope !== scope) return c.json({ error: "Document not found" }, 404);
+
+  // Delete versions first, then document
+  await db.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
+  await db.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
+
+  await audit(agentId, "document.deleted", "shared_document", docId, { scope });
+
+  return c.json({ ok: true });
+});
+
 export default app;

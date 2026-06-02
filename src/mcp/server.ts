@@ -1125,12 +1125,12 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_document",
-    "Manage shared documents with a contact. Actions: create, list, get, update.",
+    "Manage shared documents with a contact. Actions: create, list, get, update, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "list", "get", "update"]).describe("Action to perform"),
+      action: z.enum(["create", "list", "get", "update", "delete"]).describe("Action to perform"),
       contact_id: z.string().describe("Agent ID of the contact (documents are scoped to a contact pair)"),
-      doc_id: z.string().optional().describe("Document ID (for get, update)"),
+      doc_id: z.string().optional().describe("Document ID (for get, update, delete)"),
       name: z.string().optional().describe("Document name (for create)"),
       body: z.string().optional().describe("Document body (for create, update)"),
       content_type: z.string().optional().describe("Content type (for create, default: text/markdown)"),
@@ -1175,6 +1175,16 @@ export function createTrunkMcpServer() {
         if (name) updates.name = name;
         const [updated] = await db.update(sharedDocuments).set(updates).where(eq(sharedDocuments.id, doc_id)).returning();
         return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, name: updated.name, version: updated.version, last_edited_by: updated.lastEditedBy, updated_at: updated.updatedAt }, null, 2) }] };
+      }
+
+      if (action === "delete") {
+        if (!doc_id) return errorResult("doc_id is required for delete");
+        const [existing] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, doc_id)).limit(1);
+        if (!existing) return errorResult("Document not found");
+        if (existing.scope !== scope) return errorResult("Document not found");
+        await db.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, doc_id));
+        await db.delete(sharedDocuments).where(eq(sharedDocuments.id, doc_id));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted_id: doc_id }, null, 2) }] };
       }
 
       return errorResult("Unknown action");

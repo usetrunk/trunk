@@ -616,6 +616,10 @@ export class TrunkClient {
     return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}/versions/${version}`);
   }
 
+  deleteDocument(contactId: string, docId: string): Promise<AckResponse> {
+    return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
+  }
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string } = {}

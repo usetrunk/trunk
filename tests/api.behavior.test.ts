@@ -2537,6 +2537,29 @@ describe("Hono API behavior", () => {
       alphaClient.createDocument(beta.agent_id, { name: "Forbidden", body: "nope" })
     ).rejects.toMatchObject({ status: 403 });
   });
+
+  it("deletes a document and its versions", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "Temp doc", body: "will be deleted" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "v2" });
+
+    await expect(alphaClient.deleteDocument(beta.agent_id, doc.id)).resolves.toEqual({ ok: true });
+
+    // Document should no longer appear in list
+    const list = await betaClient.listDocuments(alphaClient["secret"] ? beta.agent_id : beta.agent_id);
+    // Use alpha's perspective to list
+    const alphaList = await alphaClient.listDocuments(beta.agent_id);
+    expect(alphaList.documents).toHaveLength(0);
+  });
+
+  it("returns 404 when deleting non-existent document", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(alphaClient.deleteDocument(beta.agent_id, "non-existent-id")).rejects.toMatchObject({ status: 404 });
+  });
 });
 
 async function registerPair(): Promise<{
