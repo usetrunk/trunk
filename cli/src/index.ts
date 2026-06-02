@@ -1238,6 +1238,20 @@ server.tool(
 );
 
 server.tool(
+  "trunk_set_status",
+  "Set your custom status text visible to workspace co-members. Pass null to clear.",
+  {
+    text: z.string().nullable().describe("Status text or null to clear"),
+  },
+  async ({ text }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay("/agents/me/status", { method: "PUT", secret: config.secret, body: { text } });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_contact_note",
   "Get your private note about a contact.",
   {

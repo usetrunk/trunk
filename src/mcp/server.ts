@@ -2318,6 +2318,24 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_set_status",
+    "Set your custom status text visible to workspace co-members in presence. Pass null to clear.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      text: z.string().nullable().describe("Status text (e.g. 'In a meeting', 'Reviewing PRs') or null to clear"),
+    },
+    async ({ secret, text }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const meta = { ...((agent.metadata ?? {}) as Record<string, unknown>) };
+      if (text) { meta.status_text = text; } else { delete meta.status_text; }
+      await db.update(agents).set({ metadata: meta }).where(eq(agents.id, agent.id));
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, status_text: text ?? null }, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_contact_note",
     "Get your private note about a contact. Returns null content if no note exists.",
     {

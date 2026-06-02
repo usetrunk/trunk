@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { agents, webhookDeliveries } from "../db/schema.js";
 import { eq, desc } from "drizzle-orm";
 import { authMiddleware, generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
+import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { canMessage } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
@@ -112,6 +113,24 @@ app.patch("/me", authMiddleware, async (c) => {
   });
 });
 
+// Set or clear custom status text
+app.put("/me/status", authMiddleware, async (c) => {
+  const agentId = c.get("agentId");
+  const body = await c.req.json<{ text: string | null }>();
+
+  const [current] = await db.select({ metadata: agents.metadata }).from(agents).where(eq(agents.id, agentId)).limit(1);
+  const meta = { ...((current?.metadata ?? {}) as Record<string, unknown>) };
+  if (body.text) {
+    meta.status_text = body.text;
+  } else {
+    delete meta.status_text;
+  }
+
+  await db.update(agents).set({ metadata: meta }).where(eq(agents.id, agentId));
+  await audit(agentId, "agent.status_update", "agent", agentId, { status_text: body.text });
+  return c.json({ ok: true, status_text: body.text ?? null });
+});
+
 // Presence — show online/away/offline status for workspace co-members
 // NOTE: must be before /:id to avoid being caught by the param route
 app.get("/presence", authMiddleware, async (c) => {
@@ -155,6 +174,7 @@ app.get("/presence", authMiddleware, async (c) => {
       name: m.name,
       owner: m.owner,
       role: meta.role as string | undefined,
+      status_text: (meta.status_text as string | undefined) ?? null,
       status,
       last_seen_at: m.lastSeenAt,
     };

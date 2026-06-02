@@ -140,6 +140,7 @@ export type PresenceMember = {
   name: string;
   owner?: string | null;
   role?: string;
+  status_text?: string | null;
   status: "online" | "away" | "offline";
   last_seen_at: string | Date | null;
 };
@@ -925,6 +926,10 @@ export class TrunkClient {
     if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/messages/threads${query ? `?${query}` : ""}`);
+  }
+
+  setStatus(text: string | null): Promise<{ ok: true; status_text: string | null }> {
+    return this.request("/agents/me/status", { method: "PUT", body: { text } });
   }
 
   contactNote(agentId: string): Promise<ContactNote> {

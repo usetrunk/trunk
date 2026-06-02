@@ -4126,6 +4126,45 @@ describe("Hono API behavior", () => {
     expect(note.content).toBeNull();
   });
 
+  // ── Agent Status Messages ──
+  it("can set and clear a custom status text", async () => {
+    const { alphaClient } = await registerPair();
+
+    // Set status
+    const result = await alphaClient.setStatus("In a meeting");
+    expect(result.ok).toBe(true);
+    expect(result.status_text).toBe("In a meeting");
+
+    // Verify via profile
+    const profile = await alphaClient.me();
+    expect((profile.metadata as Record<string, unknown>)?.status_text).toBe("In a meeting");
+
+    // Clear status
+    const cleared = await alphaClient.setStatus(null);
+    expect(cleared.status_text).toBeNull();
+  });
+
+  it("status text appears in presence response", async () => {
+    // Register fresh agents (not from registerPair which may have workspace conflicts)
+    const anon = createClient();
+    const a = await anon.register({ name: "statusA" });
+    const b = await anon.register({ name: "statusB" });
+    const aClient = createClient(a.secret);
+    const bClient = createClient(b.secret);
+
+    // Create workspace (creator auto-joins) and have B join
+    const ws = await aClient.createWorkspace({ name: "StatusTest" });
+    await bClient.joinWorkspace({ code: ws.pairing_code });
+
+    // A sets status
+    await aClient.setStatus("Coding");
+
+    // B checks presence
+    const presence = await bClient.presence();
+    const aMember = presence.members.find((m) => m.agent_id === a.agent_id);
+    expect(aMember?.status_text).toBe("Coding");
+  });
+
   it("contact notes are private to each agent", async () => {
     const { alphaClient, beta, betaClient, alpha } = await registerPair();
     await alphaClient.setContactNote(beta.agent_id, "alpha's note about beta");
