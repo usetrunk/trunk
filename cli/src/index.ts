@@ -1238,6 +1238,20 @@ server.tool(
 );
 
 server.tool(
+  "trunk_mark_read",
+  "Mark a message as read without processing/acking it.",
+  {
+    message_id: z.string().describe("ID of the message to mark as read"),
+  },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+    const result = await relay(`/messages/${encodeURIComponent(message_id)}/read`, { method: "POST", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_set_status",
   "Set your custom status text visible to workspace co-members. Pass null to clear.",
   {

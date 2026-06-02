@@ -726,6 +726,10 @@ export class TrunkClient {
     return this.request(`/messages/thread/${encodeURIComponent(threadId)}/summary`);
   }
 
+  markRead(messageId: string): Promise<{ ok: true; read_at?: string; already_read?: boolean }> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/read`, { method: "POST" });
+  }
+
   ack(messageId: string): Promise<AckResponse> {
     return this.request(`/messages/${encodeURIComponent(messageId)}/ack`, { method: "POST" });
   }

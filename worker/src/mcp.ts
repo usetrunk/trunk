@@ -930,6 +930,19 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_mark_read",
+    "Mark a message as read without processing/acking it.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to mark as read"),
+    },
+    async ({ secret, message_id }) => {
+      const result = await relay(`/messages/${encodeURIComponent(message_id)}/read`, { method: "POST", secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_set_status",
     "Set your custom status text visible to workspace co-members. Pass null to clear.",
     {

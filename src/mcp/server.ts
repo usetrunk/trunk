@@ -2318,6 +2318,28 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_mark_read",
+    "Mark a message as read without processing/acking it. The message stays in your inbox but the sender knows you've seen it.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to mark as read"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db.select().from(messages)
+        .where(and(eq(messages.id, message_id), eq(messages.toAgent, agent.id)))
+        .limit(1);
+      if (!msg) return errorResult("Message not found");
+      if (msg.readAt) return { content: [{ type: "text", text: JSON.stringify({ ok: true, already_read: true, read_at: msg.readAt }, null, 2) }] };
+
+      await db.update(messages).set({ readAt: new Date() }).where(eq(messages.id, message_id));
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, read_at: new Date().toISOString() }, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_set_status",
     "Set your custom status text visible to workspace co-members in presence. Pass null to clear.",
     {

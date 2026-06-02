@@ -818,6 +818,28 @@ app.post("/ack-bulk", async (c) => {
   return c.json({ ok: true, acked });
 });
 
+// Mark a message as read (without processing/acking)
+app.post("/:id/read", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.id, messageId), eq(messages.toAgent, agentId)))
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+  if (msg.readAt) return c.json({ ok: true, already_read: true, read_at: msg.readAt });
+
+  await db
+    .update(messages)
+    .set({ readAt: new Date() })
+    .where(eq(messages.id, messageId));
+  await audit(agentId, "message.read", "message", messageId);
+  return c.json({ ok: true, read_at: new Date().toISOString() });
+});
+
 // Acknowledge a message (mark as read)
 app.post("/:id/ack", async (c) => {
   const agentId = c.get("agentId");

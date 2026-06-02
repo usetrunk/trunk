@@ -4126,6 +4126,40 @@ describe("Hono API behavior", () => {
     expect(note.content).toBeNull();
   });
 
+  // ── Read Receipts ──
+  it("can mark a message as read without processing", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "read me" },
+    });
+
+    // Beta marks as read
+    const readResult = await betaClient.markRead(msg.id);
+    expect(readResult.ok).toBe(true);
+    expect(readResult.read_at).toBeDefined();
+
+    // Message should still appear in inbox (not processed)
+    const inbox = await betaClient.inbox();
+    const found = inbox.messages.find((m) => m.id === msg.id);
+    expect(found).toBeDefined();
+  });
+
+  it("returns already_read on duplicate read", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "read twice" },
+    });
+    await betaClient.markRead(msg.id);
+    const second = await betaClient.markRead(msg.id);
+    expect(second.already_read).toBe(true);
+  });
+
   // ── Agent Status Messages ──
   it("can set and clear a custom status text", async () => {
     const { alphaClient } = await registerPair();
