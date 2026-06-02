@@ -1111,6 +1111,56 @@ describe("Hono API behavior", () => {
     expect(alphaTasks.tasks[0].title).toBe("Implement workspaces");
   });
 
+  it("workspace co-members can create and list contact-scoped tasks without explicit pairing", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-alpha" });
+    const beta = await anon.register({ name: "ws-beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "CoworkTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Alpha creates a contact-scoped task for beta — no explicit pair() needed
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Review PR",
+      description: "Workspace co-member task",
+    });
+    expect(createRes.status).toBe(201);
+    const task = await createRes.json();
+    expect(task.title).toBe("Review PR");
+
+    // Both can list it
+    const alphaView = await listTasksRaw(alpha.secret, beta.agent_id);
+    const betaView = await listTasksRaw(beta.secret, alpha.agent_id);
+    const alphaTasks = await alphaView.json();
+    const betaTasks = await betaView.json();
+    expect(alphaTasks.tasks).toHaveLength(1);
+    expect(betaTasks.tasks).toHaveLength(1);
+    expect(alphaTasks.tasks[0].title).toBe("Review PR");
+  });
+
+  it("workspace co-members can update contact-scoped tasks", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-alpha-2" });
+    const beta = await anon.register({ name: "ws-beta-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "CoworkTeam2" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Deploy feature" });
+    expect(createRes.status).toBe(201);
+    const task = await createRes.json();
+
+    // Beta can update it
+    const updateRes = await updateTaskRaw(beta.secret, alpha.agent_id, task.id, { status: "done" });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.status).toBe("done");
+  });
+
   it("agent can leave a workspace", async () => {
     const anon = createClient();
     const alpha = await anon.register({ name: "member-1" });

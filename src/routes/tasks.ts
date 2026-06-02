@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, tasks, roomMembers } from "../db/schema.js";
-import { eq, or, and, desc } from "drizzle-orm";
+import { tasks, roomMembers } from "../db/schema.js";
+import { eq, and, desc } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
-import { verifyWorkspaceAccess } from "../lib/workspace.js";
+import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -15,18 +15,10 @@ function contactScope(a: string, b: string): string {
   return `contact:${[a, b].sort().join("-")}`;
 }
 
-// Helper: verify two agents are contacts (or same agent)
+// Helper: verify two agents can access shared tasks — same rules as messaging
+// (direct contact, workspace co-members, or cross-workspace pairings)
 async function verifyAccess(agentId: string, otherId: string): Promise<boolean> {
-  if (agentId === otherId) return true;
-  const contact = await db
-    .select()
-    .from(contacts)
-    .where(or(
-      and(eq(contacts.agentA, agentId), eq(contacts.agentB, otherId)),
-      and(eq(contacts.agentA, otherId), eq(contacts.agentB, agentId))
-    ))
-    .limit(1);
-  return contact.length > 0;
+  return canMessage(agentId, otherId);
 }
 
 // Helper: verify agent is a room member
