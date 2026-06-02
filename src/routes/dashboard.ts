@@ -427,7 +427,7 @@ app.get("/inbox", async (c) => {
 </html>`);
 });
 
-// Gantt chart view — visual project timeline
+// Mission control — real-time agent work dashboard
 app.get("/gantt", async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
@@ -440,9 +440,6 @@ app.get("/gantt", async (c) => {
     .where(eq(workspaceContacts.agentId, agentId));
 
   const wsIds = wsMemberships.map(m => m.workspaceId);
-  const wsRows = wsIds.length > 0
-    ? await db.select().from(workspaces).where(or(...wsIds.map(id => eq(workspaces.id, id))))
-    : [];
 
   // Get all workspace-scoped tasks
   const allTasks = wsIds.length > 0
@@ -453,19 +450,52 @@ app.get("/gantt", async (c) => {
         .orderBy(tasks.sequence, tasks.createdAt)
     : [];
 
+  // Also get room-scoped tasks
+  const membershipRows = await db
+    .select()
+    .from(roomMembers)
+    .where(eq(roomMembers.agentId, agentId));
+  const roomIds = membershipRows.map(m => m.roomId);
+  const roomTasks = roomIds.length > 0
+    ? await db
+        .select()
+        .from(tasks)
+        .where(or(...roomIds.map(id => eq(tasks.scope, `room:${id}`))))
+        .orderBy(tasks.sequence, tasks.createdAt)
+    : [];
+
+  const roomRows = roomIds.length > 0
+    ? await db.select().from(rooms).where(or(...roomIds.map(id => eq(rooms.id, id))))
+    : [];
+  const roomNameMap = new Map(roomRows.map(r => [r.id, r.name]));
+
+  // Merge all tasks
+  const taskMap = new Map<string, typeof allTasks[0]>();
+  for (const t of [...allTasks, ...roomTasks]) taskMap.set(t.id, t);
+  const mergedTasks = [...taskMap.values()];
+
   // Resolve owner names
-  const ownerIds = [...new Set(allTasks.map(t => t.owner).filter(Boolean))] as string[];
+  const ownerIds = [...new Set(mergedTasks.map(t => t.owner).filter(Boolean))] as string[];
   const ownerRows = ownerIds.length > 0
     ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...ownerIds.map(id => eq(agents.id, id))))
     : [];
   const ownerNames = new Map(ownerRows.map(a => [a.id, a.name]));
 
-  const doneIds = new Set(allTasks.filter(t => t.status === "done").map(t => t.id));
+  // Resolve creator names too
+  const creatorIds = [...new Set(mergedTasks.map(t => t.createdBy).filter(Boolean))] as string[];
+  const allAgentIds = [...new Set([...ownerIds, ...creatorIds])];
+  const allAgentRows = allAgentIds.length > 0
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...allAgentIds.map(id => eq(agents.id, id))))
+    : [];
+  const agentNameMap = new Map(allAgentRows.map(a => [a.id, a.name]));
+
+  const doneIds = new Set(mergedTasks.filter(t => t.status === "done").map(t => t.id));
 
   // Group tasks by module
-  const groupMap = new Map<string, typeof allTasks>();
-  const ungrouped: typeof allTasks = [];
-  for (const t of allTasks) {
+  type TaskRow = typeof mergedTasks[0];
+  const groupMap = new Map<string, TaskRow[]>();
+  const ungrouped: TaskRow[] = [];
+  for (const t of mergedTasks) {
     if (t.group) {
       if (!groupMap.has(t.group)) groupMap.set(t.group, []);
       groupMap.get(t.group)!.push(t);
@@ -475,96 +505,103 @@ app.get("/gantt", async (c) => {
   }
 
   // Summary stats
-  const totalTasks = allTasks.length;
-  const doneTasks = allTasks.filter(t => t.status === "done").length;
-  const inProgressTasks = allTasks.filter(t => t.status === "in-progress").length;
-  const blockedTasks = allTasks.filter(t => t.status === "blocked").length;
-  const openTasks = allTasks.filter(t => t.status === "open").length;
+  const totalTasks = mergedTasks.length;
+  const doneTasks = mergedTasks.filter(t => t.status === "done").length;
+  const inProgressTasks = mergedTasks.filter(t => t.status === "in-progress").length;
+  const blockedTasks = mergedTasks.filter(t => t.status === "blocked").length;
+  const openTasks = mergedTasks.filter(t => t.status === "open").length;
   const overallProgress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
-  // Date range for the timeline
-  const now = new Date();
-  const dates: string[] = [];
-  for (let i = 0; i < 30; i++) {
-    const d = new Date(now);
-    d.setDate(d.getDate() + i);
-    dates.push(d.toISOString().slice(0, 10));
-  }
-  const today = now.toISOString().slice(0, 10);
+  // Recently completed (last 24h)
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const recentlyDone = mergedTasks
+    .filter(t => t.status === "done" && t.updatedAt > oneDayAgo)
+    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 
-  function statusColor(status: string) {
+  // Agent workload
+  const agentWork = new Map<string, { active: number; done: number; blocked: number }>();
+  for (const t of mergedTasks) {
+    const ownerId = t.owner || "unassigned";
+    if (!agentWork.has(ownerId)) agentWork.set(ownerId, { active: 0, done: 0, blocked: 0 });
+    const w = agentWork.get(ownerId)!;
+    if (t.status === "in-progress") w.active++;
+    else if (t.status === "done") w.done++;
+    else if (t.status === "blocked") w.blocked++;
+  }
+
+  function statusIcon(status: string) {
     switch (status) {
-      case "done": return "var(--good)";
-      case "in-progress": return "var(--accent)";
-      case "blocked": return "var(--danger)";
-      default: return "var(--muted)";
+      case "done": return "✓";
+      case "in-progress": return "▶";
+      case "blocked": return "✕";
+      default: return "○";
     }
   }
 
-  function priorityIcon(priority: string) {
-    switch (priority) {
-      case "critical": return "!!!";
-      case "high": return "!!";
-      case "low": return "";
-      default: return "";
+  function statusClass(status: string) {
+    switch (status) {
+      case "done": return "st-done";
+      case "in-progress": return "st-active";
+      case "blocked": return "st-blocked";
+      default: return "st-open";
     }
   }
 
-  function renderTaskRow(t: typeof allTasks[0]) {
+  function renderTask(t: TaskRow) {
     const deps = (t.dependsOn as string[]) || [];
     const blockedBy = deps.filter(d => !doneIds.has(d));
-    const isBlocked = blockedBy.length > 0;
-    const owner = t.owner ? ownerNames.get(t.owner) || t.owner.slice(0, 8) : "unassigned";
-    const start = t.startDate || t.createdAt.toISOString().slice(0, 10);
-    const est = t.estimate || 1;
-
-    // Calculate bar position and width relative to the timeline
-    const startIdx = Math.max(0, dates.indexOf(start));
-    const barStart = startIdx > 0 ? startIdx : 0;
-    const barWidth = Math.min(est, dates.length - barStart);
+    const owner = t.owner ? (agentNameMap.get(t.owner) || t.owner.slice(0, 8)) : null;
+    const pri = t.priority === "critical" ? "!!!" : t.priority === "high" ? "!!" : "";
 
     return html`
-      <div class="gantt-row">
-        <div class="gantt-label">
-          <div class="gantt-task-title">
-            <span class="gantt-status" style="color:${statusColor(t.status)}">${t.status === "done" ? "✓" : t.status === "in-progress" ? "▶" : t.status === "blocked" ? "✕" : "○"}</span>
-            <span class="gantt-title-text" title="${t.title}">${t.title}</span>
-            ${priorityIcon(t.priority) ? html`<span class="gantt-priority">${priorityIcon(t.priority)}</span>` : ""}
-          </div>
-          <div class="gantt-meta">
-            <span class="gantt-owner">${owner}</span>
-            ${t.due ? html`<span class="gantt-due">due ${t.due}</span>` : ""}
-            ${isBlocked ? html`<span class="gantt-blocked">blocked by ${blockedBy.length}</span>` : ""}
-          </div>
+      <div class="mc-task ${statusClass(t.status)}">
+        <div class="mc-task-head">
+          <span class="mc-icon">${statusIcon(t.status)}</span>
+          <span class="mc-task-title" title="${t.title}">${t.title}</span>
+          ${pri ? html`<span class="mc-pri">${pri}</span>` : ""}
         </div>
-        <div class="gantt-timeline">
-          ${dates.map((d, i) => {
-            const isBar = i >= barStart && i < barStart + barWidth;
-            const isToday = d === today;
-            return html`<div class="gantt-cell ${isToday ? "today" : ""} ${isBar ? `bar ${t.status}` : ""}">${isBar && i === barStart ? "" : ""}</div>`;
-          })}
+        <div class="mc-task-meta">
+          ${owner ? html`<span class="mc-owner">${owner}</span>` : html`<span class="mc-unassigned">unassigned</span>`}
+          ${blockedBy.length > 0 ? html`<span class="mc-dep-blocked">blocked by ${blockedBy.length}</span>` : ""}
+          ${deps.length > 0 && blockedBy.length === 0 ? html`<span class="mc-dep-met">deps met</span>` : ""}
+          <span class="mc-age">${timeAgo(t.updatedAt)}</span>
         </div>
       </div>
     `;
   }
 
-  function renderGroup(name: string, groupTasks: typeof allTasks) {
-    const done = groupTasks.filter(t => t.status === "done").length;
-    const total = groupTasks.length;
+  function renderModule(name: string, moduleTasks: TaskRow[]) {
+    const done = moduleTasks.filter(t => t.status === "done").length;
+    const active = moduleTasks.filter(t => t.status === "in-progress").length;
+    const blocked = moduleTasks.filter(t => t.status === "blocked").length;
+    const open = moduleTasks.filter(t => t.status === "open").length;
+    const total = moduleTasks.length;
     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
+    // Sort: in-progress first, then blocked, then open, then done
+    const statusOrder: Record<string, number> = { "in-progress": 0, "blocked": 1, "open": 2, "done": 3 };
+    const sorted = [...moduleTasks].sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
+
     return html`
-      <div class="gantt-group">
-        <div class="gantt-group-header">
-          <div class="gantt-group-title">
-            <span class="gantt-group-name">${name}</span>
-            <span class="gantt-group-progress">${done}/${total} (${pct}%)</span>
+      <div class="mc-module">
+        <div class="mc-module-head">
+          <div class="mc-module-info">
+            <span class="mc-module-name">${name}</span>
+            <div class="mc-module-counts">
+              ${active > 0 ? html`<span class="mc-count st-active">${active} active</span>` : ""}
+              ${blocked > 0 ? html`<span class="mc-count st-blocked">${blocked} blocked</span>` : ""}
+              ${open > 0 ? html`<span class="mc-count st-open">${open} open</span>` : ""}
+              ${done > 0 ? html`<span class="mc-count st-done">${done} done</span>` : ""}
+            </div>
           </div>
-          <div class="gantt-progress-bar">
-            <div class="gantt-progress-fill" style="width:${pct}%"></div>
+          <div class="mc-module-progress">
+            <div class="mc-bar"><div class="mc-bar-fill" style="width:${pct}%"></div></div>
+            <span class="mc-pct">${pct}%</span>
           </div>
         </div>
-        ${groupTasks.map(t => renderTaskRow(t))}
+        <div class="mc-task-list">
+          ${sorted.map(t => renderTask(t))}
+        </div>
       </div>
     `;
   }
@@ -574,13 +611,14 @@ app.get("/gantt", async (c) => {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gantt — Trunk</title>
+  <title>Mission Control — Trunk</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
       color-scheme: dark;
       --bg: #080807;
-      --panel: #11110f;
+      --panel: #0d0d0b;
+      --card: #121210;
       --line: #282820;
       --muted: #8d8a7d;
       --text: #f4f0e6;
@@ -588,6 +626,7 @@ app.get("/gantt", async (c) => {
       --accent-2: #64d2ff;
       --danger: #ff7b72;
       --good: #7ee787;
+      --warn: #f0c040;
     }
     body {
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -595,247 +634,225 @@ app.get("/gantt", async (c) => {
       color: var(--text);
       min-height: 100vh;
     }
-    .gantt-shell { max-width: 100vw; overflow-x: auto; padding: 1.5rem; }
 
-    .gantt-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 1.5rem;
-      padding-bottom: 1rem;
-      border-bottom: 1px solid var(--line);
-    }
-    .gantt-header-left { display: flex; align-items: center; gap: 1rem; }
-    .gantt-header-left a { color: var(--accent-2); text-decoration: none; font-size: 0.85rem; }
-    .gantt-header-left h1 { font-size: 1.5rem; }
+    .mc-shell { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
 
-    .gantt-stats {
-      display: flex;
-      gap: 1.5rem;
-      align-items: center;
+    /* Header */
+    .mc-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--line);
     }
-    .gantt-stat {
-      text-align: center;
+    .mc-header-left { display: flex; align-items: center; gap: 1rem; }
+    .mc-header-left a { color: var(--accent-2); text-decoration: none; font-size: 0.85rem; }
+    .mc-header-left h1 { font-size: 1.4rem; letter-spacing: -0.02em; }
+    .mc-live { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; color: var(--good); }
+    .mc-live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--good); box-shadow: 0 0 8px rgba(126,231,135,0.5); }
+
+    /* Stats strip */
+    .mc-stats {
+      display: flex; gap: 0.75rem; align-items: stretch;
+      border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel);
     }
-    .gantt-stat-value {
-      font-size: 1.4rem;
-      font-weight: 700;
+    .mc-stat {
+      padding: 0.6rem 1rem; border-left: 1px solid var(--line); text-align: center; min-width: 80px;
     }
-    .gantt-stat-label {
-      font-size: 0.7rem;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
+    .mc-stat:first-child { border-left: none; }
+    .mc-stat-val { font-size: 1.3rem; font-weight: 700; }
+    .mc-stat-lbl { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 0.1rem; }
+
+    /* Overall progress */
+    .mc-overall { padding: 0.6rem 1rem; display: flex; flex-direction: column; justify-content: center; gap: 0.3rem; min-width: 140px; }
+    .mc-overall-bar { height: 6px; background: #1a1a18; border-radius: 3px; overflow: hidden; }
+    .mc-overall-fill { height: 100%; background: var(--good); border-radius: 3px; transition: width 0.5s; }
+
+    /* Layout: modules + sidebar */
+    .mc-body { display: grid; grid-template-columns: 1fr 320px; gap: 1.25rem; margin-top: 1.25rem; }
+
+    /* Module cards */
+    .mc-modules { display: grid; gap: 1rem; align-content: start; }
+    .mc-module { border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+    .mc-module-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); background: var(--panel);
     }
-    .gantt-overall {
-      width: 200px;
-      height: 8px;
-      background: #1a1a18;
-      border-radius: 4px;
-      overflow: hidden;
+    .mc-module-info { display: flex; flex-direction: column; gap: 0.25rem; }
+    .mc-module-name { font-size: 0.9rem; font-weight: 700; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.04em; }
+    .mc-module-counts { display: flex; gap: 0.4rem; }
+    .mc-count { font-size: 0.68rem; padding: 0.1rem 0.35rem; border-radius: 4px; }
+    .mc-count.st-active { color: var(--accent); border: 1px solid rgba(213,255,95,0.2); }
+    .mc-count.st-blocked { color: var(--danger); border: 1px solid rgba(255,123,114,0.2); }
+    .mc-count.st-open { color: var(--muted); border: 1px solid rgba(141,138,125,0.2); }
+    .mc-count.st-done { color: var(--good); border: 1px solid rgba(126,231,135,0.2); }
+    .mc-module-progress { display: flex; align-items: center; gap: 0.5rem; }
+    .mc-bar { width: 80px; height: 4px; background: #1a1a18; border-radius: 2px; overflow: hidden; }
+    .mc-bar-fill { height: 100%; background: var(--good); border-radius: 2px; transition: width 0.5s; }
+    .mc-pct { font-size: 0.75rem; color: var(--muted); min-width: 2.5rem; text-align: right; }
+
+    /* Task list */
+    .mc-task-list { padding: 0.25rem 0; }
+    .mc-task {
+      padding: 0.5rem 1rem; border-bottom: 1px solid #1a1a18;
+      transition: background 0.15s;
     }
-    .gantt-overall-fill {
-      height: 100%;
-      background: var(--good);
-      border-radius: 4px;
-      transition: width 0.3s;
+    .mc-task:last-child { border-bottom: none; }
+    .mc-task:hover { background: rgba(255,255,255,0.02); }
+    .mc-task-head { display: flex; align-items: center; gap: 0.4rem; }
+    .mc-icon { font-size: 0.72rem; min-width: 1rem; }
+    .st-done .mc-icon { color: var(--good); }
+    .st-active .mc-icon { color: var(--accent); }
+    .st-blocked .mc-icon { color: var(--danger); }
+    .st-open .mc-icon { color: var(--muted); }
+    .mc-task-title {
+      font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;
+    }
+    .st-done .mc-task-title { color: var(--muted); text-decoration: line-through; text-decoration-color: #444; }
+    .mc-pri { font-size: 0.65rem; color: var(--danger); font-weight: 700; }
+    .mc-task-meta { display: flex; gap: 0.5rem; font-size: 0.7rem; color: #6f6b60; margin-top: 0.15rem; padding-left: 1.4rem; }
+    .mc-owner { color: #a7a193; }
+    .mc-unassigned { color: var(--warn); font-style: italic; }
+    .mc-dep-blocked { color: var(--danger); }
+    .mc-dep-met { color: var(--good); }
+    .mc-age { margin-left: auto; }
+
+    /* Sidebar */
+    .mc-sidebar { display: grid; gap: 1rem; align-content: start; }
+    .mc-panel {
+      border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+      padding: 0.85rem 1rem; display: grid; gap: 0.6rem;
+    }
+    .mc-panel-title {
+      font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #6f6b60;
     }
 
-    .gantt-group { margin-bottom: 1.5rem; }
-    .gantt-group-header {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      padding: 0.75rem 0;
-      border-bottom: 1px solid var(--line);
-    }
-    .gantt-group-title {
-      min-width: 280px;
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-    .gantt-group-name {
-      font-size: 0.95rem;
-      font-weight: 700;
-      color: var(--accent-2);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .gantt-group-progress {
-      font-size: 0.75rem;
-      color: var(--muted);
-    }
-    .gantt-progress-bar {
-      flex: 1;
-      height: 4px;
-      background: #1a1a18;
-      border-radius: 2px;
-      overflow: hidden;
-      max-width: 200px;
-    }
-    .gantt-progress-fill {
-      height: 100%;
-      background: var(--good);
-      border-radius: 2px;
-    }
+    /* Agent workload */
+    .mc-agent-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; }
+    .mc-agent-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mc-agent-stat { font-size: 0.72rem; min-width: 1.2rem; text-align: center; }
 
-    .gantt-row {
-      display: flex;
-      align-items: stretch;
-      border-bottom: 1px solid #1a1a18;
+    /* Activity feed */
+    .mc-feed-item {
+      display: flex; align-items: flex-start; gap: 0.5rem;
+      padding: 0.35rem 0; border-bottom: 1px solid #1a1a18; font-size: 0.8rem;
     }
-    .gantt-row:hover { background: rgba(255,255,255,0.02); }
-    .gantt-label {
-      min-width: 280px;
-      max-width: 280px;
-      padding: 0.5rem 0.75rem;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 0.2rem;
-      border-right: 1px solid var(--line);
-    }
-    .gantt-task-title {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-    .gantt-status { font-size: 0.75rem; }
-    .gantt-title-text {
-      font-size: 0.82rem;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 200px;
-    }
-    .gantt-priority {
-      font-size: 0.65rem;
-      color: var(--danger);
-      font-weight: 700;
-    }
-    .gantt-meta {
-      display: flex;
-      gap: 0.5rem;
-      font-size: 0.7rem;
-      color: var(--muted);
-    }
-    .gantt-owner { color: #a7a193; }
-    .gantt-due { color: var(--accent-2); }
-    .gantt-blocked { color: var(--danger); }
+    .mc-feed-item:last-child { border-bottom: none; }
+    .mc-feed-icon { color: var(--good); font-size: 0.72rem; margin-top: 0.15rem; }
+    .mc-feed-text { flex: 1; color: #d8d2c4; line-height: 1.3; }
+    .mc-feed-text .agent { color: var(--accent-2); }
+    .mc-feed-text .group { color: var(--accent); }
+    .mc-feed-time { font-size: 0.7rem; color: #4a4840; white-space: nowrap; }
 
-    .gantt-timeline {
-      display: flex;
-      flex: 1;
-      min-width: 0;
-    }
-    .gantt-cell {
-      min-width: 28px;
-      max-width: 28px;
-      height: 100%;
-      min-height: 42px;
-      border-right: 1px solid #141412;
-      position: relative;
-    }
-    .gantt-cell.today {
-      background: rgba(213, 255, 95, 0.06);
-      border-right-color: rgba(213, 255, 95, 0.15);
-    }
-    .gantt-cell.bar {
-      position: relative;
-    }
-    .gantt-cell.bar::after {
-      content: '';
-      position: absolute;
-      top: 25%;
-      bottom: 25%;
-      left: 0;
-      right: 0;
-      border-radius: 3px;
-    }
-    .gantt-cell.bar.open::after { background: var(--muted); opacity: 0.4; }
-    .gantt-cell.bar.in-progress::after { background: var(--accent); opacity: 0.7; }
-    .gantt-cell.bar.done::after { background: var(--good); opacity: 0.5; }
-    .gantt-cell.bar.blocked::after { background: var(--danger); opacity: 0.4; }
+    .mc-empty { color: var(--muted); font-size: 0.85rem; font-style: italic; text-align: center; padding: 2rem; }
 
-    .gantt-date-header {
-      display: flex;
-      min-width: 280px;
-      margin-left: 280px;
-      border-bottom: 1px solid var(--line);
-      margin-bottom: 0.5rem;
+    @media (max-width: 900px) {
+      .mc-body { grid-template-columns: 1fr; }
+      .mc-header { flex-direction: column; align-items: flex-start; gap: 1rem; }
     }
-    .gantt-date {
-      min-width: 28px;
-      max-width: 28px;
-      text-align: center;
-      font-size: 0.6rem;
-      color: var(--muted);
-      padding: 0.25rem 0;
-    }
-    .gantt-date.today { color: var(--accent); font-weight: 700; }
-    .gantt-date.weekend { color: #4a4840; }
-
-    .gantt-empty {
-      text-align: center;
-      padding: 3rem;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-    .auto-refresh { font-size: 0.75rem; color: var(--muted); }
   </style>
-  <script>setTimeout(() => location.reload(), 30000);</script>
+  <script>setTimeout(() => location.reload(), 10000);</script>
 </head>
 <body>
-  <div class="gantt-shell">
-    <div class="gantt-header">
-      <div class="gantt-header-left">
+  <div class="mc-shell">
+    <div class="mc-header">
+      <div class="mc-header-left">
         <a href="/dashboard?secret=${secret}">← dashboard</a>
-        <h1>Project timeline</h1>
-        <span class="auto-refresh">auto-refreshes every 30s</span>
+        <h1>Mission control</h1>
+        <span class="mc-live">live</span>
       </div>
-      <div class="gantt-stats">
-        <div class="gantt-stat">
-          <div class="gantt-stat-value" style="color:var(--good)">${doneTasks}</div>
-          <div class="gantt-stat-label">done</div>
+      <div class="mc-stats">
+        <div class="mc-stat">
+          <div class="mc-stat-val" style="color:var(--accent)">${inProgressTasks}</div>
+          <div class="mc-stat-lbl">active</div>
         </div>
-        <div class="gantt-stat">
-          <div class="gantt-stat-value" style="color:var(--accent)">${inProgressTasks}</div>
-          <div class="gantt-stat-label">active</div>
+        <div class="mc-stat">
+          <div class="mc-stat-val" style="color:var(--danger)">${blockedTasks}</div>
+          <div class="mc-stat-lbl">blocked</div>
         </div>
-        <div class="gantt-stat">
-          <div class="gantt-stat-value" style="color:var(--danger)">${blockedTasks}</div>
-          <div class="gantt-stat-label">blocked</div>
+        <div class="mc-stat">
+          <div class="mc-stat-val">${openTasks}</div>
+          <div class="mc-stat-lbl">queued</div>
         </div>
-        <div class="gantt-stat">
-          <div class="gantt-stat-value">${openTasks}</div>
-          <div class="gantt-stat-label">open</div>
+        <div class="mc-stat">
+          <div class="mc-stat-val" style="color:var(--good)">${doneTasks}</div>
+          <div class="mc-stat-lbl">done</div>
         </div>
-        <div>
-          <div class="gantt-overall">
-            <div class="gantt-overall-fill" style="width:${overallProgress}%"></div>
-          </div>
-          <div class="gantt-stat-label" style="margin-top:0.25rem">${overallProgress}% complete</div>
+        <div class="mc-overall">
+          <div class="mc-overall-bar"><div class="mc-overall-fill" style="width:${overallProgress}%"></div></div>
+          <div class="mc-stat-lbl">${overallProgress}% of ${totalTasks} tasks</div>
         </div>
       </div>
     </div>
 
     ${totalTasks === 0
-      ? html`<div class="gantt-empty">No tasks yet. Create workspace tasks with groups to see them here.</div>`
+      ? html`<div class="mc-empty">No tasks yet. Create workspace or room tasks to see them here.</div>`
       : html`
-        <div class="gantt-date-header">
-          ${dates.map(d => {
-            const dt = new Date(d + "T00:00:00");
-            const day = dt.getDay();
-            const isWeekend = day === 0 || day === 6;
-            const isToday = d === today;
-            const label = dt.getDate().toString();
-            return html`<div class="gantt-date ${isToday ? "today" : ""} ${isWeekend ? "weekend" : ""}">${label}</div>`;
-          })}
-        </div>
+        <div class="mc-body">
+          <div class="mc-modules">
+            ${Array.from(groupMap.entries()).map(([name, moduleTasks]) => renderModule(name, moduleTasks))}
+            ${ungrouped.length > 0 ? renderModule("ungrouped", ungrouped) : ""}
+          </div>
 
-        ${Array.from(groupMap.entries()).map(([name, groupTasks]) => renderGroup(name, groupTasks))}
-        ${ungrouped.length > 0 ? renderGroup("ungrouped", ungrouped) : ""}
+          <div class="mc-sidebar">
+            <div class="mc-panel">
+              <div class="mc-panel-title">Agent workload</div>
+              ${agentWork.size === 0
+                ? html`<div style="color:var(--muted);font-size:0.8rem;">No assigned tasks</div>`
+                : Array.from(agentWork.entries()).map(([id, w]) => {
+                  const name = id === "unassigned" ? "unassigned" : (agentNameMap.get(id) || id.slice(0, 8));
+                  return html`
+                    <div class="mc-agent-row">
+                      <span class="mc-agent-name">${name}</span>
+                      ${w.active > 0 ? html`<span class="mc-agent-stat" style="color:var(--accent)">${w.active}</span>` : ""}
+                      ${w.blocked > 0 ? html`<span class="mc-agent-stat" style="color:var(--danger)">${w.blocked}</span>` : ""}
+                      <span class="mc-agent-stat" style="color:var(--good)">${w.done}</span>
+                    </div>
+                  `;
+                })}
+            </div>
+
+            <div class="mc-panel">
+              <div class="mc-panel-title">Recently completed</div>
+              ${recentlyDone.length === 0
+                ? html`<div style="color:var(--muted);font-size:0.8rem;">Nothing in the last 24h</div>`
+                : recentlyDone.slice(0, 10).map(t => {
+                  const owner = t.owner ? (agentNameMap.get(t.owner) || t.owner.slice(0, 8)) : "unknown";
+                  return html`
+                    <div class="mc-feed-item">
+                      <span class="mc-feed-icon">✓</span>
+                      <div class="mc-feed-text">
+                        <span class="agent">${owner}</span> finished
+                        ${t.title}
+                        ${t.group ? html` <span class="group">${t.group}</span>` : ""}
+                      </div>
+                      <span class="mc-feed-time">${timeAgo(t.updatedAt)}</span>
+                    </div>
+                  `;
+                })}
+            </div>
+
+            <div class="mc-panel">
+              <div class="mc-panel-title">Blocked tasks</div>
+              ${blockedTasks === 0
+                ? html`<div style="color:var(--good);font-size:0.8rem;">Nothing blocked</div>`
+                : mergedTasks.filter(t => t.status === "blocked").slice(0, 8).map(t => {
+                  const deps = (t.dependsOn as string[]) || [];
+                  const waitingOn = deps.filter(d => !doneIds.has(d));
+                  const waitingNames = waitingOn.map(d => {
+                    const dep = mergedTasks.find(x => x.id === d);
+                    return dep ? dep.title : d.slice(0, 8);
+                  });
+                  return html`
+                    <div class="mc-feed-item">
+                      <span class="mc-feed-icon" style="color:var(--danger)">✕</span>
+                      <div class="mc-feed-text" style="font-size:0.78rem;">
+                        ${t.title}
+                        <div style="color:#6f6b60;font-size:0.7rem;margin-top:0.15rem;">waiting on: ${waitingNames.join(", ")}</div>
+                      </div>
+                    </div>
+                  `;
+                })}
+            </div>
+          </div>
+        </div>
       `}
   </div>
 </body>
