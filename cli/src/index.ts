@@ -650,7 +650,7 @@ server.tool(
 
 server.tool(
   "trunk_edit_message",
-  "Edit a sent message's payload. Only the original sender can edit.",
+  "Edit a sent message's payload. Only the original sender can edit within 15 minutes. Tracks edit history.",
   {
     message_id: z.string().describe("ID of the message to edit"),
     content: z.string().describe("New message content"),
@@ -667,6 +667,23 @@ server.tool(
       method: "PATCH",
       secret: config.secret,
       body: { payload },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_message_edit_history",
+  "Get the edit history of a message. Shows all previous versions of the payload.",
+  {
+    message_id: z.string().describe("ID of the message"),
+  },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/${message_id}/edits`, {
+      secret: config.secret,
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }

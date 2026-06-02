@@ -270,6 +270,17 @@ export const savedSearches = pgTable("saved_searches", {
   index("saved_searches_agent_idx").on(table.agentId),
 ]);
 
+export const messageEdits = pgTable("message_edits", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  messageId: text("message_id").notNull().references(() => messages.id),
+  version: integer("version").notNull(),
+  previousPayload: jsonb("previous_payload").$type<Record<string, unknown>>().notNull(),
+  editedBy: text("edited_by").notNull().references(() => agents.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("message_edits_message_idx").on(table.messageId, table.version),
+]);
+
 export const contactTags = pgTable("contact_tags", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   agentId: text("agent_id").notNull().references(() => agents.id),

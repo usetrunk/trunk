@@ -337,7 +337,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_edit_message",
-    "Edit a sent message's payload. Only the original sender can edit.",
+    "Edit a sent message's payload. Only the original sender can edit within 15 minutes. Tracks edit history.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to edit"),
@@ -345,6 +345,19 @@ export function createMcpServer() {
     },
     async ({ secret, message_id, payload }) => {
       const result = await relay(`/messages/${message_id}`, { method: "PATCH", secret, body: { payload } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_message_edit_history",
+    "Get the edit history of a message. Shows all previous versions of the payload.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+    },
+    async ({ secret, message_id }) => {
+      const result = await relay(`/messages/${message_id}/edits`, { secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );

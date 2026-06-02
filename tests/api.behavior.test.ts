@@ -239,6 +239,15 @@ type NotificationPrefRow = {
   updatedAt: Date;
 };
 
+type MessageEditRow = {
+  id: string;
+  messageId: string;
+  version: number;
+  previousPayload: Record<string, unknown>;
+  editedBy: string;
+  createdAt: Date;
+};
+
 type MessageTemplateRow = {
   id: string;
   agentId: string;
@@ -273,7 +282,8 @@ type TableName =
   | "message_templates"
   | "notification_preferences"
   | "contact_tags"
-  | "saved_searches";
+  | "saved_searches"
+  | "message_edits";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -299,6 +309,7 @@ const testState = vi.hoisted(() => ({
   "notification_preferences": [] as NotificationPrefRow[],
   "contact_tags": [] as ContactTagRow[],
   "saved_searches": [] as SavedSearchRow[],
+  "message_edits": [] as MessageEditRow[],
   idCounter: 0,
 }));
 
@@ -336,6 +347,7 @@ describe("Hono API behavior", () => {
     testState["notification_preferences"].length = 0;
     testState["contact_tags"].length = 0;
     testState["saved_searches"].length = 0;
+    testState["message_edits"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -3115,6 +3127,103 @@ describe("Hono API behavior", () => {
     const thread = await betaClient.thread(sent.thread_id);
     expect(thread.messages[0].payload).toMatchObject({ content: "fixed typo" });
     expect(thread.messages[0].editedAt).toBeDefined();
+  });
+
+  it("cannot edit a message after 15-minute window", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "original" },
+    });
+
+    // Manually set the message's createdAt to 16 minutes ago
+    const msg = testState.messages.find((m) => m.id === sent.id)!;
+    msg.createdAt = new Date(Date.now() - 16 * 60 * 1000);
+
+    await expect(alphaClient.editMessage(sent.id, { content: "too late" })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("edit within 15-minute window succeeds", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "original" },
+    });
+
+    // Message was just created, so it's within the window
+    const edited = await alphaClient.editMessage(sent.id, { content: "corrected" });
+    expect(edited.payload).toMatchObject({ content: "corrected" });
+    expect(edited.version).toBe(2);
+  });
+
+  it("tracks edit history with previous payloads", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "v1" },
+    });
+
+    await alphaClient.editMessage(sent.id, { content: "v2" });
+    await alphaClient.editMessage(sent.id, { content: "v3" });
+
+    const history = await alphaClient.messageEditHistory(sent.id);
+    expect(history.message_id).toBe(sent.id);
+    expect(history.edit_count).toBe(2);
+    expect(history.edits[0].version).toBe(1);
+    expect(history.edits[0].previous_payload).toMatchObject({ content: "v1" });
+    expect(history.edits[1].version).toBe(2);
+    expect(history.edits[1].previous_payload).toMatchObject({ content: "v2" });
+    expect(history.current_payload).toMatchObject({ content: "v3" });
+  });
+
+  it("recipient can view edit history", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "original" },
+    });
+
+    await alphaClient.editMessage(sent.id, { content: "edited" });
+
+    const history = await betaClient.messageEditHistory(sent.id);
+    expect(history.edit_count).toBe(1);
+    expect(history.edits[0].previous_payload).toMatchObject({ content: "original" });
+  });
+
+  it("edit history returns empty for unedited message", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "never edited" },
+    });
+
+    const history = await alphaClient.messageEditHistory(sent.id);
+    expect(history.edit_count).toBe(0);
+    expect(history.edits).toHaveLength(0);
+  });
+
+  it("non-participant cannot view edit history", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "secret" },
+    });
+
+    const gamma = await createClient().register({ name: "gamma" });
+    const gammaClient = createClient(gamma.secret);
+    await expect(gammaClient.messageEditHistory(sent.id)).rejects.toMatchObject({ status: 404 });
   });
 
   // --- Inbox stats tests ---
@@ -6203,6 +6312,19 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "message_edits") {
+      const row: MessageEditRow = {
+        id: nextId("medit"),
+        messageId: this.insertValues.messageId as string,
+        version: this.insertValues.version as number,
+        previousPayload: this.insertValues.previousPayload as Record<string, unknown>,
+        editedBy: this.insertValues.editedBy as string,
+        createdAt: new Date(),
+      };
+      testState["message_edits"].push(row);
+      return row;
+    }
+
     if (this.table === "contact_tags") {
       const row: ContactTagRow = {
         id: nextId("ctag"),
@@ -6343,7 +6465,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow> {
   return testState[table];
 }
 
@@ -6381,7 +6503,8 @@ function getTableName(table: unknown): TableName {
     name === "message_templates" ||
     name === "notification_preferences" ||
     name === "contact_tags" ||
-    name === "saved_searches"
+    name === "saved_searches" ||
+    name === "message_edits"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }

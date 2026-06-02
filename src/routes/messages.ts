@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits } from "../db/schema.js";
 import { eq, or, and, desc, lt } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -15,6 +15,7 @@ import type { AgentVariables } from "../lib/types.js";
 const app = new Hono<AgentVariables>();
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const DEFAULT_RETENTION_DAYS = 90;
+const EDIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 app.use("/*", authMiddleware);
 
@@ -933,13 +934,33 @@ app.patch("/:id", async (c) => {
   if (!msg) return c.json({ error: "Message not found" }, 404);
   if (msg.status === "deleted") return c.json({ error: "Cannot edit a deleted message" }, 400);
 
+  const ageMs = Date.now() - msg.createdAt.getTime();
+  if (ageMs > EDIT_WINDOW_MS) {
+    return c.json({ error: "Edit window expired (15 minutes)" }, 403);
+  }
+
+  // Determine version number for this edit
+  const existingEdits = await db
+    .select()
+    .from(messageEdits)
+    .where(eq(messageEdits.messageId, messageId));
+  const version = existingEdits.length + 1;
+
+  // Store previous payload in edit history
+  await db.insert(messageEdits).values({
+    messageId,
+    version,
+    previousPayload: msg.payload as Record<string, unknown>,
+    editedBy: agentId,
+  });
+
   const [updated] = await db
     .update(messages)
     .set({ payload: body.payload, editedAt: new Date() })
     .where(eq(messages.id, messageId))
     .returning();
 
-  await audit(agentId, "message.edit", "message", messageId);
+  await audit(agentId, "message.edit", "message", messageId, { version });
 
   return c.json({
     id: updated.id,
@@ -947,6 +968,46 @@ app.patch("/:id", async (c) => {
     payload: updated.payload,
     edited_at: updated.editedAt,
     status: updated.status,
+    version: version + 1,
+  });
+});
+
+// Get edit history for a message
+app.get("/:id/edits", async (c) => {
+  const agentId = c.get("agentId");
+  const messageId = c.req.param("id");
+
+  // Verify message exists and agent is sender or recipient
+  const [msg] = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.id, messageId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      )
+    )
+    .limit(1);
+
+  if (!msg) return c.json({ error: "Message not found" }, 404);
+
+  const edits = await db
+    .select()
+    .from(messageEdits)
+    .where(eq(messageEdits.messageId, messageId))
+    .orderBy(messageEdits.version);
+
+  return c.json({
+    message_id: messageId,
+    current_payload: msg.payload,
+    edited_at: msg.editedAt,
+    edits: edits.map((e) => ({
+      version: e.version,
+      previous_payload: e.previousPayload,
+      edited_by: e.editedBy,
+      created_at: e.createdAt,
+    })),
+    edit_count: edits.length,
   });
 });
 

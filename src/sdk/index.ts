@@ -610,6 +610,21 @@ export type TemplateResponse = {
   updated_at: string;
 };
 
+export type MessageEditEntry = {
+  version: number;
+  previous_payload: Record<string, unknown>;
+  edited_by: string;
+  created_at: string | Date;
+};
+
+export type MessageEditHistoryResponse = {
+  message_id: string;
+  current_payload: Record<string, unknown>;
+  edited_at: string | Date | null;
+  edits: MessageEditEntry[];
+  edit_count: number;
+};
+
 export type TrunkClientOptions = {
   baseUrl: string;
   secret?: string;
@@ -921,8 +936,12 @@ export class TrunkClient {
     return this.request(`/context/workspace/${encodeURIComponent(workspaceId)}/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
   }
 
-  editMessage(messageId: string, payload: Record<string, unknown>): Promise<{ id: string; thread_id: string; payload: Record<string, unknown>; edited_at: string; status: string }> {
+  editMessage(messageId: string, payload: Record<string, unknown>): Promise<{ id: string; thread_id: string; payload: Record<string, unknown>; edited_at: string; status: string; version: number }> {
     return this.request(`/messages/${encodeURIComponent(messageId)}`, { method: "PATCH", body: { payload } });
+  }
+
+  messageEditHistory(messageId: string): Promise<MessageEditHistoryResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/edits`);
   }
 
   deleteMessage(messageId: string): Promise<AckResponse> {

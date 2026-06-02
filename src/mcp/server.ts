@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches, messageEdits } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -818,7 +818,7 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_edit_message",
-    "Edit a sent message's payload. Only the original sender can edit. Returns the updated message.",
+    "Edit a sent message's payload. Only the original sender can edit within 15 minutes of sending. Tracks edit history.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to edit"),
@@ -837,6 +837,22 @@ export function createTrunkMcpServer() {
       if (!msg) return errorResult("Message not found");
       if (msg.status === "deleted") return errorResult("Cannot edit a deleted message");
 
+      const ageMs = Date.now() - msg.createdAt.getTime();
+      if (ageMs > 15 * 60 * 1000) return errorResult("Edit window expired (15 minutes)");
+
+      const existingEdits = await db
+        .select()
+        .from(messageEdits)
+        .where(eq(messageEdits.messageId, message_id));
+      const version = existingEdits.length + 1;
+
+      await db.insert(messageEdits).values({
+        messageId: message_id,
+        version,
+        previousPayload: msg.payload as Record<string, unknown>,
+        editedBy: agent.id,
+      });
+
       const [updated] = await db
         .update(messages)
         .set({ payload, editedAt: new Date() })
@@ -852,6 +868,57 @@ export function createTrunkMcpServer() {
             payload: updated.payload,
             edited_at: updated.editedAt,
             status: updated.status,
+            version: version + 1,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_message_edit_history",
+    "Get the edit history of a message. Shows all previous versions of the payload.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.id, message_id),
+            or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))
+          )
+        )
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+
+      const edits = await db
+        .select()
+        .from(messageEdits)
+        .where(eq(messageEdits.messageId, message_id))
+        .orderBy(messageEdits.version);
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            message_id,
+            current_payload: msg.payload,
+            edited_at: msg.editedAt,
+            edits: edits.map((e) => ({
+              version: e.version,
+              previous_payload: e.previousPayload,
+              edited_by: e.editedBy,
+              created_at: e.createdAt,
+            })),
+            edit_count: edits.length,
           }, null, 2),
         }],
       };
