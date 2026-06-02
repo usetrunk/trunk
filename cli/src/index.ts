@@ -287,23 +287,25 @@ server.tool(
 
 server.tool(
   "trunk_task_create",
-  "Create a task for a contact. Both agents can see and update it.",
+  "Create a task. Scoped to a contact pair, room, or workspace.",
   {
-    contact_id: z.string().describe("Agent ID of the contact this task is for"),
     title: z.string().describe("Task title"),
+    contact_id: z.string().optional().describe("Agent ID of the contact (contact-scoped task)"),
+    room_id: z.string().optional().describe("Room ID (room-scoped task)"),
+    workspace_id: z.string().optional().describe("Workspace ID (workspace-scoped task)"),
     description: z.string().optional().describe("Task description / details"),
-    owner: z.string().optional().describe("Agent ID of who's responsible (defaults to contact)"),
+    owner: z.string().optional().describe("Agent ID of who's responsible"),
     due: z.string().optional().describe("Due date (YYYY-MM-DD)"),
     context_ref: z.string().optional().describe("Reference to a thread or message"),
   },
-  async ({ contact_id, title, description, owner, due, context_ref }) => {
+  async ({ title, contact_id, room_id, workspace_id, description, owner, due, context_ref }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
     const result = await relay("/tasks", {
       method: "POST",
       secret: config.secret,
-      body: { contact_id, title, description, owner, due, context_ref },
+      body: { contact_id, room_id, workspace_id, title, description, owner, due, context_ref },
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
@@ -311,22 +313,30 @@ server.tool(
 
 server.tool(
   "trunk_task_list",
-  "List tasks with a contact. Filter by status or owner.",
+  "List tasks for a contact, room, or workspace.",
   {
-    contact_id: z.string().describe("Agent ID of the contact"),
+    contact_id: z.string().optional().describe("Agent ID of the contact"),
+    room_id: z.string().optional().describe("Room ID"),
+    workspace_id: z.string().optional().describe("Workspace ID"),
     status: z.string().optional().describe("Filter: open, in-progress, done, blocked"),
     owner: z.string().optional().describe("Filter by owner agent ID"),
   },
-  async ({ contact_id, status, owner }) => {
+  async ({ contact_id, room_id, workspace_id, status, owner }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
-    let path = `/tasks/${contact_id}`;
+    let path: string;
     const params = new URLSearchParams();
     if (status) params.set("status", status);
     if (owner) params.set("owner", owner);
     const query = params.toString();
-    if (query) path += `?${query}`;
+    if (workspace_id) {
+      path = `/tasks/workspace/${workspace_id}${query ? `?${query}` : ""}`;
+    } else if (room_id) {
+      path = `/tasks/room/${room_id}${query ? `?${query}` : ""}`;
+    } else {
+      path = `/tasks/${contact_id}${query ? `?${query}` : ""}`;
+    }
 
     const result = await relay(path, { secret: config.secret });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -337,7 +347,9 @@ server.tool(
   "trunk_task_update",
   "Update a task — change status, owner, title, due date, etc.",
   {
-    contact_id: z.string().describe("Agent ID of the contact"),
+    contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped tasks)"),
+    room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
+    workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
     task_id: z.string().describe("Task ID to update"),
     status: z.string().optional().describe("New status: open, in-progress, done, blocked"),
     owner: z.string().optional().describe("Reassign to a different agent"),
@@ -345,10 +357,11 @@ server.tool(
     description: z.string().optional().describe("Update the description"),
     due: z.string().optional().describe("Update due date (YYYY-MM-DD)"),
   },
-  async ({ contact_id, task_id, status, owner, title, description, due }) => {
+  async ({ contact_id, room_id, workspace_id, task_id, status, owner, title, description, due }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
+    const scopeId = contact_id || room_id || workspace_id;
     const body: Record<string, unknown> = {};
     if (status !== undefined) body.status = status;
     if (owner !== undefined) body.owner = owner;
@@ -356,7 +369,7 @@ server.tool(
     if (description !== undefined) body.description = description;
     if (due !== undefined) body.due = due;
 
-    const result = await relay(`/tasks/${contact_id}/${task_id}`, {
+    const result = await relay(`/tasks/${scopeId}/${task_id}`, {
       method: "PATCH",
       secret: config.secret,
       body,

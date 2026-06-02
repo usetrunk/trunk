@@ -725,6 +725,80 @@ describe("Hono API behavior", () => {
     expect(res.status).toBe(403);
   });
 
+  it("room member can update a room-scoped task", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Update Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, { title: "Room task to update" });
+    const task = await taskRes.json();
+
+    // Beta updates the task status using room_id as scope
+    const updateRes = await app.request(`/tasks/${room.id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${beta.secret}` },
+      body: JSON.stringify({ status: "in-progress" }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.status).toBe("in-progress");
+
+    // Change is visible to both members
+    const listRes = await app.request(`/tasks/room/${room.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const body = await listRes.json();
+    expect(body.tasks[0].status).toBe("in-progress");
+  });
+
+  it("workspace member can update a workspace-scoped task", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-updater-1" });
+    const beta = await anon.register({ name: "ws-updater-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "UpdateTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Workspace task to update" }),
+    });
+    expect(createRes.status).toBe(201);
+    const task = await createRes.json();
+
+    // Beta updates the task using workspace_id as scope
+    const updateRes = await app.request(`/tasks/${ws.id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${beta.secret}` },
+      body: JSON.stringify({ status: "done", owner: beta.agent_id }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.status).toBe("done");
+    expect(updated.owner).toBe(beta.agent_id);
+  });
+
+  it("non-room-member cannot update a room-scoped task", async () => {
+    const { alpha } = await registerPair();
+    const outsider = await createClient().register({ name: "outsider-updater" });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Guarded Room" });
+    const room = await roomRes.json();
+
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, { title: "Protected task" });
+    const task = await taskRes.json();
+
+    const updateRes = await app.request(`/tasks/${room.id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${outsider.secret}` },
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(updateRes.status).toBe(403);
+  });
+
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
