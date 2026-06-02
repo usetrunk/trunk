@@ -1515,6 +1515,73 @@ export function createTrunkMcpServer() {
     }
   );
 
+  server.tool(
+    "trunk_webhook_test",
+    "Send a test ping to your configured webhook URL to verify it's reachable and responding. Set your webhook URL with trunk_config first.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+      if (!agent.webhookUrl) return errorResult("No webhook URL configured. Use trunk_config or PATCH /agents/me to set one.");
+
+      const testPayload = JSON.stringify({
+        event: "webhook.test",
+        agent_id: agent.id,
+        timestamp: new Date().toISOString(),
+      });
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "X-Trunk-Event": "webhook.test",
+      };
+
+      if (agent.webhookSecret) {
+        const encoder = new TextEncoder();
+        const key = await crypto.subtle.importKey(
+          "raw", encoder.encode(agent.webhookSecret),
+          { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+        );
+        const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(testPayload));
+        headers["X-Trunk-Signature"] = `sha256=${Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+      }
+
+      try {
+        const res = await fetch(agent.webhookUrl, {
+          method: "POST",
+          headers,
+          body: testPayload,
+          signal: AbortSignal.timeout(10000),
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              ok: res.ok,
+              status: res.status,
+              webhook_url: agent.webhookUrl,
+              message: res.ok ? "Webhook responded successfully" : `Webhook returned ${res.status}`,
+            }, null, 2),
+          }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              ok: false,
+              webhook_url: agent.webhookUrl,
+              message: `Webhook unreachable: ${err instanceof Error ? err.message : "unknown error"}`,
+            }, null, 2),
+          }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   // --- Presence ---
 
   server.tool(

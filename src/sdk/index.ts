@@ -51,6 +51,13 @@ export type RotateSecretResponse = {
   secret: string;
 };
 
+export type WebhookTestResponse = {
+  ok: boolean;
+  status?: number;
+  webhook_url: string;
+  message: string;
+};
+
 export type PairRequest = {
   code: string;
   alias?: string;
@@ -461,6 +468,10 @@ export class TrunkClient {
 
   rotateSecret(): Promise<RotateSecretResponse> {
     return this.request("/agents/me/rotate-secret", { method: "POST" });
+  }
+
+  testWebhook(): Promise<WebhookTestResponse> {
+    return this.request("/agents/me/webhook/test", { method: "POST" });
   }
 
   profile(agentId: string): Promise<AgentProfile> {

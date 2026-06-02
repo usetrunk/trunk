@@ -3248,6 +3248,15 @@ describe("Hono API behavior", () => {
     expect(betaPresence).toMatchObject({ status: "away" });
   });
 
+  // --- Webhook test ---
+
+  it("testWebhook returns 400 when no webhook URL is configured", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.testWebhook()).rejects.toMatchObject({ status: 400 });
+  });
+
   it("presence returns 400 when not in a workspace", async () => {
     const alpha = await createClient().register({ name: "solo" });
     const client = createClient(alpha.secret);

@@ -195,6 +195,57 @@ app.get("/:id", authMiddleware, async (c) => {
   });
 });
 
+// Test webhook — sends a ping to the agent's configured webhook URL
+app.post("/me/webhook/test", authMiddleware, async (c) => {
+  const agent = c.get("agent");
+  if (!agent.webhookUrl) {
+    return c.json({ error: "No webhook URL configured. Set one with PATCH /agents/me" }, 400);
+  }
+
+  const testPayload = JSON.stringify({
+    event: "webhook.test",
+    agent_id: agent.id,
+    timestamp: new Date().toISOString(),
+  });
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Trunk-Event": "webhook.test",
+  };
+
+  if (agent.webhookSecret) {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw", encoder.encode(agent.webhookSecret),
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+    );
+    const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(testPayload));
+    headers["X-Trunk-Signature"] = `sha256=${Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  try {
+    const res = await fetch(agent.webhookUrl, {
+      method: "POST",
+      headers,
+      body: testPayload,
+      signal: AbortSignal.timeout(10000),
+    });
+
+    return c.json({
+      ok: res.ok,
+      status: res.status,
+      webhook_url: agent.webhookUrl,
+      message: res.ok ? "Webhook responded successfully" : `Webhook returned ${res.status}`,
+    });
+  } catch (err: unknown) {
+    return c.json({
+      ok: false,
+      webhook_url: agent.webhookUrl,
+      message: `Webhook unreachable: ${err instanceof Error ? err.message : "unknown error"}`,
+    }, 502);
+  }
+});
+
 // Rotate secret
 app.post("/me/rotate-secret", authMiddleware, async (c) => {
   const agentId = c.get("agentId");

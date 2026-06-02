@@ -910,6 +910,19 @@ server.tool(
   }
 );
 
+server.tool(
+  "trunk_webhook_test",
+  "Send a test ping to your configured webhook URL to verify it's reachable.",
+  {},
+  async () => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/agents/me/webhook/test", { method: "POST", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 // --- Presence ---
 
 server.tool(
