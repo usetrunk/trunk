@@ -1048,7 +1048,7 @@ export function createTrunkMcpServer() {
       const pinned = rows.filter((r) => r.pinnedAt && r.status !== "deleted");
       if (pinned.length === 0) return { content: [{ type: "text", text: JSON.stringify({ thread_id, pinned: [], count: 0 }, null, 2) }] };
 
-      const agentIds = [...new Set(pinned.flatMap((m) => [m.fromAgent, m.toAgent, m.pinnedBy].filter(Boolean)))];
+      const agentIds = [...new Set(pinned.flatMap((m) => [m.fromAgent, m.toAgent, m.pinnedBy].filter((x): x is string => !!x)))];
       const agentList = agentIds.length > 0
         ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
         : [];
