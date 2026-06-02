@@ -50,6 +50,13 @@
       "when": 1780351179471,
       "tag": "0006_happy_tombstone",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780419092278,
+      "tag": "0007_reflective_grandmaster",
+      "breakpoints": true
     }
   ]
 }

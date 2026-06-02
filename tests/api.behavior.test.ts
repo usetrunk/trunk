@@ -119,6 +119,19 @@ type RateLimitRow = {
   updatedAt: Date;
 };
 
+type SubscriptionRow = {
+  id: string;
+  workspaceId: string;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  plan: string;
+  status: string;
+  currentPeriodStart: Date | null;
+  currentPeriodEnd: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -130,7 +143,8 @@ type TableName =
   | "workspace_contacts"
   | "shared_facts"
   | "audit_events"
-  | "rate_limits";
+  | "rate_limits"
+  | "subscriptions";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -144,6 +158,7 @@ const testState = vi.hoisted(() => ({
   "shared_facts": [] as SharedFactRow[],
   "audit_events": [] as AuditEventRow[],
   "rate_limits": [] as RateLimitRow[],
+  subscriptions: [] as SubscriptionRow[],
   idCounter: 0,
 }));
 
@@ -169,6 +184,7 @@ describe("Hono API behavior", () => {
     testState["shared_facts"].length = 0;
     testState["audit_events"].length = 0;
     testState["rate_limits"].length = 0;
+    testState.subscriptions.length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -1661,6 +1677,81 @@ describe("Hono API behavior", () => {
       role: "developer",
     });
   });
+
+  // --- Billing ---
+
+  it("billing status returns free plan for workspace member", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-alpha", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "Bill Team" });
+    const status = await client.billingStatus();
+
+    expect(status.workspace_id).toBe(ws.id);
+    expect(status.plan).toBe("free");
+    expect(status.status).toBe("active");
+  });
+
+  it("billing status fails without workspace", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-solo", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    await expect(client.billingStatus()).rejects.toThrow(TrunkApiError);
+    try {
+      await client.billingStatus();
+    } catch (e) {
+      expect((e as TrunkApiError).status).toBe(400);
+    }
+  });
+
+  it("billing checkout fails without workspace", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-solo2", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    await expect(client.billingCheckout()).rejects.toThrow(TrunkApiError);
+  });
+
+  it("billing portal fails without stripe customer", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-portal", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    await client.createWorkspace({ name: "Portal Team" });
+
+    await expect(client.billingPortal()).rejects.toThrow(TrunkApiError);
+    try {
+      await client.billingPortal();
+    } catch (e) {
+      expect((e as TrunkApiError).status).toBe(400);
+      expect((e as TrunkApiError).message).toContain("No billing account");
+    }
+  });
+
+  it("billing status reflects subscription changes via mock", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-upgrade", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "Upgrade Team" });
+
+    // Get initial status (creates free subscription)
+    const initial = await client.billingStatus();
+    expect(initial.plan).toBe("free");
+
+    // Simulate an upgrade by directly modifying the subscription in testState
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    expect(sub).toBeDefined();
+    sub!.plan = "team";
+    sub!.stripeCustomerId = "cus_test123";
+    sub!.stripeSubscriptionId = "sub_test123";
+
+    const upgraded = await client.billingStatus();
+    expect(upgraded.plan).toBe("team");
+    expect(upgraded.stripe_customer_id).toBe("cus_test123");
+  });
 });
 
 async function registerPair(): Promise<{
@@ -1966,6 +2057,23 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "subscriptions") {
+      const row: SubscriptionRow = {
+        id: nextId("sub"),
+        workspaceId: this.insertValues.workspaceId as string,
+        stripeCustomerId: (this.insertValues.stripeCustomerId as string | undefined) ?? null,
+        stripeSubscriptionId: (this.insertValues.stripeSubscriptionId as string | undefined) ?? null,
+        plan: (this.insertValues.plan as string | undefined) ?? "free",
+        status: (this.insertValues.status as string | undefined) ?? "active",
+        currentPeriodStart: (this.insertValues.currentPeriodStart as Date | undefined) ?? null,
+        currentPeriodEnd: (this.insertValues.currentPeriodEnd as Date | undefined) ?? null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      testState.subscriptions.push(row);
+      return row;
+    }
+
     if (this.table === "shared_facts") {
       const row: SharedFactRow = {
         scope: this.insertValues.scope as string,
@@ -2079,7 +2187,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | AuditEventRow | RateLimitRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | AuditEventRow | RateLimitRow | SubscriptionRow> {
   return testState[table];
 }
 
@@ -2105,7 +2213,8 @@ function getTableName(table: unknown): TableName {
     name === "workspace_contacts" ||
     name === "shared_facts" ||
     name === "audit_events" ||
-    name === "rate_limits"
+    name === "rate_limits" ||
+    name === "subscriptions"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -2213,4 +2322,8 @@ const columnToProperty: Record<string, string> = {
   window_start: "windowStart",
   workspace_id: "workspaceId",
   to_workspace: "toWorkspace",
+  stripe_customer_id: "stripeCustomerId",
+  stripe_subscription_id: "stripeSubscriptionId",
+  current_period_start: "currentPeriodStart",
+  current_period_end: "currentPeriodEnd",
 };

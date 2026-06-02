@@ -178,7 +178,6 @@ unset ANTHROPIC_API_KEY
 PROMPT='${escapedPrompt}'
 RESUME_PROMPT='${escapedResume}'
 FIRST_RUN=1
-LOG_FILE="${join(STATE_DIR, `agent-${config.profile}.log`)}"
 
 ${loopEnabled ? "while true; do" : ""}
   if [ "$FIRST_RUN" = "1" ]; then

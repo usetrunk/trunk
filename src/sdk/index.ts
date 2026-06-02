@@ -232,6 +232,68 @@ export type RoomMembersResponse = {
   members: RoomMember[];
 };
 
+export type CreateDocumentRequest = {
+  name: string;
+  body: string;
+  content_type?: string;
+};
+
+export type DocumentResponse = {
+  id: string;
+  name: string;
+  content_type: string;
+  body?: string;
+  version: number;
+  last_edited_by: string;
+  created_at?: string | Date;
+  updated_at?: string | Date;
+};
+
+export type DocumentListResponse = {
+  documents: DocumentResponse[];
+};
+
+export type UpdateDocumentRequest = {
+  body: string;
+  name?: string;
+};
+
+export type DocumentVersionSummary = {
+  version: number;
+  edited_by: string;
+  created_at: string | Date;
+  body_length: number;
+};
+
+export type DocumentVersionsResponse = {
+  versions: DocumentVersionSummary[];
+};
+
+export type DocumentVersionResponse = {
+  version: number;
+  body: string;
+  edited_by: string;
+  created_at: string | Date;
+};
+
+export type BillingStatus = {
+  workspace_id: string;
+  plan: string;
+  status: string;
+  current_period_start: string | Date | null;
+  current_period_end: string | Date | null;
+  stripe_customer_id: string | null;
+};
+
+export type CheckoutResponse = {
+  url: string;
+  session_id: string;
+};
+
+export type PortalResponse = {
+  url: string;
+};
+
 export type InboxOptions = {
   status?: string;
   limit?: number;
@@ -435,6 +497,18 @@ export class TrunkClient {
 
   roomMembers(roomId: string): Promise<RoomMembersResponse> {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/members`);
+  }
+
+  billingStatus(): Promise<BillingStatus> {
+    return this.request("/billing/status");
+  }
+
+  billingCheckout(options: { success_url?: string; cancel_url?: string } = {}): Promise<CheckoutResponse> {
+    return this.request("/billing/checkout", { method: "POST", body: options });
+  }
+
+  billingPortal(): Promise<PortalResponse> {
+    return this.request("/billing/portal", { method: "POST" });
   }
 
   private async request<T>(

@@ -152,6 +152,22 @@ export const sharedDocuments = pgTable("shared_documents", {
   index("shared_docs_scope_idx").on(table.scope, table.name),
 ]);
 
+export const subscriptions = pgTable("subscriptions", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id).unique(),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  plan: text("plan").notNull().default("free"), // free, team
+  status: text("status").notNull().default("active"), // active, canceled, past_due, trialing
+  currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
+  currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("subscriptions_stripe_customer_idx").on(table.stripeCustomerId),
+  index("subscriptions_stripe_sub_idx").on(table.stripeSubscriptionId),
+]);
+
 export const sharedDocumentVersions = pgTable("shared_document_versions", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   documentId: text("document_id").notNull().references(() => sharedDocuments.id),

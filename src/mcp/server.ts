@@ -719,6 +719,59 @@ export function createTrunkMcpServer() {
     }
   );
 
+  // --- Billing ---
+
+  server.tool(
+    "trunk_billing",
+    "Check billing status, create a checkout session to upgrade, or open the billing portal. Actions: status, checkout, portal.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["status", "checkout", "portal"]).describe("Billing action"),
+      success_url: z.string().optional().describe("Redirect URL after successful checkout"),
+      cancel_url: z.string().optional().describe("Redirect URL if checkout is canceled"),
+    },
+    async ({ secret, action, success_url, cancel_url }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      if (!agent.workspaceId) return errorResult("Not in a workspace");
+
+      // Proxy to the billing routes via internal fetch
+      const baseUrl = process.env.APP_URL ?? "https://trunk.bot";
+      let path: string;
+      let method = "GET";
+      let body: Record<string, unknown> | undefined;
+
+      switch (action) {
+        case "status":
+          path = "/billing/status";
+          break;
+        case "checkout":
+          path = "/billing/checkout";
+          method = "POST";
+          body = {};
+          if (success_url) body.success_url = success_url;
+          if (cancel_url) body.cancel_url = cancel_url;
+          break;
+        case "portal":
+          path = "/billing/portal";
+          method = "POST";
+          break;
+      }
+
+      const headers: Record<string, string> = { "Authorization": `Bearer ${secret}` };
+      if (body) headers["Content-Type"] = "application/json";
+
+      const resp = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const result = await resp.json();
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   return server;
 }
 

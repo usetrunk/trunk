@@ -581,6 +581,46 @@ server.tool(
   }
 );
 
+// --- Billing ---
+
+server.tool(
+  "trunk_billing",
+  "Check billing status, create a checkout session to upgrade, or open the billing portal. Actions: status, checkout, portal.",
+  {
+    action: z.enum(["status", "checkout", "portal"]).describe("Billing action"),
+    success_url: z.string().optional().describe("Redirect URL after successful checkout"),
+    cancel_url: z.string().optional().describe("Redirect URL if checkout is canceled"),
+  },
+  async ({ action, success_url, cancel_url }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    let path: string;
+    let method = "GET";
+    let body: Record<string, unknown> | undefined;
+
+    switch (action) {
+      case "status":
+        path = "/billing/status";
+        break;
+      case "checkout":
+        path = "/billing/checkout";
+        method = "POST";
+        body = {};
+        if (success_url) body.success_url = success_url;
+        if (cancel_url) body.cancel_url = cancel_url;
+        break;
+      case "portal":
+        path = "/billing/portal";
+        method = "POST";
+        break;
+    }
+
+    const result = await relay(path, { method, body, secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 // --- Start ---
 
 async function main() {

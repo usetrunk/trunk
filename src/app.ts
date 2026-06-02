@@ -12,6 +12,7 @@ import connectRoutes from "./routes/connect.js";
 import documentsRoutes from "./routes/documents.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import workspacesRoutes from "./routes/workspaces.js";
+import billingRoutes from "./routes/billing.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 
 const app = new Hono();
@@ -38,6 +39,7 @@ app.route("/connect", connectRoutes);
 app.route("/documents", documentsRoutes);
 app.route("/dashboard", dashboardRoutes);
 app.route("/workspaces", workspacesRoutes);
+app.route("/billing", billingRoutes);
 
 export default app;
 
