@@ -18,6 +18,7 @@ export const agents = pgTable("agents", {
   webhookUrl: text("webhook_url"),
   webhookSecret: text("webhook_secret"),
   workspaceId: text("workspace_id").references(() => workspaces.id),
+  workspaceRole: text("workspace_role"), // admin, member — null when not in a workspace
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

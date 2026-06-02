@@ -1324,15 +1324,17 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_workspace",
-    "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave, update.",
+    "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave, update, kick, role, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "status", "members", "leave", "update"]).describe("Action to perform"),
+      action: z.enum(["create", "join", "status", "members", "leave", "update", "kick", "role", "delete"]).describe("Action to perform"),
       name: z.string().optional().describe("Workspace name (for create/update)"),
       code: z.string().optional().describe("Workspace pairing code (for join)"),
       metadata: z.record(z.unknown()).optional().describe("Workspace metadata (for update)"),
+      agent_id: z.string().optional().describe("Target agent ID (for kick/role)"),
+      role: z.enum(["admin", "member"]).optional().describe("New role (for role action)"),
     },
-    async ({ secret, action, name, code, metadata }) => {
+    async ({ secret, action, name, code, metadata, agent_id, role }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -1346,7 +1348,7 @@ export function createTrunkMcpServer() {
           .values({ name, owner: agent.owner, pairingCode })
           .returning();
 
-        await db.update(agents).set({ workspaceId: workspace.id }).where(eq(agents.id, agent.id));
+        await db.update(agents).set({ workspaceId: workspace.id, workspaceRole: "admin" }).where(eq(agents.id, agent.id));
 
         return {
           content: [{
@@ -1355,6 +1357,7 @@ export function createTrunkMcpServer() {
               workspace_id: workspace.id,
               name: workspace.name,
               pairing_code: workspace.pairingCode,
+              role: "admin",
               message: `Workspace "${name}" created. Share the pairing code with external agents to let them pair with all workspace members.`,
             }, null, 2),
           }],
@@ -1373,7 +1376,7 @@ export function createTrunkMcpServer() {
 
         if (!workspace) return errorResult("Invalid workspace code");
 
-        await db.update(agents).set({ workspaceId: workspace.id }).where(eq(agents.id, agent.id));
+        await db.update(agents).set({ workspaceId: workspace.id, workspaceRole: "member" }).where(eq(agents.id, agent.id));
 
         return {
           content: [{
@@ -1395,7 +1398,7 @@ export function createTrunkMcpServer() {
         if (!workspace) return errorResult("Workspace not found");
 
         const members = await db
-          .select({ id: agents.id, name: agents.name, owner: agents.owner })
+          .select({ id: agents.id, name: agents.name, owner: agents.owner, workspaceRole: agents.workspaceRole })
           .from(agents)
           .where(eq(agents.workspaceId, workspace.id));
 
@@ -1406,7 +1409,8 @@ export function createTrunkMcpServer() {
               workspace_id: workspace.id,
               name: workspace.name,
               pairing_code: workspace.pairingCode,
-              members: members.map((m) => ({ agent_id: m.id, name: m.name, owner: m.owner })),
+              your_role: agent.workspaceRole ?? "member",
+              members: members.map((m) => ({ agent_id: m.id, name: m.name, owner: m.owner, role: m.workspaceRole ?? "member" })),
             }, null, 2),
           }],
         };
@@ -1416,7 +1420,7 @@ export function createTrunkMcpServer() {
         if (!agent.workspaceId) return errorResult("Not in a workspace");
 
         const members = await db
-          .select({ id: agents.id, name: agents.name, owner: agents.owner })
+          .select({ id: agents.id, name: agents.name, owner: agents.owner, workspaceRole: agents.workspaceRole })
           .from(agents)
           .where(eq(agents.workspaceId, agent.workspaceId));
 
@@ -1424,7 +1428,7 @@ export function createTrunkMcpServer() {
           content: [{
             type: "text",
             text: JSON.stringify({
-              members: members.map((m) => ({ agent_id: m.id, name: m.name, owner: m.owner })),
+              members: members.map((m) => ({ agent_id: m.id, name: m.name, owner: m.owner, role: m.workspaceRole ?? "member" })),
             }, null, 2),
           }],
         };
@@ -1433,7 +1437,7 @@ export function createTrunkMcpServer() {
       if (action === "leave") {
         if (!agent.workspaceId) return errorResult("Not in a workspace");
 
-        await db.update(agents).set({ workspaceId: null }).where(eq(agents.id, agent.id));
+        await db.update(agents).set({ workspaceId: null, workspaceRole: null }).where(eq(agents.id, agent.id));
 
         return {
           content: [{ type: "text", text: JSON.stringify({ left: true, message: "Left workspace." }, null, 2) }],
@@ -1442,12 +1446,53 @@ export function createTrunkMcpServer() {
 
       if (action === "update") {
         if (!agent.workspaceId) return errorResult("Not in a workspace");
+        if (agent.workspaceRole !== "admin") return errorResult("Admin role required");
         if (!name && !metadata) return errorResult("name or metadata is required for update");
         const updates: Record<string, unknown> = {};
         if (name) updates.name = name;
         if (metadata) updates.metadata = metadata;
         const [updated] = await db.update(workspaces).set(updates).where(eq(workspaces.id, agent.workspaceId)).returning();
         return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, name: updated.name, pairing_code: updated.pairingCode, metadata: updated.metadata }, null, 2) }] };
+      }
+
+      if (action === "kick") {
+        if (!agent.workspaceId) return errorResult("Not in a workspace");
+        if (agent.workspaceRole !== "admin") return errorResult("Admin role required");
+        if (!agent_id) return errorResult("agent_id is required for kick");
+        if (agent_id === agent.id) return errorResult("Cannot kick yourself. Use leave instead.");
+
+        const [target] = await db.select().from(agents).where(eq(agents.id, agent_id)).limit(1);
+        if (!target || target.workspaceId !== agent.workspaceId) return errorResult("Agent is not a member of this workspace");
+
+        await db.update(agents).set({ workspaceId: null, workspaceRole: null }).where(eq(agents.id, agent_id));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, kicked: agent_id, message: `Kicked agent from workspace.` }, null, 2) }] };
+      }
+
+      if (action === "role") {
+        if (!agent.workspaceId) return errorResult("Not in a workspace");
+        if (agent.workspaceRole !== "admin") return errorResult("Admin role required");
+        if (!agent_id) return errorResult("agent_id is required for role");
+        if (!role) return errorResult("role is required (admin or member)");
+
+        const [target] = await db.select().from(agents).where(eq(agents.id, agent_id)).limit(1);
+        if (!target || target.workspaceId !== agent.workspaceId) return errorResult("Agent is not a member of this workspace");
+
+        await db.update(agents).set({ workspaceRole: role }).where(eq(agents.id, agent_id));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, agent_id, role, message: `Changed role to ${role}.` }, null, 2) }] };
+      }
+
+      if (action === "delete") {
+        if (!agent.workspaceId) return errorResult("Not in a workspace");
+        if (agent.workspaceRole !== "admin") return errorResult("Admin role required");
+
+        const workspaceId = agent.workspaceId;
+        const members = await db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, workspaceId));
+        for (const member of members) {
+          await db.update(agents).set({ workspaceId: null, workspaceRole: null }).where(eq(agents.id, member.id));
+        }
+        await db.delete(workspaceContacts).where(eq(workspaceContacts.workspaceId, workspaceId));
+        await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: workspaceId, message: "Workspace deleted." }, null, 2) }] };
       }
 
       return errorResult("Unknown action");

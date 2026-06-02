@@ -1,11 +1,10 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, workspaces } from "../db/schema.js";
+import { agents, workspaces, workspaceContacts } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
-import { getWorkspaceMembers } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -32,10 +31,10 @@ app.post("/", async (c) => {
     .values({ name: body.name, owner: body.owner, pairingCode })
     .returning();
 
-  // Join the creator to the workspace
+  // Join the creator to the workspace as admin
   await db
     .update(agents)
-    .set({ workspaceId: workspace.id })
+    .set({ workspaceId: workspace.id, workspaceRole: "admin" })
     .where(eq(agents.id, agentId));
 
   await audit(agentId, "workspace.create", "workspace", workspace.id, { name: body.name });
@@ -71,7 +70,7 @@ app.post("/join", async (c) => {
 
   await db
     .update(agents)
-    .set({ workspaceId: workspace.id })
+    .set({ workspaceId: workspace.id, workspaceRole: "member" })
     .where(eq(agents.id, agentId));
 
   await audit(agentId, "workspace.join", "workspace", workspace.id);
@@ -100,9 +99,8 @@ app.get("/me", async (c) => {
 
   if (!workspace) return c.json({ error: "Workspace not found" }, 404);
 
-  const memberIds = await getWorkspaceMembers(workspace.id);
   const memberAgents = await db
-    .select({ id: agents.id, name: agents.name, owner: agents.owner })
+    .select({ id: agents.id, name: agents.name, owner: agents.owner, workspaceRole: agents.workspaceRole })
     .from(agents)
     .where(eq(agents.workspaceId, workspace.id));
 
@@ -118,17 +116,21 @@ app.get("/me", async (c) => {
       agent_id: a.id,
       name: a.name,
       owner: a.owner,
+      role: a.workspaceRole ?? "member",
     })),
   });
 });
 
-// Update workspace name/metadata
+// Update workspace name/metadata (admin only)
 app.patch("/me", async (c) => {
   const agentId = c.get("agentId");
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
     return c.json({ error: "Not in a workspace" }, 404);
+  }
+  if (agent.workspaceRole !== "admin") {
+    return c.json({ error: "Admin role required" }, 403);
   }
 
   const body = await c.req.json<{ name?: string; metadata?: Record<string, unknown> }>();
@@ -171,7 +173,7 @@ app.post("/leave", async (c) => {
 
   await db
     .update(agents)
-    .set({ workspaceId: null })
+    .set({ workspaceId: null, workspaceRole: null })
     .where(eq(agents.id, agentId));
 
   await audit(agentId, "workspace.leave", "workspace", workspaceId);
@@ -191,7 +193,7 @@ app.get("/:id/members", async (c) => {
   }
 
   const memberAgents = await db
-    .select({ id: agents.id, name: agents.name, owner: agents.owner })
+    .select({ id: agents.id, name: agents.name, owner: agents.owner, workspaceRole: agents.workspaceRole })
     .from(agents)
     .where(eq(agents.workspaceId, workspaceId));
 
@@ -200,8 +202,118 @@ app.get("/:id/members", async (c) => {
       agent_id: a.id,
       name: a.name,
       owner: a.owner,
+      role: a.workspaceRole ?? "member",
     })),
   });
+});
+
+// Kick a member from workspace (admin only)
+app.post("/kick", async (c) => {
+  const agentId = c.get("agentId");
+  const body = await c.req.json<{ agent_id: string }>();
+
+  if (!body.agent_id) return c.json({ error: "agent_id is required" }, 400);
+
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
+  if (!agent?.workspaceId) {
+    return c.json({ error: "Not in a workspace" }, 404);
+  }
+  if (agent.workspaceRole !== "admin") {
+    return c.json({ error: "Admin role required" }, 403);
+  }
+  if (body.agent_id === agentId) {
+    return c.json({ error: "Cannot kick yourself. Use leave instead." }, 400);
+  }
+
+  const [target] = await db.select().from(agents).where(eq(agents.id, body.agent_id)).limit(1);
+  if (!target || target.workspaceId !== agent.workspaceId) {
+    return c.json({ error: "Agent is not a member of this workspace" }, 404);
+  }
+
+  await db
+    .update(agents)
+    .set({ workspaceId: null, workspaceRole: null })
+    .where(eq(agents.id, body.agent_id));
+
+  await audit(agentId, "workspace.kick", "workspace", agent.workspaceId, { kicked: body.agent_id });
+
+  return c.json({ ok: true, kicked: body.agent_id });
+});
+
+// Change a member's role (admin only)
+app.patch("/members/:id/role", async (c) => {
+  const agentId = c.get("agentId");
+  const targetId = c.req.param("id");
+  const body = await c.req.json<{ role: string }>();
+
+  if (!body.role || !["admin", "member"].includes(body.role)) {
+    return c.json({ error: "role must be 'admin' or 'member'" }, 400);
+  }
+
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
+  if (!agent?.workspaceId) {
+    return c.json({ error: "Not in a workspace" }, 404);
+  }
+  if (agent.workspaceRole !== "admin") {
+    return c.json({ error: "Admin role required" }, 403);
+  }
+
+  const [target] = await db.select().from(agents).where(eq(agents.id, targetId)).limit(1);
+  if (!target || target.workspaceId !== agent.workspaceId) {
+    return c.json({ error: "Agent is not a member of this workspace" }, 404);
+  }
+
+  await db
+    .update(agents)
+    .set({ workspaceRole: body.role })
+    .where(eq(agents.id, targetId));
+
+  await audit(agentId, "workspace.change_role", "workspace", agent.workspaceId, {
+    target: targetId,
+    role: body.role,
+  });
+
+  return c.json({ ok: true, agent_id: targetId, role: body.role });
+});
+
+// Delete workspace (admin only) — removes all members
+app.delete("/", async (c) => {
+  const agentId = c.get("agentId");
+
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
+  if (!agent?.workspaceId) {
+    return c.json({ error: "Not in a workspace" }, 404);
+  }
+  if (agent.workspaceRole !== "admin") {
+    return c.json({ error: "Admin role required" }, 403);
+  }
+
+  const workspaceId = agent.workspaceId;
+
+  // Remove all members from workspace
+  const members = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(eq(agents.workspaceId, workspaceId));
+
+  for (const member of members) {
+    await db
+      .update(agents)
+      .set({ workspaceId: null, workspaceRole: null })
+      .where(eq(agents.id, member.id));
+  }
+
+  // Delete workspace contacts
+  await db
+    .delete(workspaceContacts)
+    .where(eq(workspaceContacts.workspaceId, workspaceId));
+
+  // Delete workspace
+  await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+
+  await audit(agentId, "workspace.delete", "workspace", workspaceId);
+
+  return c.json({ ok: true, deleted: workspaceId });
 });
 
 export default app;

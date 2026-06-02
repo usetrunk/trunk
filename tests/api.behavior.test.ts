@@ -14,6 +14,7 @@ type AgentRow = {
   webhookUrl?: string | null;
   webhookSecret?: string | null;
   workspaceId?: string | null;
+  workspaceRole?: string | null;
   metadata: Record<string, unknown>;
   lastSeenAt: Date | null;
   createdAt: Date;
@@ -2200,6 +2201,200 @@ describe("Hono API behavior", () => {
       body: JSON.stringify({ name: "Hacked" }),
     });
     expect(res.status).toBe(404); // Not in a workspace
+  });
+
+  it("workspace creator gets admin role, joiner gets member role", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "RoleTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const info = await alphaClient.myWorkspace();
+    const adminMember = info.members.find((m) => m.agent_id === alpha.agent_id);
+    const regularMember = info.members.find((m) => m.agent_id === beta.agent_id);
+    expect(adminMember?.role).toBe("admin");
+    expect(regularMember?.role).toBe("member");
+  });
+
+  it("admin can kick a member from workspace", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "KickTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const result = await alphaClient.kickWorkspaceMember(beta.agent_id);
+    expect(result.ok).toBe(true);
+    expect(result.kicked).toBe(beta.agent_id);
+
+    // Beta should no longer be in workspace
+    const info = await alphaClient.myWorkspace();
+    expect(info.members).toHaveLength(1);
+    expect(info.members[0].agent_id).toBe(alpha.agent_id);
+  });
+
+  it("non-admin cannot kick a member", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "NoKickTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await expect(betaClient.kickWorkspaceMember(alpha.agent_id)).rejects.toMatchObject({
+      status: 403,
+      message: "Admin role required",
+    });
+  });
+
+  it("admin cannot kick themselves", async () => {
+    const alpha = await createClient().register({ name: "ws-admin" });
+    const alphaClient = createClient(alpha.secret);
+
+    await alphaClient.createWorkspace({ name: "SelfKickTeam" });
+
+    await expect(alphaClient.kickWorkspaceMember(alpha.agent_id)).rejects.toMatchObject({
+      status: 400,
+      message: "Cannot kick yourself. Use leave instead.",
+    });
+  });
+
+  it("admin can change a member's role", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "RoleChangeTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const result = await alphaClient.changeWorkspaceMemberRole(beta.agent_id, "admin");
+    expect(result.ok).toBe(true);
+    expect(result.role).toBe("admin");
+
+    // Verify beta is now admin
+    const info = await alphaClient.myWorkspace();
+    const betaMember = info.members.find((m) => m.agent_id === beta.agent_id);
+    expect(betaMember?.role).toBe("admin");
+  });
+
+  it("non-admin cannot change roles", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "NoRoleTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await expect(betaClient.changeWorkspaceMemberRole(alpha.agent_id, "member")).rejects.toMatchObject({
+      status: 403,
+      message: "Admin role required",
+    });
+  });
+
+  it("admin can delete workspace, removing all members", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "DeleteTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const result = await alphaClient.deleteWorkspace();
+    expect(result.ok).toBe(true);
+    expect(result.deleted).toBe(ws.id);
+
+    // Both agents should no longer be in workspace
+    await expect(alphaClient.myWorkspace()).rejects.toMatchObject({ status: 404 });
+    await expect(betaClient.myWorkspace()).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("non-admin cannot delete workspace", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "ProtectedTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await expect(betaClient.deleteWorkspace()).rejects.toMatchObject({
+      status: 403,
+      message: "Admin role required",
+    });
+  });
+
+  it("non-admin cannot update workspace settings", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "AdminOnlyUpdate" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await expect(betaClient.updateWorkspace({ name: "Hacked" })).rejects.toMatchObject({
+      status: 403,
+      message: "Admin role required",
+    });
+  });
+
+  it("promoted member can perform admin operations", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-promoted" });
+    const gamma = await anon.register({ name: "ws-target" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "PromoteTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+    await gammaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Promote beta to admin
+    await alphaClient.changeWorkspaceMemberRole(beta.agent_id, "admin");
+
+    // Beta (now admin) can kick gamma
+    const result = await betaClient.kickWorkspaceMember(gamma.agent_id);
+    expect(result.ok).toBe(true);
+
+    const info = await alphaClient.myWorkspace();
+    expect(info.members).toHaveLength(2);
+  });
+
+  it("workspace leave clears role", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-leaver" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "LeaveTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await betaClient.leaveWorkspace();
+
+    // Beta can create a new workspace and gets admin role
+    const ws2 = await betaClient.createWorkspace({ name: "NewTeam" });
+    const info = await betaClient.myWorkspace();
+    expect(info.members[0].role).toBe("admin");
   });
 
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
@@ -5751,6 +5946,7 @@ class InsertQuery {
         webhookUrl: (this.insertValues.webhookUrl as string | undefined) ?? null,
         webhookSecret: (this.insertValues.webhookSecret as string | undefined) ?? null,
         workspaceId: (this.insertValues.workspaceId as string | undefined) ?? null,
+        workspaceRole: (this.insertValues.workspaceRole as string | undefined) ?? null,
         metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
         lastSeenAt: null,
         createdAt: new Date(),
@@ -6349,4 +6545,5 @@ const columnToProperty: Record<string, string> = {
   contact_agent_id: "contactAgentId",
   urgency_filter: "urgencyFilter",
   expires_at: "expiresAt",
+  workspace_role: "workspaceRole",
 };

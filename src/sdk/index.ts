@@ -137,13 +137,20 @@ export type WorkspaceJoinResponse = {
   name: string;
 };
 
+export type WorkspaceMember = {
+  agent_id: string;
+  name: string;
+  owner?: string | null;
+  role: string;
+};
+
 export type WorkspaceInfo = {
   workspace: WorkspaceResponse;
-  members: Array<{ agent_id: string; name: string; owner?: string | null }>;
+  members: WorkspaceMember[];
 };
 
 export type WorkspaceMembersResponse = {
-  members: Array<{ agent_id: string; name: string; owner?: string | null }>;
+  members: WorkspaceMember[];
 };
 
 export type PresenceMember = {
@@ -730,6 +737,18 @@ export class TrunkClient {
 
   workspaceMembers(workspaceId: string): Promise<WorkspaceMembersResponse> {
     return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/members`);
+  }
+
+  kickWorkspaceMember(agentId: string): Promise<{ ok: boolean; kicked: string }> {
+    return this.request("/workspaces/kick", { method: "POST", body: { agent_id: agentId } });
+  }
+
+  changeWorkspaceMemberRole(agentId: string, role: "admin" | "member"): Promise<{ ok: boolean; agent_id: string; role: string }> {
+    return this.request(`/workspaces/members/${encodeURIComponent(agentId)}/role`, { method: "PATCH", body: { role } });
+  }
+
+  deleteWorkspace(): Promise<{ ok: boolean; deleted: string }> {
+    return this.request("/workspaces", { method: "DELETE" });
   }
 
   contacts(): Promise<ContactsResponse> {
