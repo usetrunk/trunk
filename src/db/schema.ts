@@ -242,6 +242,20 @@ export const messageLabels = pgTable("message_labels", {
   index("message_labels_message_idx").on(table.messageId),
 ]);
 
+export const messageTemplates = pgTable("message_templates", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  name: text("name").notNull(),
+  type: text("type").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("message_templates_agent_name_idx").on(table.agentId, table.name),
+  index("message_templates_agent_idx").on(table.agentId),
+]);
+
 export const sharedDocumentVersions = pgTable("shared_document_versions", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   documentId: text("document_id").notNull().references(() => sharedDocuments.id),

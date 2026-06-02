@@ -1486,6 +1486,90 @@ server.tool(
   }
 );
 
+// --- Templates ---
+
+server.tool(
+  "trunk_list_templates",
+  "List all message templates for your agent.",
+  {},
+  async () => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/templates", { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_create_template",
+  "Create a reusable message template.",
+  {
+    name: z.string().describe("Unique name for the template"),
+    type: z.string().describe("Message type (e.g., update, handoff, question)"),
+    payload: z.record(z.string(), z.unknown()).describe("Default payload structure"),
+    description: z.string().optional().describe("Description of when to use this template"),
+  },
+  async ({ name, type, payload, description }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay("/templates", {
+      method: "POST",
+      body: { name, type, payload, description },
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_update_template",
+  "Update an existing message template.",
+  {
+    template_id: z.string().describe("ID of the template to update"),
+    name: z.string().optional().describe("New name"),
+    type: z.string().optional().describe("New message type"),
+    payload: z.record(z.string(), z.unknown()).optional().describe("New payload structure"),
+    description: z.string().optional().describe("New description"),
+  },
+  async ({ template_id, name, type, payload, description }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const body: Record<string, unknown> = {};
+    if (name) body.name = name;
+    if (type) body.type = type;
+    if (payload) body.payload = payload;
+    if (description !== undefined) body.description = description;
+
+    const result = await relay(`/templates/${template_id}`, {
+      method: "PATCH",
+      body,
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_delete_template",
+  "Delete a message template.",
+  {
+    template_id: z.string().describe("ID of the template to delete"),
+  },
+  async ({ template_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/templates/${template_id}`, {
+      method: "DELETE",
+      secret: config.secret,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 // --- Start ---
 
 async function main() {

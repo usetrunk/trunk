@@ -211,6 +211,17 @@ type ContactNoteRow = {
   updatedAt: Date;
 };
 
+type MessageTemplateRow = {
+  id: string;
+  agentId: string;
+  name: string;
+  type: string;
+  payload: Record<string, unknown>;
+  description: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -230,7 +241,8 @@ type TableName =
   | "webhook_deliveries"
   | "message_labels"
   | "blocked_contacts"
-  | "contact_notes";
+  | "contact_notes"
+  | "message_templates";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -252,6 +264,7 @@ const testState = vi.hoisted(() => ({
   "message_labels": [] as MessageLabelRow[],
   "blocked_contacts": [] as BlockedContactRow[],
   "contact_notes": [] as ContactNoteRow[],
+  "message_templates": [] as MessageTemplateRow[],
   idCounter: 0,
 }));
 
@@ -285,6 +298,7 @@ describe("Hono API behavior", () => {
     testState["message_labels"].length = 0;
     testState["blocked_contacts"].length = 0;
     testState["contact_notes"].length = 0;
+    testState["message_templates"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -4385,6 +4399,130 @@ describe("Hono API behavior", () => {
     const betaNote = await betaClient.contactNote(alpha.agent_id);
     expect(betaNote.content).toBe("beta's note about alpha");
   });
+
+  // --- Message template tests ---
+
+  it("creates and lists message templates", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const template = await client.createTemplate({
+      name: "status-update",
+      type: "update",
+      payload: { content: "Status: {{status}}", urgency: "async" },
+      description: "Standard status update template",
+    });
+
+    expect(template.name).toBe("status-update");
+    expect(template.type).toBe("update");
+    expect(template.payload).toMatchObject({ content: "Status: {{status}}" });
+    expect(template.description).toBe("Standard status update template");
+
+    const list = await client.listTemplates();
+    expect(list.templates).toHaveLength(1);
+    expect(list.templates[0].name).toBe("status-update");
+  });
+
+  it("gets a specific template by ID", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const created = await client.createTemplate({
+      name: "handoff",
+      type: "handoff",
+      payload: { content: "Handing off to {{agent}}" },
+    });
+
+    const fetched = await client.getTemplate(created.id);
+    expect(fetched.id).toBe(created.id);
+    expect(fetched.name).toBe("handoff");
+  });
+
+  it("updates a template", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const created = await client.createTemplate({
+      name: "old-name",
+      type: "update",
+      payload: { content: "old" },
+    });
+
+    const updated = await client.updateTemplate(created.id, {
+      name: "new-name",
+      payload: { content: "new" },
+      description: "Updated description",
+    });
+
+    expect(updated.name).toBe("new-name");
+    expect(updated.payload).toMatchObject({ content: "new" });
+    expect(updated.description).toBe("Updated description");
+  });
+
+  it("deletes a template", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const created = await client.createTemplate({
+      name: "to-delete",
+      type: "update",
+      payload: { content: "temp" },
+    });
+
+    const result = await client.deleteTemplate(created.id);
+    expect(result).toMatchObject({ ok: true });
+
+    const list = await client.listTemplates();
+    expect(list.templates).toHaveLength(0);
+  });
+
+  it("rejects duplicate template names", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await client.createTemplate({
+      name: "unique-name",
+      type: "update",
+      payload: { content: "first" },
+    });
+
+    await expect(
+      client.createTemplate({
+        name: "unique-name",
+        type: "update",
+        payload: { content: "second" },
+      })
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("templates are private to each agent", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const template = await alphaClient.createTemplate({
+      name: "private-template",
+      type: "update",
+      payload: { content: "alpha only" },
+    });
+
+    // Beta should not see alpha's template
+    const betaList = await betaClient.listTemplates();
+    expect(betaList.templates).toHaveLength(0);
+
+    // Beta cannot get alpha's template
+    await expect(betaClient.getTemplate(template.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects template creation without required fields", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(
+      client.createTemplate({ name: "", type: "update", payload: { content: "test" } })
+    ).rejects.toMatchObject({ status: 400 });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -4886,6 +5024,21 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "message_templates") {
+      const row: MessageTemplateRow = {
+        id: nextId("template"),
+        agentId: this.insertValues.agentId as string,
+        name: this.insertValues.name as string,
+        type: this.insertValues.type as string,
+        payload: this.insertValues.payload as Record<string, unknown>,
+        description: (this.insertValues.description as string | undefined) ?? null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      testState["message_templates"].push(row);
+      return row;
+    }
+
     const row: MessageRow = {
       id: nextId("message"),
       fromAgent: this.insertValues.fromAgent as string,
@@ -4984,7 +5137,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow> {
   return testState[table];
 }
 
@@ -5018,7 +5171,8 @@ function getTableName(table: unknown): TableName {
     name === "webhook_deliveries" ||
     name === "message_labels" ||
     name === "blocked_contacts" ||
-    name === "contact_notes"
+    name === "contact_notes" ||
+    name === "message_templates"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }

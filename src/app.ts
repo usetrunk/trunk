@@ -14,6 +14,7 @@ import dashboardRoutes from "./routes/dashboard.js";
 import workspacesRoutes from "./routes/workspaces.js";
 import billingRoutes from "./routes/billing.js";
 import auditRoutes from "./routes/audit.js";
+import templatesRoutes from "./routes/templates.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 
 const app = new Hono();
@@ -42,6 +43,7 @@ app.route("/dashboard", dashboardRoutes);
 app.route("/workspaces", workspacesRoutes);
 app.route("/billing", billingRoutes);
 app.route("/audit-events", auditRoutes);
+app.route("/templates", templatesRoutes);
 
 export default app;
 

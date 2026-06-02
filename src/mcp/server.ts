@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
@@ -2776,6 +2776,165 @@ export function createTrunkMcpServer() {
           })),
           count: visible.length,
         }, null, 2) }],
+      };
+    }
+  );
+
+  // --- Message Templates ---
+
+  server.tool(
+    "trunk_list_templates",
+    "List all message templates for your agent. Templates are reusable message structures.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const rows = await db
+        .select()
+        .from(messageTemplates)
+        .where(eq(messageTemplates.agentId, agent.id));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            templates: rows.map((r) => ({
+              id: r.id,
+              name: r.name,
+              type: r.type,
+              payload: r.payload,
+              description: r.description,
+              created_at: r.createdAt,
+              updated_at: r.updatedAt,
+            })),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_create_template",
+    "Create a reusable message template. Use templates to standardize common message types.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      name: z.string().describe("Unique name for the template"),
+      type: z.string().describe("Message type (e.g., update, handoff, question)"),
+      payload: z.record(z.string(), z.unknown()).describe("Default payload structure"),
+      description: z.string().optional().describe("Human-readable description of when to use this template"),
+    },
+    async ({ secret, name, type, payload, description }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [existing] = await db
+        .select()
+        .from(messageTemplates)
+        .where(and(eq(messageTemplates.agentId, agent.id), eq(messageTemplates.name, name)))
+        .limit(1);
+
+      if (existing) return errorResult("Template with this name already exists");
+
+      const [template] = await db
+        .insert(messageTemplates)
+        .values({
+          agentId: agent.id,
+          name,
+          type,
+          payload,
+          description: description ?? null,
+        })
+        .returning();
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            id: template.id,
+            name: template.name,
+            type: template.type,
+            payload: template.payload,
+            description: template.description,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_update_template",
+    "Update an existing message template.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      template_id: z.string().describe("ID of the template to update"),
+      name: z.string().optional().describe("New name"),
+      type: z.string().optional().describe("New message type"),
+      payload: z.record(z.string(), z.unknown()).optional().describe("New payload structure"),
+      description: z.string().optional().describe("New description"),
+    },
+    async ({ secret, template_id, name, type, payload, description }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [template] = await db
+        .select()
+        .from(messageTemplates)
+        .where(and(eq(messageTemplates.id, template_id), eq(messageTemplates.agentId, agent.id)))
+        .limit(1);
+
+      if (!template) return errorResult("Template not found");
+
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (name) updates.name = name;
+      if (type) updates.type = type;
+      if (payload) updates.payload = payload;
+      if (description !== undefined) updates.description = description;
+
+      await db
+        .update(messageTemplates)
+        .set(updates)
+        .where(eq(messageTemplates.id, template_id));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, template_id }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_delete_template",
+    "Delete a message template.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      template_id: z.string().describe("ID of the template to delete"),
+    },
+    async ({ secret, template_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [template] = await db
+        .select()
+        .from(messageTemplates)
+        .where(and(eq(messageTemplates.id, template_id), eq(messageTemplates.agentId, agent.id)))
+        .limit(1);
+
+      if (!template) return errorResult("Template not found");
+
+      await db
+        .delete(messageTemplates)
+        .where(eq(messageTemplates.id, template_id));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, deleted: template.name }, null, 2),
+        }],
       };
     }
   );

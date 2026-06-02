@@ -535,6 +535,16 @@ export type AuditLogResponse = {
   events: AuditEvent[];
 };
 
+export type TemplateResponse = {
+  id: string;
+  name: string;
+  type: string;
+  payload: Record<string, unknown>;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type TrunkClientOptions = {
   baseUrl: string;
   secret?: string;
@@ -1010,6 +1020,28 @@ export class TrunkClient {
     if (options.cursor) search.set("cursor", options.cursor);
     const query = search.toString();
     return this.request(`/audit-events${query ? `?${query}` : ""}`);
+  }
+
+  // --- Templates ---
+
+  listTemplates(): Promise<{ templates: TemplateResponse[] }> {
+    return this.request("/templates");
+  }
+
+  createTemplate(input: { name: string; type: string; payload: Record<string, unknown>; description?: string }): Promise<TemplateResponse> {
+    return this.request("/templates", { method: "POST", body: input });
+  }
+
+  getTemplate(templateId: string): Promise<TemplateResponse> {
+    return this.request(`/templates/${encodeURIComponent(templateId)}`);
+  }
+
+  updateTemplate(templateId: string, input: { name?: string; type?: string; payload?: Record<string, unknown>; description?: string }): Promise<TemplateResponse> {
+    return this.request(`/templates/${encodeURIComponent(templateId)}`, { method: "PATCH", body: input });
+  }
+
+  deleteTemplate(templateId: string): Promise<{ ok: true }> {
+    return this.request(`/templates/${encodeURIComponent(templateId)}`, { method: "DELETE" });
   }
 
   private async request<T>(
