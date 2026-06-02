@@ -393,6 +393,39 @@ export function createMcpServer() {
     }
   );
 
+  // --- Facts (shared context) ---
+
+  server.tool(
+    "trunk_fact",
+    "Manage shared facts (key-value context) with a contact. Actions: get, put, delete.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["get", "put", "delete"]).describe("Action to perform"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      key: z.string().describe("Fact key (alphanumeric, dots, hyphens, underscores)"),
+      value: z.unknown().optional().describe("Fact value (for put)"),
+    },
+    async ({ secret, action, contact_id, key, value }) => {
+      if (action === "get") {
+        const result = await relay(`/context/${contact_id}/facts/${encodeURIComponent(key)}`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (action === "put") {
+        if (value === undefined) return { content: [{ type: "text", text: "Error: value is required for put" }], isError: true };
+        const result = await relay(`/context/${contact_id}/facts/${encodeURIComponent(key)}`, { method: "PUT", secret, body: { value } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (action === "delete") {
+        const result = await relay(`/context/${contact_id}/facts/${encodeURIComponent(key)}`, { method: "DELETE", secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      return { content: [{ type: "text", text: "Error: Unknown action" }], isError: true };
+    }
+  );
+
   // --- Billing ---
 
   server.tool(

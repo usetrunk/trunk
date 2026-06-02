@@ -627,6 +627,41 @@ server.tool(
   }
 );
 
+// --- Facts (shared context) ---
+
+server.tool(
+  "trunk_fact",
+  "Manage shared facts (key-value context) with a contact. Actions: get, put, delete.",
+  {
+    action: z.enum(["get", "put", "delete"]).describe("Action to perform"),
+    contact_id: z.string().describe("Agent ID of the contact"),
+    key: z.string().describe("Fact key (alphanumeric, dots, hyphens, underscores)"),
+    value: z.unknown().optional().describe("Fact value (for put)"),
+  },
+  async ({ action, contact_id, key, value }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    if (action === "get") {
+      const result = await relay(`/context/${contact_id}/facts/${encodeURIComponent(key)}`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (action === "put") {
+      if (value === undefined) return { content: [{ type: "text", text: "Error: value is required for put" }], isError: true };
+      const result = await relay(`/context/${contact_id}/facts/${encodeURIComponent(key)}`, { method: "PUT", secret: config.secret, body: { value } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (action === "delete") {
+      const result = await relay(`/context/${contact_id}/facts/${encodeURIComponent(key)}`, { method: "DELETE", secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: Unknown action" }], isError: true };
+  }
+);
+
 // --- Billing ---
 
 server.tool(

@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions } from "../db/schema.js";
-import { contactScope, verifyContactAccess } from "../lib/context.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts } from "../db/schema.js";
+import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
@@ -827,6 +827,54 @@ export function createTrunkMcpServer() {
         if (name) updates.name = name;
         const [updated] = await db.update(sharedDocuments).set(updates).where(eq(sharedDocuments.id, doc_id)).returning();
         return { content: [{ type: "text", text: JSON.stringify({ id: updated.id, name: updated.name, version: updated.version, last_edited_by: updated.lastEditedBy, updated_at: updated.updatedAt }, null, 2) }] };
+      }
+
+      return errorResult("Unknown action");
+    }
+  );
+
+  // --- Facts (shared context) ---
+
+  server.tool(
+    "trunk_fact",
+    "Manage shared facts (key-value context) with a contact. Actions: get, put, delete.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["get", "put", "delete"]).describe("Action to perform"),
+      contact_id: z.string().describe("Agent ID of the contact"),
+      key: z.string().describe("Fact key (alphanumeric, dots, hyphens, underscores)"),
+      value: z.unknown().optional().describe("Fact value (for put)"),
+    },
+    async ({ secret, action, contact_id, key, value }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      if (!isValidFactKey(key)) return errorResult("Invalid fact key");
+      if (!(await verifyContactAccess(agent.id, contact_id))) return errorResult("Not a contact");
+
+      const scope = contactScope(agent.id, contact_id);
+
+      if (action === "get") {
+        const [fact] = await db.select().from(sharedFacts).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key))).limit(1);
+        if (!fact) return errorResult("Fact not found");
+        return { content: [{ type: "text", text: JSON.stringify({ key: fact.key, value: fact.value, version: fact.version, updated_by: fact.updatedBy, updated_at: fact.updatedAt }, null, 2) }] };
+      }
+
+      if (action === "put") {
+        if (value === undefined) return errorResult("value is required for put");
+        const existing = await db.select().from(sharedFacts).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key))).limit(1);
+        if (existing.length > 0) {
+          const nextVersion = existing[0].version + 1;
+          await db.update(sharedFacts).set({ value, version: nextVersion, updatedBy: agent.id, updatedAt: new Date() }).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
+          return { content: [{ type: "text", text: JSON.stringify({ key, value, version: nextVersion, updated_by: agent.id }, null, 2) }] };
+        }
+        await db.insert(sharedFacts).values({ scope, key, value, updatedBy: agent.id });
+        return { content: [{ type: "text", text: JSON.stringify({ key, value, version: 1, updated_by: agent.id }, null, 2) }] };
+      }
+
+      if (action === "delete") {
+        await db.delete(sharedFacts).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }] };
       }
 
       return errorResult("Unknown action");
