@@ -334,6 +334,26 @@ export type MessagesResponse = {
   messages: TrunkMessage[];
 };
 
+export type ThreadSummaryParticipant = {
+  agent_id: string;
+  name: string;
+  owner?: string | null;
+};
+
+export type ThreadSummaryResponse = {
+  thread_id: string;
+  message_count: number;
+  participants: ThreadSummaryParticipant[];
+  by_type: Record<string, number>;
+  by_status: Record<string, number>;
+  decisions: Array<{ id: string; type: string; from: string; content: string | null; created_at: string | Date }>;
+  open_questions: Array<{ id: string; from: string; content: string | null; created_at: string | Date }>;
+  first_message: { id: string; type: string; from: string; created_at: string | Date };
+  last_message: { id: string; type: string; from: string; content: string | null; created_at: string | Date };
+  started_at: string | Date;
+  last_activity: string | Date;
+};
+
 export type AckResponse = {
   ok: true;
 };
@@ -470,6 +490,10 @@ export class TrunkClient {
 
   thread(threadId: string): Promise<MessagesResponse> {
     return this.request(`/messages/thread/${encodeURIComponent(threadId)}`);
+  }
+
+  threadSummary(threadId: string): Promise<ThreadSummaryResponse> {
+    return this.request(`/messages/thread/${encodeURIComponent(threadId)}/summary`);
   }
 
   ack(messageId: string): Promise<AckResponse> {

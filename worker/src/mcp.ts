@@ -283,6 +283,19 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_thread_summary",
+    "Get a structured digest of a thread — participants, message counts, decisions, open questions, and timeline. Faster than reading the full thread.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      thread_id: z.string().describe("Thread ID to summarize"),
+    },
+    async ({ secret, thread_id }) => {
+      const result = await relay(`/messages/thread/${thread_id}/summary`, { secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_task_create",
     "Create a task. Scoped to a contact pair, room, or workspace.",
     {

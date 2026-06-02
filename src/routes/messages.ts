@@ -325,6 +325,102 @@ app.post("/purge-expired", async (c) => {
   return c.json({ purged: expired.length, cutoff: new Date(cutoff).toISOString() });
 });
 
+// Get thread summary (structured digest — no LLM, just metadata)
+app.get("/thread/:threadId/summary", async (c) => {
+  const agentId = c.get("agentId");
+  const threadId = c.req.param("threadId");
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.threadId, threadId),
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+      )
+    )
+    .orderBy(messages.createdAt);
+
+  const visible = rows.filter((row) => row.status !== "deleted");
+  if (visible.length === 0) {
+    return c.json({ error: "Thread not found or empty" }, 404);
+  }
+
+  // Participants
+  const participantIds = new Set<string>();
+  for (const row of visible) {
+    participantIds.add(row.fromAgent);
+    participantIds.add(row.toAgent);
+  }
+  const participantRows = await db
+    .select({ id: agents.id, name: agents.name, owner: agents.owner })
+    .from(agents)
+    .where(or(...[...participantIds].map((id) => eq(agents.id, id))));
+  const participants = participantRows.map((p) => ({ agent_id: p.id, name: p.name, owner: p.owner }));
+
+  // Message type breakdown
+  const byType: Record<string, number> = {};
+  for (const row of visible) {
+    byType[row.type] = (byType[row.type] || 0) + 1;
+  }
+
+  // Status breakdown
+  const byStatus: Record<string, number> = {};
+  for (const row of visible) {
+    byStatus[row.status] = (byStatus[row.status] || 0) + 1;
+  }
+
+  // Key messages: decisions and handoffs
+  const decisions = visible
+    .filter((row) => row.type === "decision" || row.type === "handoff")
+    .map((row) => ({
+      id: row.id,
+      type: row.type,
+      from: row.fromAgent,
+      content: (row.payload as Record<string, unknown>).content ?? null,
+      created_at: row.createdAt,
+    }));
+
+  // Open questions (questions that haven't been replied to)
+  const repliedTo = new Set(visible.map((r) => r.replyTo).filter(Boolean));
+  const openQuestions = visible
+    .filter((row) => row.type === "question" && !repliedTo.has(row.id))
+    .map((row) => ({
+      id: row.id,
+      from: row.fromAgent,
+      content: (row.payload as Record<string, unknown>).content ?? null,
+      created_at: row.createdAt,
+    }));
+
+  const first = visible[0];
+  const last = visible[visible.length - 1];
+
+  return c.json({
+    thread_id: threadId,
+    message_count: visible.length,
+    participants,
+    by_type: byType,
+    by_status: byStatus,
+    decisions,
+    open_questions: openQuestions,
+    first_message: {
+      id: first.id,
+      type: first.type,
+      from: first.fromAgent,
+      created_at: first.createdAt,
+    },
+    last_message: {
+      id: last.id,
+      type: last.type,
+      from: last.fromAgent,
+      content: (last.payload as Record<string, unknown>).content ?? null,
+      created_at: last.createdAt,
+    },
+    started_at: first.createdAt,
+    last_activity: last.createdAt,
+  });
+});
+
 // Get thread
 app.get("/thread/:threadId", async (c) => {
   const agentId = c.get("agentId");

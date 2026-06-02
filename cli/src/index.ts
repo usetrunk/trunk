@@ -398,6 +398,19 @@ server.tool(
 );
 
 server.tool(
+  "trunk_thread_summary",
+  "Get a structured digest of a thread — participants, message counts, decisions, open questions, and timeline.",
+  { thread_id: z.string().describe("Thread ID to summarize") },
+  async ({ thread_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/thread/${thread_id}/summary`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_edit_message",
   "Edit a sent message's payload. Only the original sender can edit.",
   {

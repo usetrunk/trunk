@@ -497,6 +497,69 @@ describe("Hono API behavior", () => {
     expect(thread.messages[1].fromAgent).toBe(developer.agent_id);
   });
 
+  it("thread summary returns structured digest with participants, type counts, decisions, and open questions", async () => {
+    const anon = createClient();
+    const planner = await anon.register({ name: "planner-sum", owner: "Frank" });
+    const developer = await anon.register({ name: "developer-sum", owner: "Frank" });
+    const plannerClient = createClient(planner.secret);
+    const developerClient = createClient(developer.secret);
+
+    await plannerClient.pair({ code: developer.pairing_code });
+
+    // Planner sends a question
+    const q = await plannerClient.send({
+      to: developer.agent_id,
+      type: "question",
+      payload: { content: "Can you handle the webhook retry?" },
+    });
+
+    // Developer replies with a decision
+    await developerClient.reply(q.id, {
+      type: "decision",
+      payload: { content: "Yes, will use exponential backoff." },
+    });
+
+    // Planner sends a handoff in the same thread
+    await plannerClient.send({
+      to: developer.agent_id,
+      type: "handoff",
+      thread_id: q.thread_id,
+      payload: { content: "Go ahead and implement it." },
+    });
+
+    // Planner sends an unanswered question
+    await plannerClient.send({
+      to: developer.agent_id,
+      type: "question",
+      thread_id: q.thread_id,
+      payload: { content: "What's the max retry count?" },
+    });
+
+    const summary = await plannerClient.threadSummary(q.thread_id);
+
+    expect(summary.thread_id).toBe(q.thread_id);
+    expect(summary.message_count).toBe(4);
+    expect(summary.participants).toHaveLength(2);
+    expect(summary.participants.map((p: { name: string }) => p.name).sort()).toEqual(["developer-sum", "planner-sum"]);
+    expect(summary.by_type).toMatchObject({ question: 2, decision: 1, handoff: 1 });
+    expect(summary.decisions).toHaveLength(2); // decision + handoff
+    expect(summary.decisions[0].content).toBe("Yes, will use exponential backoff.");
+    expect(summary.decisions[1].type).toBe("handoff");
+    expect(summary.open_questions).toHaveLength(1);
+    expect(summary.open_questions[0].content).toBe("What's the max retry count?");
+    expect(summary.first_message).toMatchObject({ id: q.id, type: "question", from: planner.agent_id });
+    expect(summary.last_message.content).toBe("What's the max retry count?");
+    expect(summary.started_at).toBeDefined();
+    expect(summary.last_activity).toBeDefined();
+  });
+
+  it("thread summary returns 404 for non-existent thread", async () => {
+    const alpha = await createClient().register({ name: "solo-sum", owner: "Frank" });
+    const alphaClient = createClient(alpha.secret);
+
+    await expect(alphaClient.threadSummary("nonexistent-thread-id")).rejects.toThrow();
+  });
+
   it("three-agent coordination: planner, developer, reviewer", async () => {
     const anon = createClient();
     const planner = await anon.register({ name: "planner", owner: "Frank" });

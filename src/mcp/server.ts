@@ -649,6 +649,79 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_thread_summary",
+    "Get a structured digest of a thread — participants, message counts, decisions, open questions, and timeline. Faster than reading the full thread.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      thread_id: z.string().describe("Thread ID to summarize"),
+    },
+    async ({ secret, thread_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(and(
+          eq(messages.threadId, thread_id),
+          or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))
+        ))
+        .orderBy(messages.createdAt);
+
+      const visible = rows.filter((r) => r.status !== "deleted");
+      if (visible.length === 0) return errorResult("Thread not found or empty");
+
+      const participantIds = new Set<string>();
+      for (const row of visible) {
+        participantIds.add(row.fromAgent);
+        participantIds.add(row.toAgent);
+      }
+      const participantRows = await db
+        .select({ id: agents.id, name: agents.name, owner: agents.owner })
+        .from(agents)
+        .where(or(...[...participantIds].map((id) => eq(agents.id, id))));
+      const participants = participantRows.map((p) => ({ agent_id: p.id, name: p.name, owner: p.owner }));
+
+      const byType: Record<string, number> = {};
+      for (const row of visible) byType[row.type] = (byType[row.type] || 0) + 1;
+
+      const byStatus: Record<string, number> = {};
+      for (const row of visible) byStatus[row.status] = (byStatus[row.status] || 0) + 1;
+
+      const decisions = visible
+        .filter((r) => r.type === "decision" || r.type === "handoff")
+        .map((r) => ({ id: r.id, type: r.type, from: r.fromAgent, content: (r.payload as Record<string, unknown>).content ?? null, created_at: r.createdAt }));
+
+      const repliedTo = new Set(visible.map((r) => r.replyTo).filter(Boolean));
+      const openQuestions = visible
+        .filter((r) => r.type === "question" && !repliedTo.has(r.id))
+        .map((r) => ({ id: r.id, from: r.fromAgent, content: (r.payload as Record<string, unknown>).content ?? null, created_at: r.createdAt }));
+
+      const first = visible[0];
+      const last = visible[visible.length - 1];
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            thread_id,
+            message_count: visible.length,
+            participants,
+            by_type: byType,
+            by_status: byStatus,
+            decisions,
+            open_questions: openQuestions,
+            first_message: { id: first.id, type: first.type, from: first.fromAgent, created_at: first.createdAt },
+            last_message: { id: last.id, type: last.type, from: last.fromAgent, content: (last.payload as Record<string, unknown>).content ?? null, created_at: last.createdAt },
+            started_at: first.createdAt,
+            last_activity: last.createdAt,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_workspace",
     "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave.",
     {
