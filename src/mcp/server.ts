@@ -1469,7 +1469,7 @@ export function createTrunkMcpServer() {
       action: z.enum(["create", "join", "status", "members", "leave", "update", "kick", "role", "delete"]).describe("Action to perform"),
       name: z.string().optional().describe("Workspace name (for create/update)"),
       code: z.string().optional().describe("Workspace pairing code (for join)"),
-      metadata: z.record(z.unknown()).optional().describe("Workspace metadata (for update)"),
+      metadata: z.record(z.string(), z.unknown()).optional().describe("Workspace metadata (for update)"),
       agent_id: z.string().optional().describe("Target agent ID (for kick/role)"),
       role: z.enum(["admin", "member"]).optional().describe("New role (for role action)"),
     },
@@ -1848,7 +1848,7 @@ export function createTrunkMcpServer() {
       room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
       agent_id: z.string().optional().describe("Target agent ID (for kick/role)"),
       role: z.enum(["admin", "member"]).optional().describe("New role (for role action)"),
-      metadata: z.record(z.unknown()).optional().describe("Room metadata (for create/update)"),
+      metadata: z.record(z.string(), z.unknown()).optional().describe("Room metadata (for create/update)"),
     },
     async ({ secret, action, name, code, room_id, agent_id, role, metadata }) => {
       const agent = await resolveAgent(secret);

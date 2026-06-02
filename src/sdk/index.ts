@@ -220,6 +220,11 @@ export type TrunkMessage = {
   processedAt?: string | Date | null;
   repliedAt?: string | Date | null;
   deletedAt?: string | Date | null;
+  editedAt?: string | Date | null;
+  pinnedAt?: string | Date | null;
+  pinnedBy?: string | null;
+  scheduledAt?: string | Date | null;
+  expiresAt?: string | Date | null;
 };
 
 export type CreateTaskRequest = {
@@ -952,7 +957,7 @@ export class TrunkClient {
     return this.request("/messages/purge-expired", { method: "POST", body: { days } });
   }
 
-  forward(messageId: string, to: string, comment?: string): Promise<SendResponse> {
+  forward(messageId: string, to: string, comment?: string): Promise<MessageReceipt> {
     return this.request(`/messages/${encodeURIComponent(messageId)}/forward`, { method: "POST", body: { to, comment } });
   }
 

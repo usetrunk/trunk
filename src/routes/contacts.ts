@@ -321,7 +321,7 @@ app.post("/:agentId/block", async (c) => {
   const targetId = c.req.param("agentId");
   if (myId === targetId) return c.json({ error: "Cannot block yourself" }, 400);
 
-  const body = await c.req.json<{ reason?: string }>().catch(() => ({}));
+  const body: { reason?: string } = await c.req.json<{ reason?: string }>().catch(() => ({}));
 
   // Check if already blocked
   const existing = await db

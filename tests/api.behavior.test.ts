@@ -3,7 +3,7 @@ import type { SQL } from "drizzle-orm";
 import app from "../src/app.js";
 import { createTrunkInboxNode, createTrunkSendNode } from "../src/adapters/langgraph.js";
 import { notifyPushWorker } from "../src/lib/webhook.js";
-import { TrunkApiError, TrunkClient, signWebhookPayload, verifyWebhookSignature, type RegisterResponse } from "../src/sdk/index.js";
+import { TrunkApiError, TrunkClient, signWebhookPayload, verifyWebhookSignature, type RegisterResponse, type TrunkMessage } from "../src/sdk/index.js";
 
 type AgentRow = {
   id: string;
@@ -1767,10 +1767,10 @@ describe("Hono API behavior", () => {
     // Beta should see the message in inbox
     const inbox = await betaClient.inbox();
     const roomMsg = inbox.messages.find(
-      (m: { payload: { content: string } }) => m.payload.content === "Room broadcast from alpha"
+      (m: TrunkMessage) => (m.payload as Record<string, unknown>).content === "Room broadcast from alpha"
     );
     expect(roomMsg).toBeDefined();
-    expect(roomMsg.fromAgent).toBe(alpha.agent_id);
+    expect(roomMsg!.fromAgent).toBe(alpha.agent_id);
   });
 
   it("fans out room message to multiple members", async () => {
@@ -1800,12 +1800,12 @@ describe("Hono API behavior", () => {
     // Both beta and gamma should see the message
     const betaInbox = await betaClient.inbox();
     expect(betaInbox.messages.some(
-      (m: { payload: { content: string } }) => m.payload.content === "Hello everyone"
+      (m: TrunkMessage) => (m.payload as Record<string, unknown>).content === "Hello everyone"
     )).toBe(true);
 
     const gammaInbox = await gammaClient.inbox();
     expect(gammaInbox.messages.some(
-      (m: { payload: { content: string } }) => m.payload.content === "Hello everyone"
+      (m: TrunkMessage) => (m.payload as Record<string, unknown>).content === "Hello everyone"
     )).toBe(true);
   });
 
@@ -3356,7 +3356,7 @@ describe("Hono API behavior", () => {
 
     const results = await alphaClient.search({ q: "deploy" });
     expect(results.messages).toHaveLength(2);
-    expect(results.messages.every((m: { payload: { content: string } }) => (m.payload.content as string).includes("deploy"))).toBe(true);
+    expect(results.messages.every((m: TrunkMessage) => ((m.payload as Record<string, unknown>).content as string).includes("deploy"))).toBe(true);
   });
 
   it("searches messages by type filter", async () => {
