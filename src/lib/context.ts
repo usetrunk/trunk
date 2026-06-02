@@ -1,9 +1,22 @@
 import { and, eq, or } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { contacts, sharedFacts } from "../db/schema.js";
+import { contacts, sharedFacts, roomMembers } from "../db/schema.js";
 
 export function contactScope(a: string, b: string): string {
   return `contact:${[a, b].sort().join("-")}`;
+}
+
+export function roomScope(roomId: string): string {
+  return `room:${roomId}`;
+}
+
+export async function verifyRoomAccess(agentId: string, roomId: string): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
+  return rows.length > 0;
 }
 
 export async function verifyContactAccess(agentId: string, otherId: string): Promise<boolean> {

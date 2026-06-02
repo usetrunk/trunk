@@ -838,6 +838,27 @@ export class TrunkClient {
     return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
   }
 
+  // Room-scoped fact methods
+  listRoomFacts(roomId: string): Promise<{ facts: Array<{ key: string; value: unknown; version: number; updated_by: string; updated_at: string }> }> {
+    return this.request(`/context/room/${encodeURIComponent(roomId)}/facts`);
+  }
+
+  getRoomFact(roomId: string, key: string): Promise<{ key: string; value: unknown; version: number; updated_by: string; updated_at?: string | Date }> {
+    return this.request(`/context/room/${encodeURIComponent(roomId)}/facts/${encodeURIComponent(key)}`);
+  }
+
+  putRoomFact(roomId: string, key: string, value: unknown, options: { ifMatch?: string | number } = {}): Promise<{ key: string; value: unknown; version: number; updated_by: string }> {
+    return this.request(`/context/room/${encodeURIComponent(roomId)}/facts/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: { value },
+      ifMatch: options.ifMatch === undefined ? undefined : String(options.ifMatch),
+    });
+  }
+
+  deleteRoomFact(roomId: string, key: string): Promise<AckResponse> {
+    return this.request(`/context/room/${encodeURIComponent(roomId)}/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
+  }
+
   editMessage(messageId: string, payload: Record<string, unknown>): Promise<{ id: string; thread_id: string; payload: Record<string, unknown>; edited_at: string; status: string }> {
     return this.request(`/messages/${encodeURIComponent(messageId)}`, { method: "PATCH", body: { payload } });
   }
@@ -1010,6 +1031,31 @@ export class TrunkClient {
 
   deleteDocument(contactId: string, docId: string): Promise<AckResponse> {
     return this.request(`/documents/${encodeURIComponent(contactId)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
+  }
+
+  // Room-scoped document methods
+  createRoomDocument(roomId: string, input: CreateDocumentRequest): Promise<DocumentResponse> {
+    return this.request(`/documents/room/${encodeURIComponent(roomId)}`, { method: "POST", body: input });
+  }
+
+  listRoomDocuments(roomId: string, options: { limit?: number; cursor?: string } = {}): Promise<PaginatedResponse<DocumentListResponse>> {
+    const search = new URLSearchParams();
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    if (options.cursor) search.set("cursor", options.cursor);
+    const query = search.toString();
+    return this.request(`/documents/room/${encodeURIComponent(roomId)}${query ? `?${query}` : ""}`);
+  }
+
+  getRoomDocument(roomId: string, docId: string): Promise<DocumentResponse> {
+    return this.request(`/documents/room/${encodeURIComponent(roomId)}/${encodeURIComponent(docId)}`);
+  }
+
+  updateRoomDocument(roomId: string, docId: string, input: UpdateDocumentRequest): Promise<DocumentResponse> {
+    return this.request(`/documents/room/${encodeURIComponent(roomId)}/${encodeURIComponent(docId)}`, { method: "PUT", body: input });
+  }
+
+  deleteRoomDocument(roomId: string, docId: string): Promise<AckResponse> {
+    return this.request(`/documents/room/${encodeURIComponent(roomId)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
   }
 
   listThreads(options: ThreadListOptions = {}): Promise<PaginatedResponse<ThreadListResponse>> {

@@ -1854,6 +1854,233 @@ describe("Hono API behavior", () => {
     }
   });
 
+  // --- Room-scoped documents and facts ---
+
+  it("creates and lists room-scoped documents", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Docs Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Alpha creates a document in the room
+    const createRes = await app.request(`/documents/room/${room.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "README", body: "# Room Doc" }),
+    });
+    expect(createRes.status).toBe(201);
+    const doc = await createRes.json();
+    expect(doc.name).toBe("README");
+    expect(doc.version).toBe(1);
+
+    // Beta can list room documents
+    const listRes = await app.request(`/documents/room/${room.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(listRes.status).toBe(200);
+    const list = await listRes.json();
+    expect(list.documents.some((d: { id: string }) => d.id === doc.id)).toBe(true);
+  });
+
+  it("room member can read and update room document", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Edit Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const createRes = await app.request(`/documents/room/${room.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "Spec", body: "v1 content" }),
+    });
+    const doc = await createRes.json();
+
+    // Beta reads it
+    const getRes = await app.request(`/documents/room/${room.id}/${doc.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(getRes.status).toBe(200);
+    const fetched = await getRes.json();
+    expect(fetched.body).toBe("v1 content");
+
+    // Beta updates it
+    const updateRes = await app.request(`/documents/room/${room.id}/${doc.id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ body: "v2 content" }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.version).toBe(2);
+  });
+
+  it("non-member cannot access room documents", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Private Docs" });
+    const room = await roomRes.json();
+
+    // Beta is NOT a member
+    const listRes = await app.request(`/documents/room/${room.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(listRes.status).toBe(403);
+  });
+
+  it("room member can delete room document", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Delete Docs" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const createRes = await app.request(`/documents/room/${room.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "Temp", body: "delete me" }),
+    });
+    const doc = await createRes.json();
+
+    const deleteRes = await app.request(`/documents/room/${room.id}/${doc.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(deleteRes.status).toBe(200);
+    const body = await deleteRes.json();
+    expect(body.ok).toBe(true);
+  });
+
+  it("SDK createRoomDocument and listRoomDocuments work", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "SDK Docs Room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "Plan", body: "# Plan" });
+    expect(doc.name).toBe("Plan");
+
+    const list = await betaClient.listRoomDocuments(room.id);
+    expect(list.documents.some((d: { id: string }) => d.id === doc.id)).toBe(true);
+  });
+
+  it("creates and lists room-scoped facts", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Facts Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Alpha sets a fact
+    const putRes = await app.request(`/context/room/${room.id}/facts/status`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ value: "in-progress" }),
+    });
+    expect(putRes.status).toBe(200);
+    const fact = await putRes.json();
+    expect(fact.key).toBe("status");
+    expect(fact.value).toBe("in-progress");
+    expect(fact.version).toBe(1);
+
+    // Beta can list room facts
+    const listRes = await app.request(`/context/room/${room.id}/facts`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(listRes.status).toBe(200);
+    const list = await listRes.json();
+    expect(list.facts.some((f: { key: string }) => f.key === "status")).toBe(true);
+  });
+
+  it("room member can read, update, and delete room fact", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Fact CRUD" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Alpha creates
+    await app.request(`/context/room/${room.id}/facts/sprint`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ value: 42 }),
+    });
+
+    // Beta reads
+    const getRes = await app.request(`/context/room/${room.id}/facts/sprint`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(getRes.status).toBe(200);
+    const got = await getRes.json();
+    expect(got.value).toBe(42);
+
+    // Beta updates
+    const updateRes = await app.request(`/context/room/${room.id}/facts/sprint`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ value: 43 }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.version).toBe(2);
+    expect(updated.value).toBe(43);
+
+    // Alpha deletes
+    const deleteRes = await app.request(`/context/room/${room.id}/facts/sprint`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(deleteRes.status).toBe(200);
+  });
+
+  it("non-member cannot access room facts", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Private Facts" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/context/room/${room.id}/facts`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("SDK putRoomFact and listRoomFacts work", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "SDK Facts Room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const fact = await alphaClient.putRoomFact(room.id, "goal", "ship v2");
+    expect(fact.key).toBe("goal");
+    expect(fact.value).toBe("ship v2");
+
+    const list = await betaClient.listRoomFacts(room.id);
+    expect(list.facts.some((f: { key: string }) => f.key === "goal")).toBe(true);
+  });
+
   it("renders a read-only observer dashboard with rooms and direct messages", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
