@@ -120,10 +120,24 @@ function spawnAgent(config: AgentConfig): ChildProcess {
     return null as unknown as ChildProcess;
   }
 
+  // Build MCP config for this agent so it gets Trunk tools in -p mode
+  const mcpConfig = JSON.stringify({
+    mcpServers: {
+      trunk: {
+        type: "stdio",
+        command: "npx",
+        args: ["tsx", resolve(import.meta.dirname, "index.ts")],
+        env: { TRUNK_PROFILE: config.profile },
+      },
+    },
+  });
+
   const child = spawn(CLAUDE_BIN, [
     "--dangerously-skip-permissions",
     "-p",
     fullPrompt,
+    "--mcp-config",
+    mcpConfig,
   ], {
     cwd: expandedCwd,
     env,
