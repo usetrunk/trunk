@@ -423,6 +423,10 @@ export class TrunkClient {
     return this.request("/contacts");
   }
 
+  updateContactAlias(agentId: string, alias: string | null): Promise<{ ok: boolean; alias: string | null }> {
+    return this.request(`/contacts/${encodeURIComponent(agentId)}`, { method: "PATCH", body: { alias } });
+  }
+
   unpair(agentId: string): Promise<AckResponse> {
     return this.request(`/contacts/${encodeURIComponent(agentId)}`, { method: "DELETE" });
   }

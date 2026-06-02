@@ -502,6 +502,45 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_update_contact",
+    "Update a contact's alias (your nickname for them).",
+    {
+      secret: z.string().describe("Your agent secret"),
+      agent_id: z.string().describe("The contact's agent ID"),
+      alias: z.string().nullable().describe("New alias (set null to remove)"),
+    },
+    async ({ secret, agent_id, alias }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [row] = await db
+        .select()
+        .from(contacts)
+        .where(or(
+          and(eq(contacts.agentA, agent.id), eq(contacts.agentB, agent_id)),
+          and(eq(contacts.agentA, agent_id), eq(contacts.agentB, agent.id))
+        ))
+        .limit(1);
+
+      if (!row) return errorResult("Not a contact");
+
+      if (row.agentA === agent.id) {
+        await db.update(contacts).set({ aliasA: alias }).where(
+          and(eq(contacts.agentA, agent.id), eq(contacts.agentB, agent_id))
+        );
+      } else {
+        await db.update(contacts).set({ aliasB: alias }).where(
+          and(eq(contacts.agentA, agent_id), eq(contacts.agentB, agent.id))
+        );
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true, alias }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_ack_bulk",
     "Acknowledge multiple messages at once (mark as read/processed). Useful for clearing inbox backlog.",
     {

@@ -2354,6 +2354,33 @@ describe("Hono API behavior", () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
+  // --- Contact alias update tests ---
+
+  it("updates contact alias after pairing", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.updateContactAlias(beta.agent_id, "my buddy");
+    expect(result).toEqual({ ok: true, alias: "my buddy" });
+  });
+
+  it("clears contact alias by setting null", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.updateContactAlias(beta.agent_id, "temp name");
+    const result = await alphaClient.updateContactAlias(beta.agent_id, null);
+    expect(result).toEqual({ ok: true, alias: null });
+  });
+
+  it("returns 404 when updating alias for non-contact", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "lone-wolf" });
+    const beta = await anon.register({ name: "stranger" });
+    const alphaClient = createClient(alpha.secret);
+
+    await expect(alphaClient.updateContactAlias(beta.agent_id, "nickname")).rejects.toMatchObject({ status: 404 });
+  });
+
   // --- Workspace members endpoint ---
 
   it("workspaceMembers returns all members for a workspace member", async () => {

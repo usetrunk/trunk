@@ -225,6 +225,20 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_update_contact",
+    "Update a contact's alias (your nickname for them).",
+    {
+      secret: z.string().describe("Your agent secret"),
+      agent_id: z.string().describe("The contact's agent ID"),
+      alias: z.string().nullable().describe("New alias (set null to remove)"),
+    },
+    async ({ secret, agent_id, alias }) => {
+      const result = await relay(`/contacts/${agent_id}`, { method: "PATCH", secret, body: { alias } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_ack_bulk",
     "Acknowledge multiple messages at once (mark as read/processed). Useful for clearing inbox backlog.",
     {

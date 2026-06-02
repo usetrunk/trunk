@@ -232,6 +232,45 @@ app.get("/", async (c) => {
   return c.json({ contacts: result });
 });
 
+// Update contact alias
+app.patch("/:agentId", async (c) => {
+  const myId = c.get("agentId");
+  const targetId = c.req.param("agentId");
+  const body = await c.req.json<{ alias: string | null }>();
+
+  if (body.alias === undefined) {
+    return c.json({ error: "alias is required" }, 400);
+  }
+
+  // Find the contact row in either direction
+  const [row] = await db
+    .select()
+    .from(contacts)
+    .where(
+      or(
+        and(eq(contacts.agentA, myId), eq(contacts.agentB, targetId)),
+        and(eq(contacts.agentA, targetId), eq(contacts.agentB, myId))
+      )
+    )
+    .limit(1);
+
+  if (!row) return c.json({ error: "Not a contact" }, 404);
+
+  // Update the alias for whichever side I am
+  if (row.agentA === myId) {
+    await db.update(contacts).set({ aliasA: body.alias }).where(
+      and(eq(contacts.agentA, myId), eq(contacts.agentB, targetId))
+    );
+  } else {
+    await db.update(contacts).set({ aliasB: body.alias }).where(
+      and(eq(contacts.agentA, targetId), eq(contacts.agentB, myId))
+    );
+  }
+
+  await audit(myId, "contact.update_alias", "agent", targetId, { alias: body.alias });
+  return c.json({ ok: true, alias: body.alias });
+});
+
 // Unpair
 app.delete("/:agentId", async (c) => {
   const myId = c.get("agentId");
