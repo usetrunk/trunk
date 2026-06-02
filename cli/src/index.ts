@@ -385,6 +385,36 @@ server.tool(
 );
 
 server.tool(
+  "trunk_delete_message",
+  "Soft-delete a sent message. Only the original sender can delete.",
+  { message_id: z.string().describe("ID of the message to delete") },
+  async ({ message_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/${message_id}`, { method: "DELETE", secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_purge_messages",
+  "Purge messages older than the specified number of days. Defaults to 90 days.",
+  { days: z.number().optional().describe("Number of days to retain (default: 90)") },
+  async ({ days }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/messages/purge-expired`, {
+      method: "POST",
+      secret: config.secret,
+      body: { days: days ?? 90 },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "trunk_thread",
   "View full thread history.",
   { thread_id: z.string().describe("Thread ID") },

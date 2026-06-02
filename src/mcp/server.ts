@@ -620,6 +620,72 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_delete_message",
+    "Soft-delete a sent message. Only the original sender can delete. The message remains in the database with a deletedAt timestamp but is excluded from inbox, thread, and search results.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to delete"),
+    },
+    async ({ secret, message_id }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const [msg] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.id, message_id), eq(messages.fromAgent, agent.id)))
+        .limit(1);
+
+      if (!msg) return errorResult("Message not found");
+
+      await db
+        .update(messages)
+        .set({ status: "deleted", deletedAt: new Date() })
+        .where(eq(messages.id, message_id));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "trunk_purge_messages",
+    "Purge messages older than the specified number of days. Permanently deletes expired messages for the authenticated agent. Defaults to 90 days.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      days: z.number().optional().describe("Number of days to retain (default: 90, min: 1, max: 3650)"),
+    },
+    async ({ secret, days }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const retentionDays = Math.max(1, Math.min(days ?? 90, 3650));
+      const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id)));
+      const expired = rows.filter((row) => row.createdAt.getTime() < cutoff);
+
+      for (const row of expired) {
+        await db.delete(messages).where(eq(messages.id, row.id));
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ purged: expired.length, cutoff: new Date(cutoff).toISOString() }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {

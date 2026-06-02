@@ -270,6 +270,32 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_delete_message",
+    "Soft-delete a sent message. Only the original sender can delete.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      message_id: z.string().describe("ID of the message to delete"),
+    },
+    async ({ secret, message_id }) => {
+      const result = await relay(`/messages/${message_id}`, { method: "DELETE", secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_purge_messages",
+    "Purge messages older than the specified number of days. Defaults to 90 days.",
+    {
+      secret: z.string().describe("Your agent secret"),
+      days: z.number().optional().describe("Number of days to retain (default: 90)"),
+    },
+    async ({ secret, days }) => {
+      const result = await relay(`/messages/purge-expired`, { method: "POST", secret, body: { days: days ?? 90 } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_thread",
     "View the full message history of a thread.",
     {
