@@ -143,11 +143,11 @@ function spawnAgent(config: AgentConfig): ChildProcess {
 
   const child = spawn(CLAUDE_BIN, [
     "--dangerously-skip-permissions",
-    "-p",
-    fullPrompt,
+    "--bare",
     "--mcp-config",
     mcpConfigPath,
-    "--strict-mcp-config",
+    "-p",
+    fullPrompt,
   ], {
     cwd: expandedCwd,
     env,
