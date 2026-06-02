@@ -112,6 +112,7 @@ function spawnAgent(config: AgentConfig): ChildProcess {
     "When you finish a task, broadcast completion to the workspace and pick the next one.",
   ].filter(Boolean).join("\n");
 
+  const spawnTime = Date.now();
   console.log(`[harness] spawning ${config.name} (profile: ${config.profile}, cwd: ${expandedCwd})`);
 
   // Verify cwd exists
@@ -151,7 +152,13 @@ function spawnAgent(config: AgentConfig): ChildProcess {
     removeAgent(config.name);
   });
 
+  let firstOutput = true;
   child.stdout?.on("data", (data: Buffer) => {
+    if (firstOutput) {
+      const elapsed = Math.round((Date.now() - spawnTime) / 1000);
+      console.log(`[harness] ✓ ${config.name} is ready (${elapsed}s startup)`);
+      firstOutput = false;
+    }
     const lines = data.toString().split("\n").filter(Boolean);
     for (const line of lines) {
       console.log(`[${config.name}] ${line}`);
