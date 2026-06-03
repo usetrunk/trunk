@@ -8678,6 +8678,229 @@ describe("Hono API behavior", () => {
       alphaClient.putRoomFact(room.id, "lock", "v3", { ifMatch: 1 })
     ).rejects.toMatchObject({ status: 412 });
   });
+
+  // ---- Message Templates ----
+
+  it("creates and retrieves a template", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const tmpl = await client.createTemplate({
+      name: "greeting",
+      type: "update",
+      payload: { content: "Hello {{name}}!" },
+      description: "Standard greeting template",
+    });
+
+    expect(tmpl.id).toEqual(expect.any(String));
+    expect(tmpl.name).toBe("greeting");
+    expect(tmpl.type).toBe("update");
+    expect(tmpl.payload).toEqual({ content: "Hello {{name}}!" });
+    expect(tmpl.description).toBe("Standard greeting template");
+
+    const fetched = await client.getTemplate(tmpl.id);
+    expect(fetched.name).toBe("greeting");
+  });
+
+  it("lists all templates for the agent", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await client.createTemplate({ name: "t1", type: "update", payload: { content: "a" } });
+    await client.createTemplate({ name: "t2", type: "question", payload: { content: "b" } });
+
+    const list = await client.listTemplates();
+    expect(list.templates.length).toBe(2);
+    expect(list.templates.map((t: { name: string }) => t.name).sort()).toEqual(["t1", "t2"]);
+  });
+
+  it("updates a template", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const tmpl = await client.createTemplate({ name: "draft", type: "update", payload: { content: "v1" } });
+
+    const updated = await client.updateTemplate(tmpl.id, {
+      name: "final",
+      payload: { content: "v2" },
+      description: "Updated description",
+    });
+
+    expect(updated.name).toBe("final");
+    expect(updated.payload).toEqual({ content: "v2" });
+    expect(updated.description).toBe("Updated description");
+  });
+
+  it("rejects duplicate template names", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await client.createTemplate({ name: "unique", type: "update", payload: { content: "a" } });
+
+    await expect(
+      client.createTemplate({ name: "unique", type: "update", payload: { content: "b" } })
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("deletes a template", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const tmpl = await client.createTemplate({ name: "doomed", type: "update", payload: { content: "bye" } });
+    const result = await client.deleteTemplate(tmpl.id);
+    expect(result.ok).toBe(true);
+
+    await expect(client.getTemplate(tmpl.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects template creation with missing fields", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(
+      client.createTemplate({ name: "", type: "update", payload: { content: "a" } })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects template name exceeding max length", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(
+      client.createTemplate({ name: "a".repeat(201), type: "update", payload: { content: "a" } })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("templates are agent-scoped (isolated)", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const tmpl = await alphaClient.createTemplate({ name: "private", type: "update", payload: { content: "mine" } });
+
+    await expect(betaClient.getTemplate(tmpl.id)).rejects.toMatchObject({ status: 404 });
+    const betaList = await betaClient.listTemplates();
+    expect(betaList.templates.length).toBe(0);
+  });
+
+  // ---- Attachments ----
+
+  it("uploads and retrieves an attachment", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const att = await client.uploadAttachment({
+      filename: "readme.txt",
+      content_type: "text/plain",
+      data: btoa("Hello World"),
+    });
+
+    expect(att.id).toEqual(expect.any(String));
+    expect(att.filename).toBe("readme.txt");
+    expect(att.content_type).toBe("text/plain");
+
+    const fetched = await client.getAttachment(att.id);
+    expect(fetched.data).toBe(btoa("Hello World"));
+  });
+
+  it("lists all attachments for the agent", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await client.uploadAttachment({ filename: "a.txt", data: btoa("a") });
+    await client.uploadAttachment({ filename: "b.txt", data: btoa("b") });
+
+    const list = await client.listAttachments();
+    expect(list.attachments.length).toBe(2);
+  });
+
+  it("uploads an attachment linked to a message", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "see attachment" },
+    });
+
+    const att = await alphaClient.uploadAttachment({
+      filename: "report.pdf",
+      data: btoa("PDF content"),
+      message_id: msg.id,
+    });
+
+    expect(att.message_id).toBe(msg.id);
+
+    const msgAtts = await alphaClient.messageAttachments(msg.id);
+    expect(msgAtts.attachments.length).toBe(1);
+    expect(msgAtts.attachments[0].filename).toBe("report.pdf");
+  });
+
+  it("deletes an attachment", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    const att = await client.uploadAttachment({ filename: "temp.txt", data: btoa("temp") });
+    const result = await client.deleteAttachment(att.id);
+    expect(result.ok).toBe(true);
+
+    await expect(client.getAttachment(att.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects attachment upload with missing fields", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(
+      client.uploadAttachment({ filename: "", data: btoa("a") })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects attachment access by non-owner", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const att = await alphaClient.uploadAttachment({ filename: "secret.txt", data: btoa("private") });
+
+    await expect(betaClient.getAttachment(att.id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects attachment deletion by non-uploader", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const att = await alphaClient.uploadAttachment({ filename: "mine.txt", data: btoa("mine") });
+
+    await expect(betaClient.deleteAttachment(att.id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects attachment linked to non-existent message", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(
+      client.uploadAttachment({
+        filename: "orphan.txt",
+        data: btoa("data"),
+        message_id: "00000000-0000-0000-0000-000000000000",
+      })
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects filename exceeding max length", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(
+      client.uploadAttachment({ filename: "a".repeat(256), data: btoa("a") })
+    ).rejects.toMatchObject({ status: 400 });
+  });
 });
 
 async function registerPair(): Promise<{
