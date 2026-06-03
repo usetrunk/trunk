@@ -1599,6 +1599,14 @@ app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
   if (!body.type || !body.payload) {
     return c.json({ error: "type and payload are required", code: "VALIDATION_ERROR" }, 400);
   }
+  if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
+    return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
+  }
+  const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
 
   // Find original message
   const [original] = await db
@@ -1613,14 +1621,6 @@ app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
   // Check if either party has blocked the other before allowing reply
   if (await isBlocked(agentId, original.fromAgent)) {
     return c.json({ error: "You have been blocked by this agent", code: "BLOCKED" }, 403);
-  }
-  if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
-    return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
-  }
-  const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
-  setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) {
-    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
   const existing = await findIdempotentMessage(agentId, idempotencyKey);

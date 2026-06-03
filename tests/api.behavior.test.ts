@@ -9924,6 +9924,44 @@ describe("Hono API behavior", () => {
     expect(res.status).toBe(200);
   });
 
+  it("rejects pair alias exceeding 100 characters", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const res = await app.request("/contacts/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ code: beta.pairing_code, alias: "x".repeat(101) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
+
+  it("accepts pair alias of exactly 100 characters", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const res = await app.request("/contacts/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ code: beta.pairing_code, alias: "x".repeat(100) }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("rejects pair alias that is not a string", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const res = await app.request("/contacts/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ code: beta.pairing_code, alias: 12345 }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
   it("rejects block reason exceeding 500 characters", async () => {
     const { alpha, beta } = await registerPair();
 

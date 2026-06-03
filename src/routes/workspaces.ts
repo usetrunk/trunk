@@ -150,18 +150,18 @@ app.get("/me", async (c) => {
 app.patch("/me", async (c) => {
   const agentId = c.get("agentId");
 
+  const rateLimit = await checkRateLimit(`workspace:patch:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
     return c.json({ error: "Not in a workspace", code: "WORKSPACE_NOT_FOUND" }, 404);
   }
   if (agent.workspaceRole !== "admin") {
     return c.json({ error: "Admin role required", code: "INSUFFICIENT_ROLE" }, 403);
-  }
-
-  const rateLimit = await checkRateLimit(`workspace:patch:${agentId}`, 20, 60 * 1000);
-  setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) {
-    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
   const body = await c.req.json<{ name?: string; metadata?: Record<string, unknown> }>();

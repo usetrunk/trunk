@@ -31,6 +31,9 @@ app.post("/pair", async (c) => {
   if (body.code.length > 20) {
     return c.json({ error: "Invalid code format", code: "INVALID_INPUT" }, 400);
   }
+  if (body.alias && (typeof body.alias !== "string" || body.alias.length > 100)) {
+    return c.json({ error: "alias must be a string of 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
 
   const code = body.code.toUpperCase();
 
