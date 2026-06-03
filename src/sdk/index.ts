@@ -519,10 +519,11 @@ export type ThreadListItem = {
   thread_id: string;
   message_count: number;
   unread_count: number;
-  participants: string[];
+  participants: Array<{ agent_id: string; name: string | null }>;
   last_message: {
     id: string;
     from: string;
+    from_name: string | null;
     type: string;
     preview: string | null;
     created_at: string | Date;

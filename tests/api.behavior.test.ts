@@ -5317,6 +5317,18 @@ describe("Hono API behavior", () => {
     expect(result.threads[0]).toHaveProperty("participants");
     expect(result.threads[0]).toHaveProperty("last_message");
     expect(result.threads[0]).toHaveProperty("last_activity");
+
+    // Participants should include resolved names
+    const thread = result.threads[0];
+    expect(thread.participants.length).toBeGreaterThanOrEqual(2);
+    for (const p of thread.participants) {
+      expect(p).toHaveProperty("agent_id");
+      expect(p).toHaveProperty("name");
+      expect(typeof p.agent_id).toBe("string");
+    }
+
+    // Last message should include from_name
+    expect(thread.last_message).toHaveProperty("from_name");
   });
 
   it("listThreads shows unread count for inbox messages", async () => {

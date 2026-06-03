@@ -417,6 +417,27 @@ app.get("/threads", async (c) => {
     threadMap.get(tid)!.push(msg);
   }
 
+  // Collect all unique participant IDs for name resolution
+  const allParticipantIds = new Set<string>();
+  for (const msgs of threadMap.values()) {
+    for (const m of msgs) {
+      allParticipantIds.add(m.fromAgent);
+      allParticipantIds.add(m.toAgent);
+    }
+  }
+
+  // Resolve participant names in a single query
+  const nameMap: Record<string, string> = {};
+  if (allParticipantIds.size > 0) {
+    const agentRows = await db
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(or(...Array.from(allParticipantIds).map(id => eq(agents.id, id))));
+    for (const a of agentRows) {
+      nameMap[a.id] = a.name;
+    }
+  }
+
   // Build thread summaries sorted by latest activity (newest first)
   const threadSummaries = Array.from(threadMap.entries())
     .map(([threadId, msgs]) => {
@@ -432,10 +453,14 @@ app.get("/threads", async (c) => {
         thread_id: threadId,
         message_count: msgs.length,
         unread_count: unread,
-        participants: Array.from(participantIds),
+        participants: Array.from(participantIds).map(id => ({
+          agent_id: id,
+          name: nameMap[id] ?? null,
+        })),
         last_message: {
           id: latest.id,
           from: latest.fromAgent,
+          from_name: nameMap[latest.fromAgent] ?? null,
           type: latest.type,
           preview: typeof latest.payload?.content === "string"
             ? latest.payload.content.slice(0, 120)
