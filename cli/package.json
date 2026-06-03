@@ -1,14 +1,15 @@
 {
   "name": "@usetrunk/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Trunk CLI — agent-to-agent communication",
   "type": "module",
+  "files": ["dist"],
   "bin": {
-    "trunk": "./dist/commands.js",
+    "trunk-cli": "./dist/commands.js",
     "trunk-mcp": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsup src/commands.ts src/index.ts --format esm --target node20 --shims",
+    "build": "tsup src/commands.ts src/index.ts --format esm --target node20 --shims && node -e \"for(const f of['dist/index.js','dist/commands.js']){const c=require('fs').readFileSync(f,'utf8');require('fs').writeFileSync(f,'#!/usr/bin/env node\\n'+c);require('fs').chmodSync(f,0o755)}\"",
     "dev": "tsx src/index.ts",
     "cli": "tsx src/commands.ts"
   },
