@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { sharedFacts } from "../db/schema.js";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
-import { contactScope, roomScope, workspaceScope, isValidFactKey, verifyContactAccess } from "../lib/context.js";
+import { contactScope, roomScope, workspaceScope, isValidFactKey, isValidFactValue, checkFactCountLimit, verifyContactAccess } from "../lib/context.js";
 import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middleware.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
@@ -78,8 +78,10 @@ app.put("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMemb
 
   if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
   if (!("value" in body)) return c.json({ error: "value is required", code: "MISSING_FIELD" }, 400);
+  if (!isValidFactValue(body.value)) return c.json({ error: "Fact value too large (max 10KB serialized)", code: "PAYLOAD_TOO_LARGE" }, 400);
 
   const scope = roomScope(roomId);
+  if (!(await checkFactCountLimit(scope, key))) return c.json({ error: "Too many facts in this scope (max 200)", code: "LIMIT_EXCEEDED" }, 400);
   const ifMatch = c.req.header("If-Match");
 
   const result = await db.transaction(async (tx) => {
@@ -178,8 +180,10 @@ app.put("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), 
 
   if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
   if (!("value" in body)) return c.json({ error: "value is required", code: "MISSING_FIELD" }, 400);
+  if (!isValidFactValue(body.value)) return c.json({ error: "Fact value too large (max 10KB serialized)", code: "PAYLOAD_TOO_LARGE" }, 400);
 
   const scope = workspaceScope(workspaceId);
+  if (!(await checkFactCountLimit(scope, key))) return c.json({ error: "Too many facts in this scope (max 200)", code: "LIMIT_EXCEEDED" }, 400);
   const ifMatch = c.req.header("If-Match");
 
   const result = await db.transaction(async (tx) => {
@@ -290,9 +294,11 @@ app.put("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
 
   if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
   if (!("value" in body)) return c.json({ error: "value is required", code: "MISSING_FIELD" }, 400);
+  if (!isValidFactValue(body.value)) return c.json({ error: "Fact value too large (max 10KB serialized)", code: "PAYLOAD_TOO_LARGE" }, 400);
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const scope = contactScope(agentId, contactId);
+  if (!(await checkFactCountLimit(scope, key))) return c.json({ error: "Too many facts in this scope (max 200)", code: "LIMIT_EXCEEDED" }, 400);
   const ifMatch = c.req.header("If-Match");
 
   const result = await db.transaction(async (tx) => {

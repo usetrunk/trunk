@@ -67,6 +67,7 @@ export async function applyFactUpdates(
   const scope = contactScope(actorAgent, otherAgent);
   for (const [key, value] of Object.entries(updates as Record<string, unknown>)) {
     if (!isValidFactKey(key)) continue;
+    if (!isValidFactValue(value)) continue;
     const existing = await db
       .select()
       .from(sharedFacts)
@@ -79,6 +80,7 @@ export async function applyFactUpdates(
         .set({ value, version: (existing[0].version ?? 1) + 1, updatedBy: actorAgent, updatedAt: new Date() })
         .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
     } else {
+      if (!(await checkFactCountLimit(scope, key))) continue;
       await db.insert(sharedFacts).values({ scope, key, value, updatedBy: actorAgent });
     }
   }
@@ -86,4 +88,28 @@ export async function applyFactUpdates(
 
 export function isValidFactKey(key: string): boolean {
   return /^[a-zA-Z0-9_.:-]{1,128}$/.test(key);
+}
+
+const MAX_FACT_VALUE_BYTES = 10_000; // 10 KB
+
+export function isValidFactValue(value: unknown): boolean {
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized.length <= MAX_FACT_VALUE_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+const MAX_FACTS_PER_SCOPE = 200;
+
+export async function checkFactCountLimit(scope: string, key: string): Promise<boolean> {
+  const existing = await db
+    .select({ key: sharedFacts.key })
+    .from(sharedFacts)
+    .where(eq(sharedFacts.scope, scope))
+    .limit(MAX_FACTS_PER_SCOPE + 1);
+  // Allow if under limit or if updating an existing key
+  if (existing.length < MAX_FACTS_PER_SCOPE) return true;
+  return existing.some((f) => f.key === key);
 }

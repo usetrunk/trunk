@@ -3396,6 +3396,77 @@ describe("Hono API behavior", () => {
     await expect(alphaClient.listFacts(beta.agent_id)).rejects.toMatchObject({ status: 403 });
   });
 
+  it("rejects fact values exceeding 10KB", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const largeValue = "x".repeat(11_000);
+    await expect(alphaClient.putFact(beta.agent_id, "big.value", largeValue)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects fact values exceeding 10KB via room scope", async () => {
+    const { alphaClient } = await registerPair();
+    const room = await alphaClient.createRoom({ name: "test-room" });
+
+    const largeValue = "x".repeat(11_000);
+    await expect(alphaClient.putRoomFact(room.id, "big.value", largeValue)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects fact values exceeding 10KB via workspace scope", async () => {
+    const { alphaClient } = await registerPair();
+    const ws = await alphaClient.createWorkspace({ name: "ws-test" });
+
+    const largeValue = "x".repeat(11_000);
+    await expect(alphaClient.putWorkspaceFact(ws.id, "big.value", largeValue)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("caps facts per scope at 200", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Directly seed 200 facts into the mock DB to avoid rate limits
+    const scope = `contact:${[alpha.agent_id, beta.agent_id].sort().join("-")}`;
+    for (let i = 0; i < 200; i++) {
+      testState["shared_facts"].push({
+        scope,
+        key: `key.${i}`,
+        value: `val-${i}`,
+        version: 1,
+        updatedBy: alpha.agent_id,
+        updatedAt: new Date(),
+      });
+    }
+
+    // 201st should fail
+    await expect(alphaClient.putFact(beta.agent_id, "key.overflow", "nope")).rejects.toMatchObject({ status: 400 });
+
+    // But updating an existing key should still work
+    await expect(alphaClient.putFact(beta.agent_id, "key.0", "updated")).resolves.toMatchObject({ version: 2 });
+  });
+
+  it("silently skips oversized fact values in updates_facts", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const largeValue = "x".repeat(11_000);
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: {
+        content: "test",
+        updates_facts: {
+          "valid.key": "small-value",
+          "big.key": largeValue,
+        },
+      },
+    });
+
+    // small value should be stored
+    await expect(betaClient.getFact(alpha.agent_id, "valid.key")).resolves.toMatchObject({ value: "small-value" });
+    // large value should be silently skipped
+    await expect(betaClient.getFact(alpha.agent_id, "big.key")).rejects.toMatchObject({ status: 404 });
+  });
+
   it("rate limits registrations to 10 per hour per IP", async () => {
     for (let i = 0; i < 10; i += 1) {
       const res = await app.request("/agents/register", {
