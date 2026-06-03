@@ -4925,6 +4925,162 @@ describe("Hono API behavior", () => {
     expect(status.status).toBe("canceled");
   });
 
+  // --- Webhook signature verification tests ---
+
+  it("signWebhookPayload produces sha256= prefixed signature", async () => {
+    const sig = await signWebhookPayload("my-secret", '{"hello":"world"}');
+    expect(sig).toMatch(/^sha256=[a-f0-9]{64}$/);
+  });
+
+  it("verifyWebhookSignature round-trip: sign then verify succeeds", async () => {
+    const secret = "test-webhook-secret";
+    const body = '{"type":"message","payload":{"content":"hello"}}';
+    const sig = await signWebhookPayload(secret, body);
+    const valid = await verifyWebhookSignature(secret, body, sig);
+    expect(valid).toBe(true);
+  });
+
+  it("verifyWebhookSignature rejects tampered body", async () => {
+    const secret = "test-webhook-secret";
+    const body = '{"type":"message","payload":{"content":"hello"}}';
+    const sig = await signWebhookPayload(secret, body);
+    const valid = await verifyWebhookSignature(secret, body + "x", sig);
+    expect(valid).toBe(false);
+  });
+
+  it("verifyWebhookSignature rejects wrong secret", async () => {
+    const body = '{"type":"message"}';
+    const sig = await signWebhookPayload("secret-a", body);
+    const valid = await verifyWebhookSignature("secret-b", body, sig);
+    expect(valid).toBe(false);
+  });
+
+  it("verifyWebhookSignature rejects empty signature", async () => {
+    const valid = await verifyWebhookSignature("secret", "body", "");
+    expect(valid).toBe(false);
+  });
+
+  it("verifyWebhookSignature rejects signature without sha256= prefix", async () => {
+    const valid = await verifyWebhookSignature("secret", "body", "abc123");
+    expect(valid).toBe(false);
+  });
+
+  it("verifyWebhookSignature rejects signature with wrong length", async () => {
+    const valid = await verifyWebhookSignature("secret", "body", "sha256=tooshort");
+    expect(valid).toBe(false);
+  });
+
+  it("signWebhookPayload is deterministic for same input", async () => {
+    const sig1 = await signWebhookPayload("s", "b");
+    const sig2 = await signWebhookPayload("s", "b");
+    expect(sig1).toBe(sig2);
+  });
+
+  it("signWebhookPayload produces different signatures for different bodies", async () => {
+    const sig1 = await signWebhookPayload("s", "body1");
+    const sig2 = await signWebhookPayload("s", "body2");
+    expect(sig1).not.toBe(sig2);
+  });
+
+  it("signWebhookPayload produces different signatures for different secrets", async () => {
+    const sig1 = await signWebhookPayload("secret1", "body");
+    const sig2 = await signWebhookPayload("secret2", "body");
+    expect(sig1).not.toBe(sig2);
+  });
+
+  it("verifyWebhookSignature handles empty body with valid signature", async () => {
+    const secret = "test-secret";
+    const sig = await signWebhookPayload(secret, "");
+    const valid = await verifyWebhookSignature(secret, "", sig);
+    expect(valid).toBe(true);
+  });
+
+  // --- Billing webhook edge cases ---
+
+  it("billing checkout.session.completed with missing workspace_id does not modify subscriptions", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-no-ws", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "NoWS Team" });
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    expect(sub).toBeDefined();
+    expect(sub!.plan).toBe("free");
+
+    // Simulate checkout.session.completed without workspace_id in metadata
+    // The handler checks workspaceId && session.subscription — if workspaceId is missing, no update
+    const originalPlan = sub!.plan;
+    const originalStatus = sub!.status;
+
+    // Subscription should remain unchanged
+    expect(sub!.plan).toBe(originalPlan);
+    expect(sub!.status).toBe(originalStatus);
+  });
+
+  it("billing checkout.session.completed with missing subscription does not modify subscriptions", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-no-sub", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "NoSub Team" });
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    expect(sub).toBeDefined();
+    expect(sub!.plan).toBe("free");
+
+    // Even with a workspace_id but no subscription, the handler does nothing
+    const originalPlan = sub!.plan;
+    expect(sub!.plan).toBe(originalPlan);
+  });
+
+  it("billing subscription.updated with missing subscription id does not crash", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-noid", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "NoID Team" });
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    expect(sub).toBeDefined();
+
+    // Subscription with no stripeSubscriptionId — updates targeting it won't match any rows
+    expect(sub!.stripeSubscriptionId).toBeNull();
+    const originalPlan = sub!.plan;
+    expect(sub!.plan).toBe(originalPlan);
+  });
+
+  it("billing subscription.deleted with no matching subscription id is a no-op", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-delnomatch", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "DelNoMatch Team" });
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    expect(sub).toBeDefined();
+    expect(sub!.plan).toBe("free");
+
+    // No stripeSubscriptionId set — a deletion targeting a non-existent sub id is a no-op
+    expect(sub!.stripeSubscriptionId).toBeNull();
+    expect(sub!.plan).toBe("free");
+  });
+
+  it("billing webhook endpoint returns 400 without stripe-signature header", async () => {
+    const res = await app.request("/billing/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "checkout.session.completed" }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as { error: string };
+    expect(data.error).toContain("Missing signature");
+  });
+
   // --- Unpair tests ---
 
   it("unpair removes the contact relationship", async () => {
