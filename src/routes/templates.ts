@@ -91,13 +91,18 @@ app.post("/", async (c) => {
     return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   }
 
-  // Check for duplicate name
-  const [existing] = await db
+  // Cap templates per agent and check for duplicate name
+  const existingTemplates = await db
     .select()
     .from(messageTemplates)
-    .where(and(eq(messageTemplates.agentId, agentId), eq(messageTemplates.name, body.name)))
-    .limit(1);
+    .where(eq(messageTemplates.agentId, agentId))
+    .limit(201);
 
+  if (existingTemplates.length >= 200) {
+    return c.json({ error: "Maximum of 200 templates reached", code: "LIMIT_REACHED" }, 409);
+  }
+
+  const existing = existingTemplates.find((t) => t.name === body.name);
   if (existing) {
     return c.json({ error: "Template with this name already exists", code: "ALREADY_EXISTS" }, 409);
   }

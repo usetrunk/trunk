@@ -9280,6 +9280,30 @@ describe("Hono API behavior", () => {
     expect(body.code).toBe("INVALID_FIELD");
   });
 
+  it("rejects saved search creation when at 200 cap", async () => {
+    const alpha = await createClient().register({ name: "search-cap", owner: "Frank" });
+
+    // Fill up saved searches (mock DB is fast)
+    for (let i = 0; i < 200; i++) {
+      testState["saved_searches"].push({
+        id: `s${String(i).padStart(8, "0")}-0000-0000-0000-000000000000`,
+        agentId: alpha.agent_id,
+        name: `search-${i}`,
+        query: { type: "question" },
+        createdAt: new Date(),
+      });
+    }
+
+    const res = await app.request("/messages/searches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "one-more", query: { type: "update" } }),
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("LIMIT_REACHED");
+  });
+
   // --- Contact alias and block reason validation ---
 
   it("rejects contact alias exceeding 100 characters", async () => {
@@ -9416,6 +9440,33 @@ describe("Hono API behavior", () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("rejects template creation when at 200 cap", async () => {
+    const alpha = await createClient().register({ name: "tpl-cap", owner: "Frank" });
+
+    // Fill up templates
+    for (let i = 0; i < 200; i++) {
+      testState["message_templates"].push({
+        id: `t${String(i).padStart(8, "0")}-0000-0000-0000-000000000000`,
+        agentId: alpha.agent_id,
+        name: `template-${i}`,
+        type: "greeting",
+        payload: { content: "hi" },
+        description: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    const res = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "one-more", type: "greeting", payload: { content: "hi" } }),
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("LIMIT_REACHED");
   });
 
   // --- Document validation ---

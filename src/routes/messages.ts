@@ -759,12 +759,18 @@ app.post("/searches", async (c) => {
     return c.json({ error: "query is too large", code: "VALIDATION_ERROR" }, 400);
   }
 
-  const [existing] = await db
+  // Cap saved searches per agent to prevent unbounded growth
+  const existingSearches = await db
     .select()
     .from(savedSearches)
-    .where(and(eq(savedSearches.agentId, agentId), eq(savedSearches.name, body.name)))
-    .limit(1);
+    .where(eq(savedSearches.agentId, agentId))
+    .limit(201);
 
+  if (existingSearches.length >= 200) {
+    return c.json({ error: "Maximum of 200 saved searches reached", code: "LIMIT_REACHED" }, 409);
+  }
+
+  const existing = existingSearches.find((s) => s.name === body.name);
   if (existing) {
     return c.json({ error: "Search with this name already exists", code: "ALREADY_EXISTS" }, 409);
   }
