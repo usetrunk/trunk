@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, workspaces, workspaceContacts } from "../db/schema.js";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -212,6 +212,34 @@ app.post("/leave", async (c) => {
   }
 
   const workspaceId = agent.workspaceId;
+
+  // If this agent is an admin, ensure at least one other admin remains
+  if (agent.workspaceRole === "admin") {
+    const otherAdmins = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.workspaceId, workspaceId),
+          eq(agents.workspaceRole, "admin"),
+        ),
+      )
+      .limit(2);
+    // Check if there are other members at all
+    const otherMembers = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(eq(agents.workspaceId, workspaceId))
+      .limit(2);
+    const hasOtherMembers = otherMembers.filter((m) => m.id !== agentId).length > 0;
+    const hasOtherAdmins = otherAdmins.filter((a) => a.id !== agentId).length > 0;
+    if (hasOtherMembers && !hasOtherAdmins) {
+      return c.json({
+        error: "Cannot leave as the last admin while other members exist. Promote another member to admin first, or delete the workspace.",
+        code: "LAST_ADMIN_CANNOT_LEAVE",
+      }, 400);
+    }
+  }
 
   await db
     .update(agents)

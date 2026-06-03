@@ -381,6 +381,22 @@ app.post("/:roomId/leave", requireValidUUIDs("roomId"), async (c) => {
     return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   }
 
+  // Creators cannot leave — they must delete the room or transfer ownership first
+  if (membership.role === "creator") {
+    // Allow if they're the last member
+    const memberCount = await db
+      .select()
+      .from(roomMembers)
+      .where(eq(roomMembers.roomId, roomId))
+      .limit(2);
+    if (memberCount.length > 1) {
+      return c.json({
+        error: "Room creator cannot leave while other members exist. Delete the room or transfer ownership first.",
+        code: "CREATOR_CANNOT_LEAVE",
+      }, 400);
+    }
+  }
+
   await db
     .delete(roomMembers)
     .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)));

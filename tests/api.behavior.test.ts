@@ -13116,6 +13116,151 @@ describe("Hono API behavior", () => {
     const body = await res.json() as { code: string };
     expect(body.code).toBe("VALIDATION_ERROR");
   });
+
+  // === Room creator cannot leave while other members exist ===
+  it("room creator cannot leave while other members exist", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-creator-stay" });
+    const beta = await anon.register({ name: "room-member-stay" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Creator Leave Test" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Creator tries to leave — should be blocked
+    const leaveRes = await app.request(`/rooms/${room.id}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(leaveRes.status).toBe(400);
+    const body = await leaveRes.json();
+    expect(body.code).toBe("CREATOR_CANNOT_LEAVE");
+  });
+
+  it("room creator can leave when they are the last member", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-creator-solo" });
+    const beta = await anon.register({ name: "room-member-temp" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Solo Leave Test" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Beta leaves first
+    await app.request(`/rooms/${room.id}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+
+    // Now creator is alone — leave should succeed
+    const leaveRes = await app.request(`/rooms/${room.id}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(leaveRes.status).toBe(200);
+    const body = await leaveRes.json();
+    expect(body.ok).toBe(true);
+  });
+
+  it("room creator of a single-member room can leave", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-solo-creator" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Solo Room" });
+    const room = await roomRes.json();
+
+    // Only member — leave should succeed
+    const leaveRes = await app.request(`/rooms/${room.id}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(leaveRes.status).toBe(200);
+  });
+
+  // === Last workspace admin cannot leave while other members exist ===
+  it("last workspace admin cannot leave while other members exist", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin-stay" });
+    const beta = await anon.register({ name: "ws-member-stay" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Admin Leave Test" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Admin tries to leave — should be blocked
+    const leaveRes = await app.request("/workspaces/leave", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(leaveRes.status).toBe(400);
+    const body = await leaveRes.json();
+    expect(body.code).toBe("LAST_ADMIN_CANNOT_LEAVE");
+  });
+
+  it("workspace admin can leave after promoting another member", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin-transfer" });
+    const beta = await anon.register({ name: "ws-promoted" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Transfer Admin Test" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Promote beta to admin
+    await app.request(`/workspaces/members/${beta.agent_id}/role`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ role: "admin" }),
+    });
+
+    // Now alpha can leave — another admin exists
+    const leaveRes = await app.request("/workspaces/leave", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(leaveRes.status).toBe(200);
+    const body = await leaveRes.json();
+    expect(body.ok).toBe(true);
+  });
+
+  it("workspace admin can leave when they are the only member", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-solo-admin" });
+    const alphaClient = createClient(alpha.secret);
+
+    await alphaClient.createWorkspace({ name: "Solo Admin WS" });
+
+    // Only member — leave should succeed
+    const leaveRes = await app.request("/workspaces/leave", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(leaveRes.status).toBe(200);
+    const body = await leaveRes.json();
+    expect(body.ok).toBe(true);
+  });
+
+  it("non-admin workspace member can always leave", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin-ok" });
+    const beta = await anon.register({ name: "ws-member-leaves" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Member Leave Test" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Regular member can leave freely
+    const leaveRes = await app.request("/workspaces/leave", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(leaveRes.status).toBe(200);
+    const body = await leaveRes.json();
+    expect(body.ok).toBe(true);
+  });
 });
 
 async function registerPair(): Promise<{
