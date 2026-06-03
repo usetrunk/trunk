@@ -624,19 +624,22 @@ app.post("/:id/tags", requireValidUUIDs("id"), async (c) => {
     return c.json({ error: "tag must not be empty or whitespace-only", code: "VALIDATION_ERROR" }, 400);
   }
 
-  // Check if already tagged
-  const [existing] = await db
+  // Check for duplicate and enforce cap
+  const existingTags = await db
     .select()
     .from(contactTags)
     .where(and(
       eq(contactTags.agentId, agentId),
       eq(contactTags.contactAgentId, contactId),
-      eq(contactTags.tag, tag)
     ))
-    .limit(1);
+    .limit(101);
 
+  const existing = existingTags.find((t) => t.tag === tag);
   if (existing) {
     return c.json({ ok: true, already_tagged: true });
+  }
+  if (existingTags.length >= 100) {
+    return c.json({ error: "Maximum of 100 tags per contact", code: "LIMIT_REACHED" }, 409);
   }
 
   const [row] = await db

@@ -2030,13 +2030,18 @@ app.post("/:id/labels", requireValidUUIDs("id"), async (c) => {
     return c.json({ error: "Not authorized", code: "FORBIDDEN" }, 403);
   }
 
-  // Check for duplicate
+  // Check for duplicate and enforce cap
   const existing = await db
     .select()
     .from(messageLabels)
-    .where(and(eq(messageLabels.messageId, messageId), eq(messageLabels.agentId, agentId), eq(messageLabels.label, label)));
-  if (existing.length > 0) {
-    return c.json({ id: existing[0].id, message_id: messageId, label, created_at: existing[0].createdAt });
+    .where(and(eq(messageLabels.messageId, messageId), eq(messageLabels.agentId, agentId)))
+    .limit(51);
+  const duplicate = existing.find((e) => e.label === label);
+  if (duplicate) {
+    return c.json({ id: duplicate.id, message_id: messageId, label, created_at: duplicate.createdAt });
+  }
+  if (existing.length >= 50) {
+    return c.json({ error: "Maximum of 50 labels per message", code: "LIMIT_REACHED" }, 409);
   }
 
   const [row] = await db.insert(messageLabels).values({ messageId, agentId, label }).returning();

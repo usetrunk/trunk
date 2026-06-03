@@ -6967,6 +6967,53 @@ describe("Hono API behavior", () => {
     await expect(alphaClient.removeLabel(msg.id, "nonexistent")).rejects.toThrow(TrunkApiError);
   });
 
+  it("rejects label creation when at 50 per message cap", async () => {
+    const { alpha, alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "cap test" },
+    });
+
+    // Fill up labels directly in mock state
+    for (let i = 0; i < 50; i++) {
+      testState["message_labels"].push({
+        id: `l${String(i).padStart(8, "0")}-0000-0000-0000-000000000000`,
+        messageId: msg.id,
+        agentId: alpha.agent_id,
+        label: `label-${i}`,
+        createdAt: new Date(),
+      });
+    }
+
+    await expect(alphaClient.addLabel(msg.id, "one-more")).rejects.toMatchObject({
+      status: 409,
+      message: "Maximum of 50 labels per message",
+    });
+  });
+
+  it("rejects contact tag when at 100 per contact cap", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Fill up tags directly in mock state
+    for (let i = 0; i < 100; i++) {
+      testState["contact_tags"].push({
+        id: `ct${String(i).padStart(7, "0")}-0000-0000-0000-000000000000`,
+        agentId: alpha.agent_id,
+        contactAgentId: beta.agent_id,
+        tag: `tag-${i}`,
+        createdAt: new Date(),
+      });
+    }
+
+    await expect(alphaClient.addContactTag(beta.agent_id, "one-more")).rejects.toMatchObject({
+      status: 409,
+      message: "Maximum of 100 tags per contact",
+    });
+  });
+
   it("can add duplicate label idempotently", async () => {
     const { alphaClient, beta } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
