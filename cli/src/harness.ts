@@ -196,20 +196,11 @@ ${loopEnabled ? "while true; do" : ""}
   echo ""
 
   # Run directly on the TTY (no pipes — pipes cause stdout buffering)
-  # On respawn, use --continue to resume the previous session context
-  if [ "$RESUMED" = "1" ]; then
-    ${CLAUDE_BIN} \\
-      --dangerously-skip-permissions \\
-      --mcp-config '${mcpConfigPath}' \\
-      --continue \\
-      -p "$CURRENT_PROMPT"
-  else
-    ${CLAUDE_BIN} \\
-      --dangerously-skip-permissions \\
-      --mcp-config '${mcpConfigPath}' \\
-      -p "$CURRENT_PROMPT"
-    RESUMED=1
-  fi
+  # Fresh session each loop — task state lives in Trunk, not Claude context
+  ${CLAUDE_BIN} \\
+    --dangerously-skip-permissions \\
+    --mcp-config '${mcpConfigPath}' \\
+    -p "$CURRENT_PROMPT"
 
   EXIT_CODE=$?
   echo ""
