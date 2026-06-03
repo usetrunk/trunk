@@ -20,8 +20,11 @@ app.post("/register", async (c) => {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
-  if (!body.name) {
+  if (!body.name || body.name.trim().length === 0) {
     return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
+  }
+  if (body.name.length > 100) {
+    return c.json({ error: "name must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
   }
 
   const secret = generateSecret();
@@ -79,6 +82,15 @@ app.patch("/me", authMiddleware, async (c) => {
     projects?: string[];
     metadata?: Record<string, unknown>;
   }>();
+
+  if (body.name !== undefined) {
+    if (!body.name || body.name.trim().length === 0) {
+      return c.json({ error: "name must not be empty", code: "INVALID_FIELD" }, 400);
+    }
+    if (body.name.length > 100) {
+      return c.json({ error: "name must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
+    }
+  }
 
   const updates: Partial<typeof agents.$inferInsert> = {};
   if (body.name !== undefined) updates.name = body.name;

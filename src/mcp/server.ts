@@ -1064,6 +1064,51 @@ export function createTrunkMcpServer() {
   );
 
   server.tool(
+    "trunk_deliver_scheduled",
+    "Trigger delivery of all scheduled messages that are past their scheduled_at time. Returns the count of messages delivered.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      const now = new Date();
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.status, "scheduled"));
+
+      const due = rows.filter((row) => row.scheduledAt && row.scheduledAt.getTime() <= now.getTime());
+
+      let delivered = 0;
+      for (const msg of due) {
+        await db
+          .update(messages)
+          .set({ status: "delivered", deliveredAt: now })
+          .where(eq(messages.id, msg.id));
+
+        const [recipient] = await db
+          .select()
+          .from(agents)
+          .where(eq(agents.id, msg.toAgent))
+          .limit(1);
+        if (recipient?.webhookUrl) {
+          deliverWebhook(msg, recipient).catch(() => {});
+        }
+        delivered++;
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ delivered, checked_at: now.toISOString() }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "trunk_forward",
     "Forward a message to another contact. Preserves the original message type and payload, adds provenance metadata (forwarded_from, original_message_id). Optionally include a comment.",
     {

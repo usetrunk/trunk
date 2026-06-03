@@ -7010,6 +7010,47 @@ describe("Hono API behavior", () => {
     expect(body.code).toBe("INVALID_FIELD");
     expect(body.error).toContain("100");
   });
+
+  it("rejects oversized attachment upload with 413", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    // Create a base64 string that decodes to > 10MB
+    const bigData = "A".repeat(14 * 1024 * 1024); // ~10.5MB decoded
+
+    await expect(
+      client.uploadAttachment({ filename: "huge.bin", data: bigData })
+    ).rejects.toMatchObject({ status: 413 });
+  });
+
+  it("rejects updateMe with empty name", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    await expect(client.updateMe({ name: "" })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects updateMe with whitespace-only name", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    await expect(client.updateMe({ name: "   " })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects updateMe with name exceeding 100 characters", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    await expect(client.updateMe({ name: "x".repeat(101) })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects registration with whitespace-only name", async () => {
+    await expect(createClient().register({ name: "   " })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects registration with name exceeding 100 characters", async () => {
+    await expect(createClient().register({ name: "x".repeat(101) })).rejects.toMatchObject({ status: 400 });
+  });
 });
 
 async function registerPair(): Promise<{
