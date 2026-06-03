@@ -10083,6 +10083,37 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // --- Hardening: deliver-scheduled blocks check ---
+
+  it("deliver-scheduled skips messages to recipients who blocked the sender", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Schedule a message in the future
+    const scheduled = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "scheduled before block" },
+      scheduled_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+
+    // Beta blocks alpha AFTER the message was scheduled
+    await betaClient.blockContact(alpha.agent_id);
+
+    // Make the message due by backdating scheduledAt
+    const msg = testState.messages.find((m) => m.id === scheduled.id);
+    if (msg) msg.scheduledAt = new Date(Date.now() - 1000);
+
+    // Alpha triggers delivery — message should be blocked, not delivered
+    const result = await alphaClient.deliverScheduled();
+    expect(result.blocked).toBe(1);
+    expect(result.delivered).toBe(0);
+
+    // The message should be marked as deleted
+    const updated = testState.messages.find((m) => m.id === scheduled.id);
+    expect(updated?.status).toBe("deleted");
+  });
+
   // --- Hardening: deliver-scheduled rate limiting ---
 
   it("deliver-scheduled is rate limited", async () => {

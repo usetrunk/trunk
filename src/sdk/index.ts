@@ -874,7 +874,7 @@ export class TrunkClient {
     return this.request(`/messages/${encodeURIComponent(messageId)}/cancel`, { method: "POST", body: {} });
   }
 
-  deliverScheduled(): Promise<{ delivered: number; checked_at: string }> {
+  deliverScheduled(): Promise<{ delivered: number; blocked?: number; checked_at: string }> {
     return this.request("/messages/deliver-scheduled", { method: "POST", body: {} });
   }
 

@@ -972,7 +972,19 @@ app.post("/deliver-scheduled", async (c) => {
     .limit(200);
 
   let delivered = 0;
+  let blocked = 0;
   for (const msg of due) {
+    // Check if recipient has since blocked the sender
+    const senderBlocked = await isBlocked(agentId, msg.toAgent);
+    if (senderBlocked) {
+      await db
+        .update(messages)
+        .set({ status: "deleted", deletedAt: now })
+        .where(eq(messages.id, msg.id));
+      blocked++;
+      continue;
+    }
+
     await notifyRealtime(msg.toAgent, msg);
     await db
       .update(messages)
@@ -990,8 +1002,8 @@ app.post("/deliver-scheduled", async (c) => {
     delivered++;
   }
 
-  await audit(agentId, "message.deliver_scheduled", "message", null, { count: delivered });
-  return c.json({ delivered, checked_at: now.toISOString() });
+  await audit(agentId, "message.deliver_scheduled", "message", null, { count: delivered, blocked });
+  return c.json({ delivered, blocked, checked_at: now.toISOString() });
 });
 
 app.post("/purge-expired", async (c) => {
