@@ -16412,6 +16412,308 @@ describe("Hono API behavior", () => {
       expect(response.headers.get("X-RateLimit-Remaining")).toBeDefined();
     });
   });
+
+  // --- Room and workspace fan-out threading ---
+
+  describe("room message threading", () => {
+    it("room messages appear in listThreads for all members", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Thread Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      const receipt = await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "update",
+        payload: { content: "Room thread starter" },
+      });
+
+      // Both members should see the thread
+      const alphaThreads = await alphaClient.listThreads();
+      // Alpha sent the message so it appears as fromAgent — should show in threads
+      // Note: alpha is the sender, messages are stored with toAgent=beta,
+      // so alpha sees it as sender and beta sees it as recipient
+      const betaThreads = await betaClient.listThreads();
+      const betaThread = betaThreads.threads.find(
+        (t: { thread_id: string }) => t.thread_id === receipt.thread_id
+      );
+      expect(betaThread).toBeDefined();
+      expect(betaThread!.message_count).toBe(1);
+    });
+
+    it("reply to a room message threads correctly and is visible via thread endpoint", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Reply Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      // Alpha sends to room
+      const receipt = await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "question",
+        payload: { content: "What do you think?" },
+      });
+
+      // Beta sees the message in inbox
+      const betaInbox = await betaClient.inbox();
+      const roomMsg = betaInbox.messages.find(
+        (m: TrunkMessage) => m.threadId === receipt.thread_id
+      );
+      expect(roomMsg).toBeDefined();
+
+      // Beta replies to the room message
+      const replyReceipt = await betaClient.reply(roomMsg!.id, {
+        type: "response",
+        payload: { content: "Looks good!" },
+      });
+      expect(replyReceipt.thread_id).toBe(receipt.thread_id);
+
+      // Alpha should see the reply in the same thread
+      const thread = await alphaClient.thread(receipt.thread_id);
+      expect(thread.messages.length).toBeGreaterThanOrEqual(2);
+      const replyInThread = thread.messages.find(
+        (m: TrunkMessage) => (m.payload as Record<string, unknown>).content === "Looks good!"
+      );
+      expect(replyInThread).toBeDefined();
+      expect(replyInThread!.fromAgent).toBe(beta.agent_id);
+    });
+
+    it("thread summary works for room-originated threads", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Summary Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      const receipt = await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "question",
+        payload: { content: "Should we ship this?" },
+      });
+
+      // Beta replies
+      const betaInbox = await betaClient.inbox();
+      const roomMsg = betaInbox.messages.find(
+        (m: TrunkMessage) => m.threadId === receipt.thread_id
+      );
+      await betaClient.reply(roomMsg!.id, {
+        type: "decision",
+        payload: { content: "Yes, ship it." },
+      });
+
+      // Thread summary should reflect both messages
+      const summary = await betaClient.threadSummary(receipt.thread_id);
+      expect(summary.message_count).toBeGreaterThanOrEqual(2);
+      expect(summary.participants.length).toBe(2);
+      expect(summary.by_type.question).toBe(1);
+      expect(summary.by_type.decision).toBe(1);
+    });
+
+    it("multi-member room thread shows all fan-out messages and replies", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const gammaReg = await createClient().register({ name: "gamma-thread", owner: "Test" });
+      const gammaClient = createClient(gammaReg.secret);
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Multi Thread Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+      await joinRoomRaw(gammaReg.secret, room.pairing_code);
+
+      // Alpha sends to room (fans out to beta and gamma)
+      const receipt = await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "update",
+        payload: { content: "Team update" },
+      });
+      expect(receipt.recipients).toBe(2);
+
+      // Beta replies
+      const betaInbox = await betaClient.inbox();
+      const betaMsg = betaInbox.messages.find(
+        (m: TrunkMessage) => m.threadId === receipt.thread_id
+      );
+      const betaReply = await betaClient.reply(betaMsg!.id, {
+        type: "ack",
+        payload: { content: "Got it" },
+      });
+      expect(betaReply.thread_id).toBe(receipt.thread_id);
+
+      // Alpha should see the reply thread
+      const alphaThread = await alphaClient.thread(receipt.thread_id);
+      expect(alphaThread.messages.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("room thread pins work for pinned room messages", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Pin Thread Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      const receipt = await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "decision",
+        payload: { content: "Important decision" },
+      });
+
+      // Beta pins the room message they received
+      const betaInbox = await betaClient.inbox();
+      const roomMsg = betaInbox.messages.find(
+        (m: TrunkMessage) => m.threadId === receipt.thread_id
+      );
+      await betaClient.pin(roomMsg!.id);
+
+      // Thread pins should include the pinned message
+      const pins = await betaClient.threadPins(receipt.thread_id);
+      expect(pins.count).toBe(1);
+      expect(pins.pinned[0].type).toBe("decision");
+    });
+  });
+
+  describe("workspace fan-out threading", () => {
+    it("workspace fan-out messages appear in member listThreads", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-thread-alpha", owner: "Test" });
+      const beta = await anon.register({ name: "ws-thread-beta", owner: "Test" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+
+      // Create workspace and join
+      const ws = await alphaClient.createWorkspace({ name: "Thread WS" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      // Alpha sends workspace fan-out
+      const receipt = await alphaClient.send({
+        to: `workspace:${ws.id}`,
+        type: "update",
+        payload: { content: "Workspace announcement" },
+      });
+      expect(receipt.recipients).toBe(1);
+
+      // Beta should see thread in listThreads
+      const betaThreads = await betaClient.listThreads();
+      const wsThread = betaThreads.threads.find(
+        (t: { thread_id: string }) => t.thread_id === receipt.thread_id
+      );
+      expect(wsThread).toBeDefined();
+      expect(wsThread!.message_count).toBe(1);
+    });
+
+    it("reply to workspace fan-out message threads correctly", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-reply-alpha", owner: "Test" });
+      const beta = await anon.register({ name: "ws-reply-beta", owner: "Test" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "Reply WS" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      const receipt = await alphaClient.send({
+        to: `workspace:${ws.id}`,
+        type: "question",
+        payload: { content: "Team question" },
+      });
+
+      // Beta replies
+      const betaInbox = await betaClient.inbox();
+      const wsMsg = betaInbox.messages.find(
+        (m: TrunkMessage) => m.threadId === receipt.thread_id
+      );
+      expect(wsMsg).toBeDefined();
+
+      const replyReceipt = await betaClient.reply(wsMsg!.id, {
+        type: "response",
+        payload: { content: "Team answer" },
+      });
+      expect(replyReceipt.thread_id).toBe(receipt.thread_id);
+
+      // Alpha sees the full thread
+      const thread = await alphaClient.thread(receipt.thread_id);
+      expect(thread.messages.length).toBeGreaterThanOrEqual(2);
+      const answer = thread.messages.find(
+        (m: TrunkMessage) => (m.payload as Record<string, unknown>).content === "Team answer"
+      );
+      expect(answer).toBeDefined();
+      expect(answer!.fromAgent).toBe(beta.agent_id);
+    });
+
+    it("thread summary works for workspace fan-out threads", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-sum-alpha", owner: "Test" });
+      const beta = await anon.register({ name: "ws-sum-beta", owner: "Test" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "Summary WS" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      const receipt = await alphaClient.send({
+        to: `workspace:${ws.id}`,
+        type: "question",
+        payload: { content: "Ship or wait?" },
+      });
+
+      const betaInbox = await betaClient.inbox();
+      const wsMsg = betaInbox.messages.find(
+        (m: TrunkMessage) => m.threadId === receipt.thread_id
+      );
+      await betaClient.reply(wsMsg!.id, {
+        type: "decision",
+        payload: { content: "Ship now." },
+      });
+
+      const summary = await alphaClient.threadSummary(receipt.thread_id);
+      expect(summary.message_count).toBeGreaterThanOrEqual(2);
+      expect(summary.participants.length).toBe(2);
+      expect(summary.by_type.question).toBe(1);
+      expect(summary.by_type.decision).toBe(1);
+    });
+
+    it("continuing a workspace thread with thread_id groups messages together", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-cont-alpha", owner: "Test" });
+      const beta = await anon.register({ name: "ws-cont-beta", owner: "Test" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "Continue WS" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      // First message creates a thread
+      const first = await alphaClient.send({
+        to: `workspace:${ws.id}`,
+        type: "update",
+        payload: { content: "First update" },
+      });
+
+      // Second message continues the same thread
+      const second = await alphaClient.send({
+        to: `workspace:${ws.id}`,
+        type: "update",
+        payload: { content: "Follow-up update" },
+        thread_id: first.thread_id,
+      });
+      expect(second.thread_id).toBe(first.thread_id);
+
+      // Beta sees both in the same thread
+      const thread = await betaClient.thread(first.thread_id);
+      expect(thread.messages.length).toBe(2);
+      const contents = thread.messages.map(
+        (m: TrunkMessage) => (m.payload as Record<string, unknown>).content
+      );
+      expect(contents).toContain("First update");
+      expect(contents).toContain("Follow-up update");
+    });
+  });
 });
 
 async function registerPair(): Promise<{
