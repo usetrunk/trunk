@@ -128,7 +128,6 @@ app.post("/portal", async (c) => {
 // --- Stripe webhook (no auth — verified via Stripe signature) ---
 
 app.post("/webhook", async (c) => {
-  const stripe = getStripe();
   const sig = c.req.header("stripe-signature");
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -136,6 +135,7 @@ app.post("/webhook", async (c) => {
     return c.json({ error: "Missing signature or webhook secret", code: "UNAUTHORIZED" }, 400);
   }
 
+  const stripe = getStripe();
   const rawBody = await c.req.text();
   let event: Stripe.Event;
 

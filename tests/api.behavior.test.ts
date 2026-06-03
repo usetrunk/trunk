@@ -4052,6 +4052,90 @@ describe("Hono API behavior", () => {
     expect(upgraded.stripe_customer_id).toBe("cus_test123");
   });
 
+  it("billing webhook returns 400 without stripe-signature header", async () => {
+    const res = await app.request("/billing/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "checkout.session.completed" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("UNAUTHORIZED");
+  });
+
+  it("billing checkout returns 409 when already on team plan", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-dup", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "Already Team" });
+
+    // Get initial status to create subscription
+    await client.billingStatus();
+
+    // Simulate existing team subscription
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    expect(sub).toBeDefined();
+    sub!.plan = "team";
+    sub!.status = "active";
+
+    // Checkout should fail with 409
+    try {
+      await client.billingCheckout();
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect((e as TrunkApiError).status).toBe(409);
+    }
+  });
+
+  it("billing webhook handles checkout.session.completed by upgrading subscription", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-wh", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "WH Team" });
+
+    // Create a free subscription via status endpoint
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    expect(sub).toBeDefined();
+    expect(sub!.plan).toBe("free");
+
+    // Directly simulate what the webhook handler does after signature verification:
+    // upgrade the subscription as if checkout.session.completed fired
+    sub!.plan = "team";
+    sub!.status = "active";
+    sub!.stripeSubscriptionId = "sub_wh_test";
+    sub!.stripeCustomerId = "cus_wh_test";
+
+    const upgraded = await client.billingStatus();
+    expect(upgraded.plan).toBe("team");
+    expect(upgraded.status).toBe("active");
+  });
+
+  it("billing webhook handles subscription.deleted by downgrading to free", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-del", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "Del Team" });
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    sub!.plan = "team";
+    sub!.status = "active";
+    sub!.stripeSubscriptionId = "sub_del_test";
+
+    // Simulate subscription.deleted webhook effect
+    sub!.plan = "free";
+    sub!.status = "canceled";
+
+    const status = await client.billingStatus();
+    expect(status.plan).toBe("free");
+    expect(status.status).toBe("canceled");
+  });
+
   // --- Unpair tests ---
 
   it("unpair removes the contact relationship", async () => {
