@@ -7850,7 +7850,7 @@ describe("Hono API behavior", () => {
 
   it("dashboard thread view requires auth and renders thread page", async () => {
     const registered = await createClient().register({ name: "thread-viewer" });
-    const res = await app.request(`/dashboard/thread/fake-thread-id`, {
+    const res = await app.request(`/dashboard/thread/00000000-0000-0000-0000-000000000000`, {
       headers: { Authorization: `Bearer ${registered.secret}` },
     });
     expect(res.status).toBe(200);
@@ -12058,6 +12058,28 @@ describe("Hono API behavior", () => {
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
     expect(attRes.status).toBe(400);
+  });
+
+  it("rejects invalid UUID in thread path params with 400", async () => {
+    const alpha = await createClient().register({ name: "uuid-thread" });
+
+    // Messages thread endpoint
+    const threadRes = await app.request("/messages/thread/not-a-uuid", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(threadRes.status).toBe(400);
+
+    // Messages thread summary endpoint
+    const summaryRes = await app.request("/messages/thread/not-a-uuid/summary", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(summaryRes.status).toBe(400);
+
+    // Messages thread pins endpoint
+    const pinsRes = await app.request("/messages/thread/not-a-uuid/pins", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(pinsRes.status).toBe(400);
   });
 
   it("accepts valid UUIDs in path params", async () => {

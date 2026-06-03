@@ -361,7 +361,7 @@ app.get("/", async (c) => {
 });
 
 // Thread detail view
-app.get("/thread/:threadId", async (c) => {
+app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
   const threadId = c.req.param("threadId");

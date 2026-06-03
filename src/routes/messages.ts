@@ -1002,7 +1002,7 @@ app.post("/purge-expired", async (c) => {
 });
 
 // Get thread summary (structured digest — no LLM, just metadata)
-app.get("/thread/:threadId/summary", async (c) => {
+app.get("/thread/:threadId/summary", requireValidUUIDs("threadId"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1104,7 +1104,7 @@ app.get("/thread/:threadId/summary", async (c) => {
 });
 
 // Get thread
-app.get("/thread/:threadId", async (c) => {
+app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1919,7 +1919,7 @@ app.post("/:id/unpin", requireValidUUIDs("id"), async (c) => {
 });
 
 // List pinned messages in a thread
-app.get("/thread/:threadId/pins", async (c) => {
+app.get("/thread/:threadId/pins", requireValidUUIDs("threadId"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
