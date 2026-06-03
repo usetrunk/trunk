@@ -1638,6 +1638,7 @@ app.post("/:id/forward", requireValidUUIDs("id"), async (c) => {
     .limit(1);
 
   if (!original) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
+  if (original.status === "deleted") return c.json({ error: "Cannot forward a deleted message", code: "VALIDATION_ERROR" }, 400);
 
   // Verify forwarder can message the target
   const allowed = await canMessage(agentId, body.to);
@@ -1739,6 +1740,7 @@ app.post("/:id/react", requireValidUUIDs("id"), async (c) => {
     .limit(1);
 
   if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
+  if (msg.status === "deleted") return c.json({ error: "Cannot react to a deleted message", code: "VALIDATION_ERROR" }, 400);
 
   // Check for existing reaction (idempotent)
   const existing = await db

@@ -3959,6 +3959,72 @@ describe("Hono API behavior", () => {
     await expect(alphaClient.editMessage(sent.id, { content: "too late" })).rejects.toMatchObject({ status: 400 });
   });
 
+  it("cannot react to a deleted message", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "react to me" },
+    });
+
+    await alphaClient.deleteMessage(sent.id);
+    await expect(alphaClient.react(sent.id, "👍")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("recipient cannot react to a deleted message", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "react test" },
+    });
+
+    await alphaClient.deleteMessage(sent.id);
+    await expect(betaClient.react(sent.id, "❤️")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("cannot forward a deleted message", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create a third agent to forward to
+    const gammaClient = createClient();
+    const gamma = await gammaClient.register({ name: "gamma-fwd-del", owner: "Test" });
+    gammaClient.setSecret(gamma.secret);
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "forward me" },
+    });
+
+    await alphaClient.deleteMessage(sent.id);
+    await expect(alphaClient.forward(sent.id, gamma.agent_id)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("recipient cannot forward a deleted message", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Beta needs someone to forward to — pair beta with gamma
+    const gammaClient = createClient();
+    const gamma = await gammaClient.register({ name: "gamma-fwd-del2", owner: "Test" });
+    gammaClient.setSecret(gamma.secret);
+    await betaClient.pair({ code: gamma.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "forward me too" },
+    });
+
+    await alphaClient.deleteMessage(sent.id);
+    await expect(betaClient.forward(sent.id, gamma.agent_id)).rejects.toMatchObject({ status: 400 });
+  });
+
   it("edited message shows updated payload in thread view", async () => {
     const { beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
@@ -8189,6 +8255,116 @@ describe("Hono API behavior", () => {
     const allTasks = await tasksRes.json();
     const unchanged = allTasks.tasks.find((t: { id: string }) => t.id === task.id);
     expect(unchanged.status).toBe("in-progress");
+  });
+
+  it("completing a workspace-scoped dependency auto-unblocks a blocked downstream task", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-unblock-1" });
+    const alphaClient = createClient(alpha.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "UnblockTeam" });
+
+    // Create dependency task in workspace scope
+    const depRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "WS dep task" }),
+    });
+    const dep = await depRes.json() as { id: string };
+
+    // Create a blocked task depending on the dep
+    const taskRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "WS blocked task", depends_on: [dep.id] }),
+    });
+    const task = await taskRes.json() as { id: string };
+
+    // Set the task to blocked
+    await app.request(`/tasks/${ws.id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "blocked" }),
+    });
+
+    // Complete the dependency — should auto-unblock
+    await app.request(`/tasks/${ws.id}/${dep.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "done" }),
+    });
+
+    // Verify the blocked task was auto-unblocked
+    const listRes = await app.request(`/tasks/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const allTasks = await listRes.json() as { tasks: Array<{ id: string; status: string }> };
+    const unblocked = allTasks.tasks.find((t) => t.id === task.id);
+    expect(unblocked!.status).toBe("open");
+  });
+
+  it("workspace-scoped auto-unblock requires all dependencies complete", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-unblock-2" });
+    const alphaClient = createClient(alpha.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "MultiDepTeam" });
+
+    // Create two dependency tasks
+    const dep1Res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "WS dep 1" }),
+    });
+    const dep1 = await dep1Res.json() as { id: string };
+
+    const dep2Res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "WS dep 2" }),
+    });
+    const dep2 = await dep2Res.json() as { id: string };
+
+    // Create blocked task with both deps
+    const taskRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "WS multi-dep", depends_on: [dep1.id, dep2.id] }),
+    });
+    const task = await taskRes.json() as { id: string };
+
+    await app.request(`/tasks/${ws.id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "blocked" }),
+    });
+
+    // Complete only dep1
+    await app.request(`/tasks/${ws.id}/${dep1.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "done" }),
+    });
+
+    // Task should still be blocked
+    const listRes1 = await app.request(`/tasks/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const tasks1 = await listRes1.json() as { tasks: Array<{ id: string; status: string }> };
+    expect(tasks1.tasks.find((t) => t.id === task.id)!.status).toBe("blocked");
+
+    // Complete dep2 — now should auto-unblock
+    await app.request(`/tasks/${ws.id}/${dep2.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "done" }),
+    });
+
+    const listRes2 = await app.request(`/tasks/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const tasks2 = await listRes2.json() as { tasks: Array<{ id: string; status: string }> };
+    expect(tasks2.tasks.find((t) => t.id === task.id)!.status).toBe("open");
   });
 
   // --- Input validation tests ---
