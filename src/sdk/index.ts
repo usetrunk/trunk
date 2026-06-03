@@ -1210,6 +1210,14 @@ export class TrunkClient {
     return this.request(`/documents/room/${encodeURIComponent(roomId)}/${encodeURIComponent(docId)}`, { method: "PUT", body: input });
   }
 
+  roomDocumentVersions(roomId: string, docId: string): Promise<DocumentVersionsResponse> {
+    return this.request(`/documents/room/${encodeURIComponent(roomId)}/${encodeURIComponent(docId)}/versions`);
+  }
+
+  roomDocumentVersion(roomId: string, docId: string, version: number): Promise<DocumentVersionResponse> {
+    return this.request(`/documents/room/${encodeURIComponent(roomId)}/${encodeURIComponent(docId)}/versions/${version}`);
+  }
+
   deleteRoomDocument(roomId: string, docId: string): Promise<AckResponse> {
     return this.request(`/documents/room/${encodeURIComponent(roomId)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
   }
@@ -1233,6 +1241,14 @@ export class TrunkClient {
 
   updateWorkspaceDocument(workspaceId: string, docId: string, input: UpdateDocumentRequest): Promise<DocumentResponse> {
     return this.request(`/documents/workspace/${encodeURIComponent(workspaceId)}/${encodeURIComponent(docId)}`, { method: "PUT", body: input });
+  }
+
+  workspaceDocumentVersions(workspaceId: string, docId: string): Promise<DocumentVersionsResponse> {
+    return this.request(`/documents/workspace/${encodeURIComponent(workspaceId)}/${encodeURIComponent(docId)}/versions`);
+  }
+
+  workspaceDocumentVersion(workspaceId: string, docId: string, version: number): Promise<DocumentVersionResponse> {
+    return this.request(`/documents/workspace/${encodeURIComponent(workspaceId)}/${encodeURIComponent(docId)}/versions/${version}`);
   }
 
   deleteWorkspaceDocument(workspaceId: string, docId: string): Promise<AckResponse> {

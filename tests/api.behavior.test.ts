@@ -2416,6 +2416,134 @@ describe("Hono API behavior", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("SDK createWorkspaceDocument and listWorkspaceDocuments round-trip", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "SDK WS Docs" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "Readme", body: "# Hello" });
+    expect(doc.name).toBe("Readme");
+    expect(doc.version).toBe(1);
+
+    // Beta can get the specific document
+    const got = await betaClient.getWorkspaceDocument(ws.id, doc.id);
+    expect(got.id).toBe(doc.id);
+    expect(got.body).toBe("# Hello");
+
+    // Beta lists and sees the doc
+    const list = await betaClient.listWorkspaceDocuments(ws.id);
+    expect(list.documents.some((d: { id: string }) => d.id === doc.id)).toBe(true);
+  });
+
+  it("SDK getRoomDocument retrieves a specific room document", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "Get Doc Room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "Design", body: "architecture notes" });
+
+    const got = await betaClient.getRoomDocument(room.id, doc.id);
+    expect(got.id).toBe(doc.id);
+    expect(got.name).toBe("Design");
+    expect(got.body).toBe("architecture notes");
+  });
+
+  it("room document version history tracks edits", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "Version Room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "Evolving", body: "draft 1" });
+    await betaClient.updateRoomDocument(room.id, doc.id, { body: "draft 2" });
+    await alphaClient.updateRoomDocument(room.id, doc.id, { body: "draft 3" });
+
+    const versions = await betaClient.roomDocumentVersions(room.id, doc.id);
+    expect(versions.versions).toHaveLength(3);
+    expect(versions.versions[0].version).toBe(3);
+    expect(versions.versions[2].version).toBe(1);
+
+    const v1 = await alphaClient.roomDocumentVersion(room.id, doc.id, 1);
+    expect(v1.body).toBe("draft 1");
+    expect(v1.version).toBe(1);
+
+    const v2 = await betaClient.roomDocumentVersion(room.id, doc.id, 2);
+    expect(v2.body).toBe("draft 2");
+  });
+
+  it("workspace document version history tracks edits", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Version WS" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "Spec", body: "v1 content" });
+    await betaClient.updateWorkspaceDocument(ws.id, doc.id, { body: "v2 content" });
+
+    const versions = await alphaClient.workspaceDocumentVersions(ws.id, doc.id);
+    expect(versions.versions).toHaveLength(2);
+    expect(versions.versions[0].version).toBe(2);
+
+    const v1 = await betaClient.workspaceDocumentVersion(ws.id, doc.id, 1);
+    expect(v1.body).toBe("v1 content");
+
+    const v2 = await alphaClient.workspaceDocumentVersion(ws.id, doc.id, 2);
+    expect(v2.body).toBe("v2 content");
+  });
+
+  it("room document version returns 404 for non-existent version", async () => {
+    const { alphaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "404 Room" });
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "Solo", body: "only version" });
+
+    await expect(
+      alphaClient.roomDocumentVersion(room.id, doc.id, 99)
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("non-room-member cannot access room document versions", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "Private Versions" });
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "Secret", body: "classified" });
+
+    const betaClient = createClient(beta.secret);
+    await expect(
+      betaClient.roomDocumentVersions(room.id, doc.id)
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("SDK putWorkspaceFact and listWorkspaceFacts round-trip", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "SDK WS Facts" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const fact = await alphaClient.putWorkspaceFact(ws.id, "env", "production");
+    expect(fact.key).toBe("env");
+    expect(fact.value).toBe("production");
+    expect(fact.version).toBe(1);
+
+    // Beta can read the fact
+    const got = await betaClient.getWorkspaceFact(ws.id, "env");
+    expect(got.value).toBe("production");
+
+    // Beta can list facts
+    const list = await betaClient.listWorkspaceFacts(ws.id);
+    expect(list.facts.some((f: { key: string }) => f.key === "env")).toBe(true);
+
+    // Alpha updates
+    const updated = await alphaClient.putWorkspaceFact(ws.id, "env", "staging");
+    expect(updated.version).toBe(2);
+
+    // Alpha deletes
+    const del = await alphaClient.deleteWorkspaceFact(ws.id, "env");
+    expect(del.ok).toBe(true);
+  });
+
   it("non-member cannot access workspace documents", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
 

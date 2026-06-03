@@ -1298,11 +1298,11 @@ server.tool(
     if (!scopePath) return { content: [{ type: "text", text: "Error: contact_id, room_id, or workspace_id is required" }], isError: true };
 
     if (version !== undefined) {
-      const result = await relay(`/documents/${encodeURIComponent(scopePath)}/${encodeURIComponent(doc_id)}/versions/${version}`, { secret: config.secret });
+      const result = await relay(`/documents/${scopePath}/${encodeURIComponent(doc_id)}/versions/${version}`, { secret: config.secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
 
-    const result = await relay(`/documents/${encodeURIComponent(scopePath)}/${encodeURIComponent(doc_id)}/versions`, { secret: config.secret });
+    const result = await relay(`/documents/${scopePath}/${encodeURIComponent(doc_id)}/versions`, { secret: config.secret });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );

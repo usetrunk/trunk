@@ -178,6 +178,64 @@ app.put("/room/:roomId/:docId", async (c) => {
   });
 });
 
+// Room document version history
+app.get("/room/:roomId/:docId/versions", async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+  const docId = c.req.param("docId");
+
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
+
+  const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
+  if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+
+  const versions = await db
+    .select()
+    .from(sharedDocumentVersions)
+    .where(eq(sharedDocumentVersions.documentId, docId))
+    .orderBy(desc(sharedDocumentVersions.version));
+
+  return c.json({
+    versions: versions.map(v => ({
+      version: v.version,
+      edited_by: v.editedBy,
+      created_at: v.createdAt,
+      body_length: v.body.length,
+    })),
+  });
+});
+
+// Room document specific version
+app.get("/room/:roomId/:docId/versions/:version", async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+  const docId = c.req.param("docId");
+  const version = parseInt(c.req.param("version"));
+
+  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
+
+  const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
+  if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+
+  const [v] = await db
+    .select()
+    .from(sharedDocumentVersions)
+    .where(and(
+      eq(sharedDocumentVersions.documentId, docId),
+      eq(sharedDocumentVersions.version, version)
+    ))
+    .limit(1);
+
+  if (!v) return c.json({ error: "Version not found", code: "NOT_FOUND" }, 404);
+
+  return c.json({
+    version: v.version,
+    body: v.body,
+    edited_by: v.editedBy,
+    created_at: v.createdAt,
+  });
+});
+
 app.delete("/room/:roomId/:docId", async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
@@ -281,6 +339,64 @@ app.put("/workspace/:workspaceId/:docId", async (c) => {
   await audit(agentId, "document.updated", "shared_document", docId, { version: newVersion });
 
   return c.json({ id: updated.id, name: updated.name, version: updated.version, last_edited_by: updated.lastEditedBy, updated_at: updated.updatedAt });
+});
+
+// Workspace document version history
+app.get("/workspace/:workspaceId/:docId/versions", async (c) => {
+  const agentId = c.get("agentId");
+  const workspaceId = c.req.param("workspaceId");
+  const docId = c.req.param("docId");
+
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
+
+  const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
+  if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+
+  const versions = await db
+    .select()
+    .from(sharedDocumentVersions)
+    .where(eq(sharedDocumentVersions.documentId, docId))
+    .orderBy(desc(sharedDocumentVersions.version));
+
+  return c.json({
+    versions: versions.map(v => ({
+      version: v.version,
+      edited_by: v.editedBy,
+      created_at: v.createdAt,
+      body_length: v.body.length,
+    })),
+  });
+});
+
+// Workspace document specific version
+app.get("/workspace/:workspaceId/:docId/versions/:version", async (c) => {
+  const agentId = c.get("agentId");
+  const workspaceId = c.req.param("workspaceId");
+  const docId = c.req.param("docId");
+  const version = parseInt(c.req.param("version"));
+
+  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
+
+  const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
+  if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+
+  const [v] = await db
+    .select()
+    .from(sharedDocumentVersions)
+    .where(and(
+      eq(sharedDocumentVersions.documentId, docId),
+      eq(sharedDocumentVersions.version, version)
+    ))
+    .limit(1);
+
+  if (!v) return c.json({ error: "Version not found", code: "NOT_FOUND" }, 404);
+
+  return c.json({
+    version: v.version,
+    body: v.body,
+    edited_by: v.editedBy,
+    created_at: v.createdAt,
+  });
 });
 
 app.delete("/workspace/:workspaceId/:docId", async (c) => {
