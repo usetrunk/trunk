@@ -8436,6 +8436,248 @@ describe("Hono API behavior", () => {
       "document.updated",
     ]);
   });
+
+  // ---- Shared Facts / Context (contact-scoped) ----
+
+  it("creates and retrieves a contact-scoped fact", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.putFact(beta.agent_id, "project.status", "active");
+    expect(result.key).toBe("project.status");
+    expect(result.value).toBe("active");
+    expect(result.version).toBe(1);
+    expect(result.updated_by).toBe(alpha.agent_id);
+
+    const fetched = await alphaClient.getFact(beta.agent_id, "project.status");
+    expect(fetched.value).toBe("active");
+    expect(fetched.version).toBe(1);
+  });
+
+  it("lists all contact-scoped facts", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.putFact(beta.agent_id, "key1", "val1");
+    await alphaClient.putFact(beta.agent_id, "key2", { nested: true });
+
+    const list = await alphaClient.listFacts(beta.agent_id);
+    expect(list.facts.length).toBe(2);
+    expect(list.facts.map((f: { key: string }) => f.key).sort()).toEqual(["key1", "key2"]);
+  });
+
+  it("updates a contact-scoped fact and increments version", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.putFact(beta.agent_id, "counter", 1);
+    const updated = await alphaClient.putFact(beta.agent_id, "counter", 2);
+    expect(updated.version).toBe(2);
+    expect(updated.value).toBe(2);
+  });
+
+  it("supports optimistic concurrency with If-Match", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.putFact(beta.agent_id, "shared.key", "v1");
+
+    // Update with correct version succeeds
+    const ok = await alphaClient.putFact(beta.agent_id, "shared.key", "v2", { ifMatch: 1 });
+    expect(ok.version).toBe(2);
+
+    // Update with stale version fails (412)
+    await expect(
+      betaClient.putFact(alpha.agent_id, "shared.key", "v3", { ifMatch: 1 })
+    ).rejects.toMatchObject({ status: 412 });
+  });
+
+  it("deletes a contact-scoped fact", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.putFact(beta.agent_id, "temp", "gone");
+    const result = await alphaClient.deleteFact(beta.agent_id, "temp");
+    expect(result.ok).toBe(true);
+
+    await expect(alphaClient.getFact(beta.agent_id, "temp")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects fact access for non-contacts", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+
+    await expect(alphaClient.listFacts(beta.agent_id)).rejects.toMatchObject({ status: 403 });
+    await expect(alphaClient.putFact(beta.agent_id, "key", "val")).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("returns 404 for non-existent fact", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(alphaClient.getFact(beta.agent_id, "nonexistent")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("stores complex JSON values as facts", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const complexValue = { items: [1, 2, 3], nested: { deep: true } };
+    await alphaClient.putFact(beta.agent_id, "config", complexValue);
+
+    const fetched = await alphaClient.getFact(beta.agent_id, "config");
+    expect(fetched.value).toEqual(complexValue);
+  });
+
+  // ---- Shared Facts / Context (room-scoped) ----
+
+  it("creates and retrieves a room-scoped fact", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Fact Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const result = await alphaClient.putRoomFact(room.id, "sprint.goal", "Ship v2");
+    expect(result.key).toBe("sprint.goal");
+    expect(result.value).toBe("Ship v2");
+    expect(result.version).toBe(1);
+
+    const fetched = await alphaClient.getRoomFact(room.id, "sprint.goal");
+    expect(fetched.value).toBe("Ship v2");
+  });
+
+  it("lists room-scoped facts", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "List Fact Room" });
+    const room = await roomRes.json();
+
+    await alphaClient.putRoomFact(room.id, "a", 1);
+    await alphaClient.putRoomFact(room.id, "b", 2);
+
+    const list = await alphaClient.listRoomFacts(room.id);
+    expect(list.facts.length).toBe(2);
+  });
+
+  it("updates a room-scoped fact with versioning", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Update Fact Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    await alphaClient.putRoomFact(room.id, "status", "draft");
+    const updated = await betaClient.putRoomFact(room.id, "status", "reviewed");
+    expect(updated.version).toBe(2);
+    expect(updated.updated_by).toBe(beta.agent_id);
+  });
+
+  it("deletes a room-scoped fact", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Delete Fact Room" });
+    const room = await roomRes.json();
+
+    await alphaClient.putRoomFact(room.id, "temp", "val");
+    const result = await alphaClient.deleteRoomFact(room.id, "temp");
+    expect(result.ok).toBe(true);
+
+    await expect(alphaClient.getRoomFact(room.id, "temp")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects room fact access for non-members", async () => {
+    const { alpha, alphaClient } = await registerPair();
+    const outsider = await createClient().register({ name: "outsider" });
+    const outsiderClient = createClient(outsider.secret);
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Private Fact Room" });
+    const room = await roomRes.json();
+
+    await expect(outsiderClient.listRoomFacts(room.id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  // ---- Shared Facts / Context (workspace-scoped) ----
+
+  it("creates and retrieves a workspace-scoped fact", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Fact WS" });
+
+    const result = await alphaClient.putWorkspaceFact(ws.id, "team.lead", "alpha");
+    expect(result.key).toBe("team.lead");
+    expect(result.value).toBe("alpha");
+    expect(result.version).toBe(1);
+
+    const fetched = await alphaClient.getWorkspaceFact(ws.id, "team.lead");
+    expect(fetched.value).toBe("alpha");
+  });
+
+  it("lists workspace-scoped facts", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "List Fact WS" });
+
+    await alphaClient.putWorkspaceFact(ws.id, "x", 10);
+    await alphaClient.putWorkspaceFact(ws.id, "y", 20);
+
+    const list = await alphaClient.listWorkspaceFacts(ws.id);
+    expect(list.facts.length).toBe(2);
+  });
+
+  it("updates a workspace-scoped fact with versioning", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Update Fact WS" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await alphaClient.putWorkspaceFact(ws.id, "version", "1.0");
+    const updated = await betaClient.putWorkspaceFact(ws.id, "version", "2.0");
+    expect(updated.version).toBe(2);
+  });
+
+  it("deletes a workspace-scoped fact", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Delete Fact WS" });
+
+    await alphaClient.putWorkspaceFact(ws.id, "temp", "val");
+    const result = await alphaClient.deleteWorkspaceFact(ws.id, "temp");
+    expect(result.ok).toBe(true);
+
+    await expect(alphaClient.getWorkspaceFact(ws.id, "temp")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects workspace fact access for non-members", async () => {
+    const { alphaClient } = await registerPair();
+    const outsider = await createClient().register({ name: "outsider" });
+    const outsiderClient = createClient(outsider.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Private Fact WS" });
+
+    await expect(outsiderClient.listWorkspaceFacts(ws.id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("supports If-Match concurrency control for room facts", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Concurrency Room" });
+    const room = await roomRes.json();
+
+    await alphaClient.putRoomFact(room.id, "lock", "v1");
+
+    // Correct version succeeds
+    const ok = await alphaClient.putRoomFact(room.id, "lock", "v2", { ifMatch: 1 });
+    expect(ok.version).toBe(2);
+
+    // Stale version fails
+    await expect(
+      alphaClient.putRoomFact(room.id, "lock", "v3", { ifMatch: 1 })
+    ).rejects.toMatchObject({ status: 412 });
+  });
 });
 
 async function registerPair(): Promise<{
