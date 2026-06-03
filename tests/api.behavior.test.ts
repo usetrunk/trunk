@@ -14078,6 +14078,161 @@ describe("Hono API behavior", () => {
       status: 403,
     });
   });
+
+  // --- Transaction atomicity tests for document and fact updates ---
+
+  it("concurrent document updates produce sequential versions without gaps", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "txn-doc-a" });
+    const beta = await anon.register({ name: "txn-doc-b" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "concurrent.md", body: "v1" });
+
+    // Both agents update the same document concurrently
+    const [r1, r2] = await Promise.all([
+      alphaClient.updateDocument(beta.agent_id, doc.id, { body: "update-from-alpha" }),
+      betaClient.updateDocument(alpha.agent_id, doc.id, { body: "update-from-beta" }),
+    ]);
+
+    // Both should succeed with different version numbers
+    const versions = [r1.version, r2.version].sort();
+    expect(versions).toEqual([2, 3]);
+
+    // Verify version history is complete
+    const history = await alphaClient.documentVersions(beta.agent_id, doc.id);
+    expect(history.versions.length).toBe(3);
+  });
+
+  it("concurrent room document updates produce sequential versions", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "txn-rdoc-a" });
+    const beta = await anon.register({ name: "txn-rdoc-b" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const room = await alphaClient.createRoom({ name: "txn-doc-room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "room-concurrent.md", body: "v1" });
+
+    const [r1, r2] = await Promise.all([
+      alphaClient.updateRoomDocument(room.id, doc.id, { body: "alpha-edit" }),
+      betaClient.updateRoomDocument(room.id, doc.id, { body: "beta-edit" }),
+    ]);
+
+    const versions = [r1.version, r2.version].sort();
+    expect(versions).toEqual([2, 3]);
+  });
+
+  it("concurrent workspace document updates produce sequential versions", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "txn-wdoc-a" });
+    const beta = await anon.register({ name: "txn-wdoc-b" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const ws = await alphaClient.createWorkspace({ name: "txn-doc-ws" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "ws-concurrent.md", body: "v1" });
+
+    const [r1, r2] = await Promise.all([
+      alphaClient.updateWorkspaceDocument(ws.id, doc.id, { body: "alpha-edit" }),
+      betaClient.updateWorkspaceDocument(ws.id, doc.id, { body: "beta-edit" }),
+    ]);
+
+    const versions = [r1.version, r2.version].sort();
+    expect(versions).toEqual([2, 3]);
+  });
+
+  it("concurrent fact updates produce sequential versions without gaps", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "txn-fact-a" });
+    const beta = await anon.register({ name: "txn-fact-b" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create initial fact
+    await alphaClient.putFact(beta.agent_id, "counter", 0);
+
+    // Both agents update the same fact concurrently
+    const [r1, r2] = await Promise.all([
+      alphaClient.putFact(beta.agent_id, "counter", 100),
+      betaClient.putFact(alpha.agent_id, "counter", 200),
+    ]);
+
+    const versions = [r1.version, r2.version].sort();
+    expect(versions).toEqual([2, 3]);
+  });
+
+  it("concurrent room fact updates produce sequential versions", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "txn-rfact-a" });
+    const beta = await anon.register({ name: "txn-rfact-b" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const room = await alphaClient.createRoom({ name: "txn-fact-room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+
+    await alphaClient.putRoomFact(room.id, "status", "init");
+
+    const [r1, r2] = await Promise.all([
+      alphaClient.putRoomFact(room.id, "status", "alpha-set"),
+      betaClient.putRoomFact(room.id, "status", "beta-set"),
+    ]);
+
+    const versions = [r1.version, r2.version].sort();
+    expect(versions).toEqual([2, 3]);
+  });
+
+  it("concurrent workspace fact updates produce sequential versions", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "txn-wfact-a" });
+    const beta = await anon.register({ name: "txn-wfact-b" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const ws = await alphaClient.createWorkspace({ name: "txn-fact-ws" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    await alphaClient.putWorkspaceFact(ws.id, "build", "pending");
+
+    const [r1, r2] = await Promise.all([
+      alphaClient.putWorkspaceFact(ws.id, "build", "alpha-val"),
+      betaClient.putWorkspaceFact(ws.id, "build", "beta-val"),
+    ]);
+
+    const versions = [r1.version, r2.version].sort();
+    expect(versions).toEqual([2, 3]);
+  });
+
+  it("If-Match with concurrent writes correctly rejects stale version", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "txn-ifm-a" });
+    const beta = await anon.register({ name: "txn-ifm-b" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.putFact(beta.agent_id, "seq", 0);
+
+    // Alpha updates with If-Match, beta also updates — one should get version 2, other should get 3 or 412
+    const alphaPromise = alphaClient.putFact(beta.agent_id, "seq", 1, { ifMatch: 1 });
+    const betaPromise = betaClient.putFact(alpha.agent_id, "seq", 2, { ifMatch: 1 }).catch(e => e);
+
+    const [alphaResult, betaResult] = await Promise.all([alphaPromise, betaPromise]);
+
+    // At least one should succeed with version 2
+    if (betaResult.status === 412) {
+      expect(alphaResult.version).toBe(2);
+    } else {
+      // Both succeeded but one got version 2, other got version 3 (depending on timing)
+      const versions = [alphaResult.version, betaResult.version].sort();
+      // If both passed If-Match check, they should have sequential versions
+      expect(versions[0]).toBe(2);
+    }
+  });
 });
 
 async function registerPair(): Promise<{

@@ -161,45 +161,51 @@ app.put("/room/:roomId/:docId", requireValidUUIDs("roomId", "docId"), requireRoo
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   if (body.name && body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
-  const [existing] = await db
-    .select()
-    .from(sharedDocuments)
-    .where(eq(sharedDocuments.id, docId))
-    .limit(1);
+  const result = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(sharedDocuments)
+      .where(eq(sharedDocuments.id, docId))
+      .limit(1);
 
-  if (!existing || existing.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+    if (!existing || existing.scope !== roomScope(roomId)) return null;
 
-  const newVersion = existing.version + 1;
+    const newVersion = existing.version + 1;
 
-  await db.insert(sharedDocumentVersions).values({
-    documentId: docId,
-    version: newVersion,
-    body: body.body,
-    editedBy: agentId,
+    await tx.insert(sharedDocumentVersions).values({
+      documentId: docId,
+      version: newVersion,
+      body: body.body,
+      editedBy: agentId,
+    });
+
+    const updates: Record<string, unknown> = {
+      body: body.body,
+      version: newVersion,
+      lastEditedBy: agentId,
+      updatedAt: new Date(),
+    };
+    if (body.name) updates.name = body.name;
+
+    const [updated] = await tx
+      .update(sharedDocuments)
+      .set(updates)
+      .where(eq(sharedDocuments.id, docId))
+      .returning();
+
+    return { updated, newVersion };
   });
 
-  const updates: Record<string, unknown> = {
-    body: body.body,
-    version: newVersion,
-    lastEditedBy: agentId,
-    updatedAt: new Date(),
-  };
-  if (body.name) updates.name = body.name;
+  if (!result) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
-  const [updated] = await db
-    .update(sharedDocuments)
-    .set(updates)
-    .where(eq(sharedDocuments.id, docId))
-    .returning();
-
-  await audit(agentId, "document.updated", "shared_document", docId, { version: newVersion });
+  await audit(agentId, "document.updated", "shared_document", docId, { version: result.newVersion });
 
   return c.json({
-    id: updated.id,
-    name: updated.name,
-    version: updated.version,
-    last_edited_by: updated.lastEditedBy,
-    updated_at: updated.updatedAt,
+    id: result.updated.id,
+    name: result.updated.name,
+    version: result.updated.version,
+    last_edited_by: result.updated.lastEditedBy,
+    updated_at: result.updated.updatedAt,
   });
 });
 
@@ -398,17 +404,22 @@ app.put("/workspace/:workspaceId/:docId", requireValidUUIDs("workspaceId", "docI
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   if (body.name && body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
-  const [existing] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
-  if (!existing || existing.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+  const result = await db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
+    if (!existing || existing.scope !== workspaceScope(workspaceId)) return null;
 
-  const newVersion = existing.version + 1;
-  await db.insert(sharedDocumentVersions).values({ documentId: docId, version: newVersion, body: body.body, editedBy: agentId });
-  const updates: Record<string, unknown> = { body: body.body, version: newVersion, lastEditedBy: agentId, updatedAt: new Date() };
-  if (body.name) updates.name = body.name;
-  const [updated] = await db.update(sharedDocuments).set(updates).where(eq(sharedDocuments.id, docId)).returning();
-  await audit(agentId, "document.updated", "shared_document", docId, { version: newVersion });
+    const newVersion = existing.version + 1;
+    await tx.insert(sharedDocumentVersions).values({ documentId: docId, version: newVersion, body: body.body, editedBy: agentId });
+    const updates: Record<string, unknown> = { body: body.body, version: newVersion, lastEditedBy: agentId, updatedAt: new Date() };
+    if (body.name) updates.name = body.name;
+    const [updated] = await tx.update(sharedDocuments).set(updates).where(eq(sharedDocuments.id, docId)).returning();
+    return { updated, newVersion };
+  });
 
-  return c.json({ id: updated.id, name: updated.name, version: updated.version, last_edited_by: updated.lastEditedBy, updated_at: updated.updatedAt });
+  if (!result) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+  await audit(agentId, "document.updated", "shared_document", docId, { version: result.newVersion });
+
+  return c.json({ id: result.updated.id, name: result.updated.name, version: result.updated.version, last_edited_by: result.updated.lastEditedBy, updated_at: result.updated.updatedAt });
 });
 
 // Workspace document version history
@@ -669,47 +680,52 @@ app.put("/:contactId/:docId", requireValidUUIDs("contactId", "docId"), async (c)
   if (body.name && body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
   const scope = contactScope(agentId, contactId);
-  const [existing] = await db
-    .select()
-    .from(sharedDocuments)
-    .where(eq(sharedDocuments.id, docId))
-    .limit(1);
 
-  if (!existing || existing.scope !== scope) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+  const result = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(sharedDocuments)
+      .where(eq(sharedDocuments.id, docId))
+      .limit(1);
 
-  const newVersion = existing.version + 1;
+    if (!existing || existing.scope !== scope) return null;
 
-  // Save version history
-  await db.insert(sharedDocumentVersions).values({
-    documentId: docId,
-    version: newVersion,
-    body: body.body,
-    editedBy: agentId,
+    const newVersion = existing.version + 1;
+
+    await tx.insert(sharedDocumentVersions).values({
+      documentId: docId,
+      version: newVersion,
+      body: body.body,
+      editedBy: agentId,
+    });
+
+    const updates: Record<string, unknown> = {
+      body: body.body,
+      version: newVersion,
+      lastEditedBy: agentId,
+      updatedAt: new Date(),
+    };
+    if (body.name) updates.name = body.name;
+
+    const [updated] = await tx
+      .update(sharedDocuments)
+      .set(updates)
+      .where(eq(sharedDocuments.id, docId))
+      .returning();
+
+    return { updated, newVersion };
   });
 
-  // Update current document
-  const updates: Record<string, unknown> = {
-    body: body.body,
-    version: newVersion,
-    lastEditedBy: agentId,
-    updatedAt: new Date(),
-  };
-  if (body.name) updates.name = body.name;
+  if (!result) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
-  const [updated] = await db
-    .update(sharedDocuments)
-    .set(updates)
-    .where(eq(sharedDocuments.id, docId))
-    .returning();
-
-  await audit(agentId, "document.updated", "shared_document", docId, { version: newVersion });
+  await audit(agentId, "document.updated", "shared_document", docId, { version: result.newVersion });
 
   return c.json({
-    id: updated.id,
-    name: updated.name,
-    version: updated.version,
-    last_edited_by: updated.lastEditedBy,
-    updated_at: updated.updatedAt,
+    id: result.updated.id,
+    name: result.updated.name,
+    version: result.updated.version,
+    last_edited_by: result.updated.lastEditedBy,
+    updated_at: result.updated.updatedAt,
   });
 });
 

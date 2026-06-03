@@ -81,31 +81,37 @@ app.put("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMemb
 
   const scope = roomScope(roomId);
   const ifMatch = c.req.header("If-Match");
-  const existing = await db
-    .select()
-    .from(sharedFacts)
-    .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)))
-    .limit(1);
 
-  if (existing.length > 0) {
-    if (ifMatch && ifMatch !== String(existing[0].version)) {
-      return c.json({ error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version }, 412);
+  const result = await db.transaction(async (tx) => {
+    const existing = await tx
+      .select()
+      .from(sharedFacts)
+      .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      if (ifMatch && ifMatch !== String(existing[0].version)) {
+        return { error: true as const, status: 412 as const, body: { error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version } };
+      }
+      const nextVersion = existing[0].version + 1;
+      await tx
+        .update(sharedFacts)
+        .set({ value: body.value, version: nextVersion, updatedBy: agentId, updatedAt: new Date() })
+        .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
+      return { error: false as const, version: nextVersion };
+    } else {
+      if (ifMatch && ifMatch !== "*") {
+        return { error: true as const, status: 412 as const, body: { error: "Fact not found for If-Match", code: "NOT_FOUND" } };
+      }
+      await tx.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
+      return { error: false as const, version: 1 };
     }
-    const nextVersion = existing[0].version + 1;
-    await db
-      .update(sharedFacts)
-      .set({ value: body.value, version: nextVersion, updatedBy: agentId, updatedAt: new Date() })
-      .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
-    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { room_id: roomId, key, version: nextVersion });
-    return c.json({ key, value: body.value, version: nextVersion, updated_by: agentId });
-  } else {
-    if (ifMatch && ifMatch !== "*") {
-      return c.json({ error: "Fact not found for If-Match", code: "NOT_FOUND" }, 412);
-    }
-    await db.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
-  }
-  await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { room_id: roomId, key, version: 1 });
-  return c.json({ key, value: body.value, version: 1, updated_by: agentId });
+  });
+
+  if (result.error) return c.json(result.body, result.status);
+
+  await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { room_id: roomId, key, version: result.version });
+  return c.json({ key, value: body.value, version: result.version, updated_by: agentId });
 });
 
 app.delete("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
@@ -175,24 +181,30 @@ app.put("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), 
 
   const scope = workspaceScope(workspaceId);
   const ifMatch = c.req.header("If-Match");
-  const existing = await db.select().from(sharedFacts).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key))).limit(1);
 
-  if (existing.length > 0) {
-    if (ifMatch && ifMatch !== String(existing[0].version)) {
-      return c.json({ error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version }, 412);
+  const result = await db.transaction(async (tx) => {
+    const existing = await tx.select().from(sharedFacts).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key))).limit(1);
+
+    if (existing.length > 0) {
+      if (ifMatch && ifMatch !== String(existing[0].version)) {
+        return { error: true as const, status: 412 as const, body: { error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version } };
+      }
+      const nextVersion = existing[0].version + 1;
+      await tx.update(sharedFacts).set({ value: body.value, version: nextVersion, updatedBy: agentId, updatedAt: new Date() }).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
+      return { error: false as const, version: nextVersion };
+    } else {
+      if (ifMatch && ifMatch !== "*") {
+        return { error: true as const, status: 412 as const, body: { error: "Fact not found for If-Match", code: "NOT_FOUND" } };
+      }
+      await tx.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
+      return { error: false as const, version: 1 };
     }
-    const nextVersion = existing[0].version + 1;
-    await db.update(sharedFacts).set({ value: body.value, version: nextVersion, updatedBy: agentId, updatedAt: new Date() }).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
-    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { workspace_id: workspaceId, key, version: nextVersion });
-    return c.json({ key, value: body.value, version: nextVersion, updated_by: agentId });
-  } else {
-    if (ifMatch && ifMatch !== "*") {
-      return c.json({ error: "Fact not found for If-Match", code: "NOT_FOUND" }, 412);
-    }
-    await db.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
-  }
-  await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { workspace_id: workspaceId, key, version: 1 });
-  return c.json({ key, value: body.value, version: 1, updated_by: agentId });
+  });
+
+  if (result.error) return c.json(result.body, result.status);
+
+  await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { workspace_id: workspaceId, key, version: result.version });
+  return c.json({ key, value: body.value, version: result.version, updated_by: agentId });
 });
 
 app.delete("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
@@ -282,31 +294,37 @@ app.put("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
 
   const scope = contactScope(agentId, contactId);
   const ifMatch = c.req.header("If-Match");
-  const existing = await db
-    .select()
-    .from(sharedFacts)
-    .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)))
-    .limit(1);
 
-  if (existing.length > 0) {
-    if (ifMatch && ifMatch !== String(existing[0].version)) {
-      return c.json({ error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version }, 412);
+  const result = await db.transaction(async (tx) => {
+    const existing = await tx
+      .select()
+      .from(sharedFacts)
+      .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      if (ifMatch && ifMatch !== String(existing[0].version)) {
+        return { error: true as const, status: 412 as const, body: { error: "Version mismatch", code: "VALIDATION_ERROR", current_version: existing[0].version } };
+      }
+      const nextVersion = existing[0].version + 1;
+      await tx
+        .update(sharedFacts)
+        .set({ value: body.value, version: nextVersion, updatedBy: agentId, updatedAt: new Date() })
+        .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
+      return { error: false as const, version: nextVersion };
+    } else {
+      if (ifMatch && ifMatch !== "*") {
+        return { error: true as const, status: 412 as const, body: { error: "Fact not found for If-Match", code: "NOT_FOUND" } };
+      }
+      await tx.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
+      return { error: false as const, version: 1 };
     }
-    const nextVersion = existing[0].version + 1;
-    await db
-      .update(sharedFacts)
-      .set({ value: body.value, version: nextVersion, updatedBy: agentId, updatedAt: new Date() })
-      .where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key)));
-    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { contact_id: contactId, key, version: nextVersion });
-    return c.json({ key, value: body.value, version: nextVersion, updated_by: agentId });
-  } else {
-    if (ifMatch && ifMatch !== "*") {
-      return c.json({ error: "Fact not found for If-Match", code: "NOT_FOUND" }, 412);
-    }
-    await db.insert(sharedFacts).values({ scope, key, value: body.value, updatedBy: agentId });
-  }
-  await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { contact_id: contactId, key, version: 1 });
-  return c.json({ key, value: body.value, version: 1, updated_by: agentId });
+  });
+
+  if (result.error) return c.json(result.body, result.status);
+
+  await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { contact_id: contactId, key, version: result.version });
+  return c.json({ key, value: body.value, version: result.version, updated_by: agentId });
 });
 
 app.delete("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
