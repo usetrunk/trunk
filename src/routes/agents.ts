@@ -181,6 +181,11 @@ app.put("/me/status", authMiddleware, async (c) => {
 // NOTE: must be before /:id to avoid being caught by the param route
 app.get("/presence", authMiddleware, async (c) => {
   const agent = c.get("agent");
+  const rateLimit = await checkRateLimit(`read:${agent.id}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   if (!agent.workspaceId) {
     return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
   }
@@ -563,6 +568,11 @@ app.post("/me/webhook/test", authMiddleware, async (c) => {
 // Agent analytics — message volume, top contacts, response times
 app.get("/me/analytics", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const daysParam = parseInt(c.req.query("days") || "7", 10);
   const days = isNaN(daysParam) ? 7 : Math.min(Math.max(1, daysParam), 30);
 

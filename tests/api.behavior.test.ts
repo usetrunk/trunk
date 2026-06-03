@@ -9604,6 +9604,111 @@ describe("Hono API behavior", () => {
     expect(result.events.length).toBeGreaterThan(0);
     expect(result.events.every((e) => e.action === "message.send" && e.target_type === "message")).toBe(true);
   });
+
+  // --- Rate limiting on read endpoints ---
+
+  it("reactions endpoint includes rate limit headers", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "text",
+      payload: { content: "rate limit reactions test" },
+    });
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const res = await app.request(`/messages/${msg.id}/reactions`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("thread pins endpoint includes rate limit headers", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "text",
+      payload: { content: "rate limit pins test" },
+    });
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const res = await app.request(`/messages/thread/${msg.thread_id}/pins`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("thread summary endpoint includes rate limit headers", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "text",
+      payload: { content: "rate limit summary test" },
+    });
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const res = await app.request(`/messages/thread/${msg.thread_id}/summary`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("labels/all endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const secret = alpha.secret;
+    const res = await app.request("/messages/labels/all", {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("message labels endpoint includes rate limit headers", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const msg = await alphaClient.send({
+      to: beta.agent_id,
+      type: "text",
+      payload: { content: "rate limit msg labels test" },
+    });
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const res = await app.request(`/messages/${msg.id}/labels`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("presence endpoint includes rate limit headers", async () => {
+    const alpha = await createClient().register({ name: "presence-rl", owner: "Test" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.createWorkspace({ name: "RL Workspace" });
+    const secret = alpha.secret;
+    const res = await app.request("/agents/presence", {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("analytics endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const secret = alpha.secret;
+    const res = await app.request("/agents/me/analytics", {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
 });
 
 async function registerPair(): Promise<{
