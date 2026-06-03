@@ -64,6 +64,7 @@ app.post("/", async (c) => {
   }
 
   // Validate scheduled_at if provided
+  const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
   let scheduledAt: Date | undefined;
   if (body.scheduled_at) {
     scheduledAt = new Date(body.scheduled_at);
@@ -73,9 +74,13 @@ app.post("/", async (c) => {
     if (scheduledAt.getTime() <= Date.now()) {
       return c.json({ error: "scheduled_at must be in the future", code: "INVALID_INPUT" }, 400);
     }
+    if (scheduledAt.getTime() > Date.now() + MAX_SCHEDULE_AHEAD_MS) {
+      return c.json({ error: "scheduled_at must be within 30 days", code: "INVALID_INPUT" }, 400);
+    }
   }
 
   // Validate expiry (expires_at or ttl_seconds)
+  const MAX_EXPIRY_MS = MAX_TTL_SECONDS * 1000; // 1 year
   let expiresAt: Date | undefined;
   if (body.expires_at) {
     expiresAt = new Date(body.expires_at);
@@ -84,6 +89,9 @@ app.post("/", async (c) => {
     }
     if (expiresAt.getTime() <= Date.now()) {
       return c.json({ error: "expires_at must be in the future", code: "INVALID_INPUT" }, 400);
+    }
+    if (expiresAt.getTime() > Date.now() + MAX_EXPIRY_MS) {
+      return c.json({ error: "expires_at must be within 1 year", code: "INVALID_INPUT" }, 400);
     }
   } else if (body.ttl_seconds && body.ttl_seconds > 0) {
     const capped = Math.min(body.ttl_seconds, MAX_TTL_SECONDS);

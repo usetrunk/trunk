@@ -6620,6 +6620,50 @@ describe("Hono API behavior", () => {
     ).rejects.toMatchObject({ status: 400, message: "scheduled_at must be a valid ISO 8601 date" });
   });
 
+  it("send rejects scheduled_at more than 30 days ahead", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const farFuture = new Date(Date.now() + 31 * 24 * 60 * 60 * 1000).toISOString();
+    await expect(
+      alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "too far" },
+        scheduled_at: farFuture,
+      })
+    ).rejects.toMatchObject({ status: 400, message: "scheduled_at must be within 30 days" });
+  });
+
+  it("send rejects expires_at more than 1 year ahead", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const farFuture = new Date(Date.now() + 366 * 24 * 60 * 60 * 1000).toISOString();
+    await expect(
+      alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "too far" },
+        expires_at: farFuture,
+      })
+    ).rejects.toMatchObject({ status: 400, message: "expires_at must be within 1 year" });
+  });
+
+  it("send accepts scheduled_at within 30 days", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const validDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const result = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "scheduled ok" },
+      scheduled_at: validDate,
+    });
+    expect(result.scheduled_at).toBeDefined();
+  });
+
   // --- Audit log ---
 
   it("auditLog returns events for the authenticated agent", async () => {
