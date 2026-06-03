@@ -7878,12 +7878,12 @@ describe("Hono API behavior", () => {
 
   it("dashboard inbox view shows status filter tabs", async () => {
     const registered = await createClient().register({ name: "filter-viewer" });
-    const res = await app.request(`/dashboard/inbox?status=read`, {
+    const res = await app.request(`/dashboard/inbox?status=delivered`, {
       headers: { Authorization: `Bearer ${registered.secret}` },
     });
     expect(res.status).toBe(200);
     const body = await res.text();
-    expect(body).toContain("Inbox (read)");
+    expect(body).toContain("Inbox (delivered)");
     expect(body).toContain("pending");
     expect(body).toContain("replied");
   });
@@ -13023,6 +13023,98 @@ describe("Hono API behavior", () => {
       due: "2024-02-29",
     });
     expect(res.status).toBe(201);
+  });
+
+  // === Rate limit: DELETE /templates/:id ===
+  it("rate limits template delete at 30/min", async () => {
+    const alpha = await createClient().register({ name: "tmpl-del-rl" });
+    const fakeId = "00000000-0000-0000-0000-000000000099";
+
+    for (let i = 0; i < 30; i++) {
+      await app.request(`/templates/${fakeId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request(`/templates/${fakeId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  // === Rate limit: GET /messages/:id/edits ===
+  it("rate limits message edit history at 60/min", async () => {
+    const alpha = await createClient().register({ name: "edit-hist-rl" });
+    const fakeId = "00000000-0000-0000-0000-000000000099";
+
+    for (let i = 0; i < 60; i++) {
+      await app.request(`/messages/${fakeId}/edits`, {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request(`/messages/${fakeId}/edits`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  // === Rate limit: GET /agents/me/webhook/deliveries ===
+  it("rate limits webhook deliveries list at 60/min", async () => {
+    const alpha = await createClient().register({ name: "wh-del-rl" });
+
+    for (let i = 0; i < 60; i++) {
+      await app.request("/agents/me/webhook/deliveries", {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/agents/me/webhook/deliveries", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  // === UUID validation: POST /rooms/:roomId/kick ===
+  it("rejects room kick with invalid UUID agent_id", async () => {
+    const alpha = await createClient().register({ name: "kick-uuid-test" });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Kick Room" });
+    const room = await roomRes.json() as { id: string };
+
+    const res = await app.request(`/rooms/${room.id}/kick`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ agent_id: "not-a-uuid" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  // === Dashboard inbox: invalid status filter ===
+  it("rejects dashboard inbox with invalid status filter", async () => {
+    const alpha = await createClient().register({ name: "dash-status-test" });
+    const res = await app.request("/dashboard/inbox?status=malicious", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // === Messages search: type filter too long ===
+  it("rejects message search with oversized type filter", async () => {
+    const alpha = await createClient().register({ name: "search-type-test" });
+    const longType = "a".repeat(51);
+    const res = await app.request(`/messages/search?type=${longType}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("VALIDATION_ERROR");
   });
 });
 

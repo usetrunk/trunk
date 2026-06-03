@@ -5,7 +5,7 @@ import { and, eq, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
-import { requireValidUUIDs } from "../lib/errors.js";
+import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -242,6 +242,7 @@ app.post("/:roomId/kick", requireValidUUIDs("roomId"), async (c) => {
   const body = await c.req.json<{ agent_id: string }>();
 
   if (!body.agent_id) return c.json({ error: "agent_id is required", code: "MISSING_FIELD" }, 400);
+  if (!isValidUUID(body.agent_id)) return c.json({ error: "Invalid agent_id format", code: "INVALID_INPUT" }, 400);
   if (body.agent_id === agentId) return c.json({ error: "Cannot kick yourself", code: "SELF_ACTION" }, 400);
 
   // Verify caller is creator/admin

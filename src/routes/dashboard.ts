@@ -439,7 +439,11 @@ app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
 app.get("/inbox", async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
+  const VALID_STATUSES = ["pending", "delivered", "processed", "replied"];
   const statusFilter = c.req.query("status") || "pending";
+  if (!VALID_STATUSES.includes(statusFilter)) {
+    return c.text("Invalid status filter", 400);
+  }
 
   const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);

@@ -234,6 +234,11 @@ app.patch("/:id", requireValidUUIDs("id"), async (c) => {
 // Delete a template
 app.delete("/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`templates:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const templateId = c.req.param("id");
 
   const [template] = await db

@@ -383,6 +383,11 @@ app.post("/me/webhook/rotate-secret", authMiddleware, async (c) => {
 // List recent webhook deliveries
 app.get("/me/webhook/deliveries", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const limitParam = parseInt(c.req.query("limit") || "20", 10);
   const limit = isNaN(limitParam) ? 20 : Math.min(Math.max(1, limitParam), 100);
 
