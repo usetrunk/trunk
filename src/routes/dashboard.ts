@@ -625,11 +625,10 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     }
   }
 
-  // Build Mermaid DAG for dependency visualization
-  const hasDeps = roomTasks.some(t => ((t.dependsOn as string[]) || []).length > 0);
+  // Build Mermaid DAG for task visualization
   const taskIdSet = new Set(roomTasks.map(t => t.id));
   let mermaidDef = "";
-  if (hasDeps && roomTasks.length > 0) {
+  if (roomTasks.length > 0) {
     // Sanitize title for mermaid (escape quotes, brackets)
     const sanitize = (s: string) => s.replace(/["\[\](){}|<>#&]/g, " ").replace(/\s+/g, " ").trim();
     const shortId = (id: string) => `t_${id.replace(/-/g, "_")}`;
