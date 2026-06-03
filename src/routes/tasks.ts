@@ -122,6 +122,13 @@ app.post("/", async (c) => {
 // List tasks for a contact pair
 app.get("/:contactId", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const contactId = c.req.param("contactId");
   const status = c.req.query("status");
   if (status && !isValidStatus(status)) {
@@ -169,6 +176,13 @@ app.get("/:contactId", async (c) => {
 // List tasks for a room
 app.get("/room/:roomId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const roomId = c.req.param("roomId");
   const status = c.req.query("status");
   if (status && !isValidStatus(status)) {
@@ -213,6 +227,13 @@ app.get("/room/:roomId", requireRoomMember(), async (c) => {
 // List tasks for a workspace
 app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const workspaceId = c.req.param("workspaceId");
   const status = c.req.query("status");
   if (status && !isValidStatus(status)) {
@@ -344,6 +365,13 @@ app.patch("/:scopeId/:taskId", async (c) => {
 // Gantt data endpoint — returns tasks with dependency info for visualization
 app.get("/gantt/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const workspaceId = c.req.param("workspaceId");
 
   const scope = `workspace:${workspaceId}`;
