@@ -102,7 +102,7 @@ export async function deliverWebhook(
         break;
       }
     } catch (err) {
-      lastError = err instanceof Error ? err.message : "network error";
+      lastError = err instanceof Error ? err.constructor.name : "network_error";
       // Network error or timeout — retry
     }
   }

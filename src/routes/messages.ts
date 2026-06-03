@@ -1735,6 +1735,10 @@ app.post("/:id/react", requireValidUUIDs("id"), async (c) => {
   if (body.emoji.length > 32) {
     return c.json({ error: "emoji too long", code: "VALIDATION_ERROR" }, 400);
   }
+  // Reject control characters (except common whitespace-like emoji modifiers)
+  if (/[\x00-\x1f\x7f]/.test(body.emoji)) {
+    return c.json({ error: "emoji contains invalid characters", code: "VALIDATION_ERROR" }, 400);
+  }
 
   // Verify message exists and agent is sender or recipient
   const [msg] = await db
@@ -2107,9 +2111,10 @@ async function notifyRealtime(agentId: string, message: MessageRow): Promise<voi
   try {
     await notifyPushWorker(agentId, message);
   } catch (error) {
+    const errorType = error instanceof Error ? error.constructor.name : "unknown";
     await audit(message.fromAgent, "message.push_failed", "message", message.id, {
       to: agentId,
-      error: error instanceof Error ? error.message : "unknown",
+      error_type: errorType,
     }).catch(() => {});
   }
 }
