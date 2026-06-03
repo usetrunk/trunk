@@ -831,6 +831,9 @@ app.get("/scheduled", async (c) => {
 app.get("/by-label/:label", async (c) => {
   const agentId = c.get("agentId");
   const label = c.req.param("label").trim().toLowerCase();
+  if (label.length === 0 || label.length > 50) {
+    return c.json({ error: "label must be between 1 and 50 characters", code: "VALIDATION_ERROR" }, 400);
+  }
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
@@ -1132,14 +1135,14 @@ app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
     .where(
       and(
         eq(messages.threadId, threadId),
-        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId)),
+        ne(messages.status, "deleted")
       )
     )
-    .orderBy(messages.createdAt);
+    .orderBy(messages.createdAt)
+    .limit(queryLimit + 1);
 
-  const visible = rows.filter((row) => row.status !== "deleted");
-  const limited = visible.slice(0, queryLimit);
-  return c.json({ messages: limited, has_more: visible.length > queryLimit, total: visible.length });
+  return c.json({ messages: rows.slice(0, queryLimit), has_more: rows.length > queryLimit });
 });
 
 app.delete("/:id", requireValidUUIDs("id"), async (c) => {

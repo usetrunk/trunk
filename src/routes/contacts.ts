@@ -695,7 +695,8 @@ app.get("/:id/tags", requireValidUUIDs("id"), async (c) => {
     .where(and(
       eq(contactTags.agentId, agentId),
       eq(contactTags.contactAgentId, contactId)
-    ));
+    ))
+    .limit(100);
 
   return c.json({ tags: rows.map((r) => r.tag) });
 });

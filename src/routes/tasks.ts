@@ -184,7 +184,9 @@ app.get("/:contactId", requireValidUUIDs("contactId"), async (c) => {
     return c.json({ error: `Invalid status filter. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
   }
   const ownerFilter = c.req.query("owner");
+  if (ownerFilter && !isValidUUID(ownerFilter)) return c.json({ error: "Invalid owner UUID format", code: "INVALID_INPUT" }, 400);
   const groupFilter = c.req.query("group");
+  if (groupFilter && groupFilter.length > 100) return c.json({ error: "group filter too long", code: "VALIDATION_ERROR" }, 400);
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
@@ -238,7 +240,9 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), requireRoomMember(), async
     return c.json({ error: `Invalid status filter. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
   }
   const ownerFilter = c.req.query("owner");
+  if (ownerFilter && !isValidUUID(ownerFilter)) return c.json({ error: "Invalid owner UUID format", code: "INVALID_INPUT" }, 400);
   const groupFilter = c.req.query("group");
+  if (groupFilter && groupFilter.length > 100) return c.json({ error: "group filter too long", code: "VALIDATION_ERROR" }, 400);
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
@@ -289,7 +293,9 @@ app.get("/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWork
     return c.json({ error: `Invalid status filter. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
   }
   const ownerFilter = c.req.query("owner");
+  if (ownerFilter && !isValidUUID(ownerFilter)) return c.json({ error: "Invalid owner UUID format", code: "INVALID_INPUT" }, 400);
   const groupFilter = c.req.query("group");
+  if (groupFilter && groupFilter.length > 100) return c.json({ error: "group filter too long", code: "VALIDATION_ERROR" }, 400);
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
@@ -431,7 +437,8 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
     const allScopeTasks = await db
       .select()
       .from(tasks)
-      .where(eq(tasks.scope, updated.scope));
+      .where(eq(tasks.scope, updated.scope))
+      .limit(500);
 
     const doneIds = new Set(allScopeTasks.filter(t => t.status === "done").map(t => t.id));
 

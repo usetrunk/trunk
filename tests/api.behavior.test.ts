@@ -13811,7 +13811,6 @@ describe("Hono API behavior", () => {
     const body = await res.json();
     expect(body.messages).toHaveLength(1);
     expect(body.has_more).toBe(false);
-    expect(body.total).toBe(1);
   });
 
   it("GET /messages/thread/:threadId respects limit query param", async () => {
@@ -13829,7 +13828,69 @@ describe("Hono API behavior", () => {
     const body = await res.json();
     expect(body.messages).toHaveLength(2);
     expect(body.has_more).toBe(true);
-    expect(body.total).toBe(3);
+  });
+
+  it("GET /messages/thread/:threadId excludes deleted messages at DB level", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({ to: beta.agent_id, type: "text", payload: { content: "keep" } });
+    const reply = await betaClient.reply(sent.id, { type: "text", payload: { content: "delete-me" } });
+    // Delete the reply
+    await app.request(`/messages/${reply.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    const res = await app.request(`/messages/thread/${sent.thread_id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    const body = await res.json();
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].id).toBe(sent.id);
+    expect(body.has_more).toBe(false);
+  });
+
+  it("GET /messages/by-label/:label rejects labels over 50 chars", async () => {
+    const alpha = await createClient().register({ name: "label-len-test" });
+    const longLabel = "a".repeat(51);
+    const res = await app.request(`/messages/by-label/${longLabel}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("GET /messages/by-label/:label rejects empty label", async () => {
+    const alpha = await createClient().register({ name: "label-empty-test" });
+    const res = await app.request(`/messages/by-label/%20`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("GET /tasks/:contactId rejects invalid owner UUID filter", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const res = await app.request(`/tasks/${beta.agent_id}?owner=not-a-uuid`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("GET /tasks/:contactId rejects overly long group filter", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const longGroup = "g".repeat(101);
+    const res = await app.request(`/tasks/${beta.agent_id}?group=${longGroup}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
   });
 
   it("GET /documents/room/:roomId/:docId includes rate limit headers", async () => {
