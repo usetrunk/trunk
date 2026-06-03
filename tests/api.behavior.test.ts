@@ -3491,7 +3491,7 @@ describe("Hono API behavior", () => {
     }
   });
 
-  it("rate limits bulk operations at 30/min shared across bulk endpoints", async () => {
+  it("rate limits bulk operations at 30/min per operation type", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
 
@@ -3502,7 +3502,7 @@ describe("Hono API behavior", () => {
       payload: { content: "bulk-rl-test" },
     });
 
-    // Exhaust the bulk rate limit (30 calls)
+    // Exhaust the ack-bulk rate limit (30 calls)
     for (let i = 0; i < 30; i++) {
       const res = await app.request("/messages/ack-bulk", {
         method: "POST",
@@ -3515,7 +3515,7 @@ describe("Hono API behavior", () => {
       expect(res.status).toBe(200);
     }
 
-    // 31st call should be rate limited
+    // 31st ack-bulk call should be rate limited
     const res = await app.request("/messages/ack-bulk", {
       method: "POST",
       headers: {
@@ -3529,6 +3529,27 @@ describe("Hono API behavior", () => {
     expect(body.code).toBe("RATE_LIMITED");
     expect(res.headers.get("X-RateLimit-Remaining")).toBe("0");
     expect(res.headers.get("Retry-After")).toBeTruthy();
+
+    // Other bulk operations should still work (independent rate limit buckets)
+    const readRes = await app.request("/messages/read-bulk", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ message_ids: ["00000000-0000-0000-0000-000000000099"] }),
+    });
+    expect(readRes.status).toBe(200);
+
+    const deleteRes = await app.request("/messages/delete-bulk", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ message_ids: ["00000000-0000-0000-0000-000000000099"] }),
+    });
+    expect(deleteRes.status).toBe(200);
   });
 
   it("rate limits pairing attempts at 20/min", async () => {

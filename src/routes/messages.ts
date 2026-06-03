@@ -1258,7 +1258,7 @@ app.get("/:id/edits", requireValidUUIDs("id"), async (c) => {
 app.post("/ack-bulk", async (c) => {
   const agentId = c.get("agentId");
 
-  const rateLimit = await checkRateLimit(`bulk:${agentId}`, 30, 60 * 1000);
+  const rateLimit = await checkRateLimit(`bulk:ack:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
@@ -1303,7 +1303,7 @@ app.post("/ack-bulk", async (c) => {
 app.post("/read-bulk", async (c) => {
   const agentId = c.get("agentId");
 
-  const rateLimit = await checkRateLimit(`bulk:${agentId}`, 30, 60 * 1000);
+  const rateLimit = await checkRateLimit(`bulk:read:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
@@ -1348,7 +1348,7 @@ app.post("/read-bulk", async (c) => {
 app.post("/delete-bulk", async (c) => {
   const agentId = c.get("agentId");
 
-  const rateLimit = await checkRateLimit(`bulk:${agentId}`, 30, 60 * 1000);
+  const rateLimit = await checkRateLimit(`bulk:delete:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
@@ -1393,7 +1393,7 @@ app.post("/delete-bulk", async (c) => {
 app.post("/label-bulk", async (c) => {
   const agentId = c.get("agentId");
 
-  const rateLimit = await checkRateLimit(`bulk:${agentId}`, 30, 60 * 1000);
+  const rateLimit = await checkRateLimit(`bulk:label:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
   if (!rateLimit.ok) {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
