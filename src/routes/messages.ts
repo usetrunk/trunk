@@ -122,6 +122,8 @@ app.post("/", async (c) => {
     const created: MessageRow[] = [];
 
     for (const recipientId of recipients) {
+      if (await isBlocked(agentId, recipientId)) continue;
+
       const [message] = await db
         .insert(messages)
         .values({
@@ -152,9 +154,13 @@ app.post("/", async (c) => {
       created.push(message);
     }
 
+    if (created.length === 0) {
+      return c.json({ error: "All recipients have blocked you", code: "BLOCKED" }, 403);
+    }
+
     await audit(agentId, "message.send_workspace", "workspace", workspaceId, {
       thread_id: threadId,
-      recipient_count: recipients.length,
+      recipient_count: created.length,
     });
 
     return c.json({
@@ -162,7 +168,7 @@ app.post("/", async (c) => {
       thread_id: threadId,
       status: "delivered",
       created_at: created[0].createdAt,
-      recipients: recipients.length,
+      recipients: created.length,
     }, 201);
   }
 
@@ -205,6 +211,8 @@ app.post("/", async (c) => {
     const created: MessageRow[] = [];
 
     for (const recipientId of recipients) {
+      if (await isBlocked(agentId, recipientId)) continue;
+
       const [message] = await db
         .insert(messages)
         .values({
@@ -235,9 +243,13 @@ app.post("/", async (c) => {
       created.push(message);
     }
 
+    if (created.length === 0) {
+      return c.json({ error: "All recipients have blocked you", code: "BLOCKED" }, 403);
+    }
+
     await audit(agentId, "message.send_room", "room", roomId, {
       thread_id: threadId,
-      recipient_count: recipients.length,
+      recipient_count: created.length,
     });
 
     return c.json({
@@ -245,7 +257,7 @@ app.post("/", async (c) => {
       thread_id: threadId,
       status: "delivered",
       created_at: created[0].createdAt,
-      recipients: recipients.length,
+      recipients: created.length,
     }, 201);
   }
 
@@ -1328,6 +1340,10 @@ app.post("/:id/reply", async (c) => {
   }>();
   const idempotencyKey = requireIdempotencyKey(c);
   if (idempotencyKey instanceof Response) return idempotencyKey;
+
+  if (!body.type || !body.payload) {
+    return c.json({ error: "type and payload are required", code: "VALIDATION_ERROR" }, 400);
+  }
 
   // Find original message
   const [original] = await db

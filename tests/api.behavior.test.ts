@@ -1665,6 +1665,29 @@ describe("Hono API behavior", () => {
     expect(gantt.summary).toEqual({ total: 0, done: 0, in_progress: 0, blocked: 0, open: 0 });
   });
 
+  it("SDK ganttData round-trip", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "sdk-gantt-1" });
+    const alphaClient = createClient(alpha.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "SDK Gantt" });
+
+    // Create a task via raw request so gantt has data
+    await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "SDK gantt task", group: "core" }),
+    });
+
+    const gantt = await alphaClient.ganttData(ws.id);
+    expect(gantt.tasks).toHaveLength(1);
+    expect(gantt.tasks[0].title).toBe("SDK gantt task");
+    expect(gantt.groups.core).toHaveLength(1);
+    expect(gantt.ungrouped).toHaveLength(0);
+    expect(gantt.summary.total).toBe(1);
+    expect(gantt.summary.open).toBe(1);
+  });
+
   // --- SDK room method tests ---
 
   it("SDK createRoom + joinRoom + listRooms round-trip", async () => {
@@ -3004,6 +3027,44 @@ describe("Hono API behavior", () => {
         status: "delivered",
       });
     }
+  });
+
+  it("reply rejects missing type or payload", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "Need reply" },
+    });
+
+    // Missing type
+    const res1 = await app.request(`/messages/${sent.id}/reply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${beta.secret}`,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ payload: { content: "no type" } }),
+    });
+    expect(res1.status).toBe(400);
+    const err1 = await res1.json() as Record<string, unknown>;
+    expect(err1.code).toBe("VALIDATION_ERROR");
+
+    // Missing payload
+    const res2 = await app.request(`/messages/${sent.id}/reply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${beta.secret}`,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ type: "answer" }),
+    });
+    expect(res2.status).toBe(400);
+    const err2 = await res2.json() as Record<string, unknown>;
+    expect(err2.code).toBe("VALIDATION_ERROR");
   });
 
   it("requires Idempotency-Key for raw message sends", async () => {
@@ -6243,6 +6304,93 @@ describe("Hono API behavior", () => {
   it("returns 404 when unblocking a non-blocked agent", async () => {
     const { alpha, betaClient } = await registerPair();
     await expect(betaClient.unblockContact(alpha.agent_id)).rejects.toThrow(TrunkApiError);
+  });
+
+  it("blocked agent is excluded from workspace fan-out", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-block-1" });
+    const beta = await anon.register({ name: "ws-block-2" });
+    const external = await anon.register({ name: "ws-block-ext" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const externalClient = createClient(external.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "BlockTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+    await externalClient.pair({ code: ws.pairing_code });
+
+    // Beta blocks external
+    await betaClient.blockContact(external.agent_id, "spam");
+
+    // External sends to workspace — should only reach alpha, not beta
+    const sent = await externalClient.send({
+      to: `workspace:${ws.id}`,
+      type: "update",
+      payload: { content: "Broadcast to team" },
+    });
+
+    expect(sent.status).toBe("delivered");
+    expect(sent.recipients).toBe(1); // only alpha
+
+    const alphaInbox = await alphaClient.inbox();
+    const betaInbox = await betaClient.inbox();
+    expect(alphaInbox.messages).toHaveLength(1);
+    expect(betaInbox.messages).toHaveLength(0);
+  });
+
+  it("blocked agent is excluded from room fan-out", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Register a third agent and create room
+    const gammaReg = await createClient().register({ name: "room-block-gamma" });
+    const gammaClient = createClient(gammaReg.secret);
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Block Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+    await joinRoomRaw(gammaReg.secret, room.pairing_code);
+
+    // Beta blocks alpha
+    await betaClient.blockContact(alpha.agent_id, "annoying");
+
+    // Alpha sends to room — should reach gamma but not beta
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Room message" },
+    });
+
+    expect(receipt.status).toBe("delivered");
+    expect(receipt.recipients).toBe(1); // only gamma
+
+    const betaInbox = await betaClient.inbox();
+    const gammaInbox = await gammaClient.inbox();
+    expect(betaInbox.messages).toHaveLength(0);
+    expect(gammaInbox.messages).toHaveLength(1);
+  });
+
+  it("returns 403 when all workspace recipients have blocked sender", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-allblock-1" });
+    const external = await anon.register({ name: "ws-allblock-ext" });
+    const alphaClient = createClient(alpha.secret);
+    const externalClient = createClient(external.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "AllBlock" });
+    await externalClient.pair({ code: ws.pairing_code });
+
+    // Alpha (only member) blocks external
+    await alphaClient.blockContact(external.agent_id, "blocked");
+
+    // External sends to workspace — all blocked, should 403
+    await expect(
+      externalClient.send({
+        to: `workspace:${ws.id}`,
+        type: "update",
+        payload: { content: "Nobody hears me" },
+      })
+    ).rejects.toThrow(TrunkApiError);
   });
 
   // ── Contact Notes ──
