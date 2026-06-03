@@ -1267,6 +1267,11 @@ app.post("/ack-bulk", async (c) => {
   if (body.message_ids.length > 100) {
     return c.json({ error: "Cannot ack more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
   }
+  for (const id of body.message_ids) {
+    if (!isValidUUID(id)) {
+      return c.json({ error: `Invalid message ID format: ${id}`, code: "INVALID_INPUT" }, 400);
+    }
+  }
 
   let acked = 0;
   for (const messageId of body.message_ids) {
@@ -1307,6 +1312,11 @@ app.post("/read-bulk", async (c) => {
   if (body.message_ids.length > 100) {
     return c.json({ error: "Cannot mark more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
   }
+  for (const id of body.message_ids) {
+    if (!isValidUUID(id)) {
+      return c.json({ error: `Invalid message ID format: ${id}`, code: "INVALID_INPUT" }, 400);
+    }
+  }
 
   let marked = 0;
   for (const messageId of body.message_ids) {
@@ -1346,6 +1356,11 @@ app.post("/delete-bulk", async (c) => {
   }
   if (body.message_ids.length > 100) {
     return c.json({ error: "Cannot delete more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
+  }
+  for (const id of body.message_ids) {
+    if (!isValidUUID(id)) {
+      return c.json({ error: `Invalid message ID format: ${id}`, code: "INVALID_INPUT" }, 400);
+    }
   }
 
   let deleted = 0;
@@ -1389,6 +1404,11 @@ app.post("/label-bulk", async (c) => {
   }
   if (body.message_ids.length > 100) {
     return c.json({ error: "Cannot label more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
+  }
+  for (const id of body.message_ids) {
+    if (!isValidUUID(id)) {
+      return c.json({ error: `Invalid message ID format: ${id}`, code: "INVALID_INPUT" }, 400);
+    }
   }
 
   let labeled = 0;
@@ -1509,6 +1529,10 @@ app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
 
   if (!original) {
     return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
+  }
+  // Check if either party has blocked the other before allowing reply
+  if (await isBlocked(agentId, original.fromAgent)) {
+    return c.json({ error: "You have been blocked by this agent", code: "BLOCKED" }, 403);
   }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
     return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);

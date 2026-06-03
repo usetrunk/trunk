@@ -3775,6 +3775,45 @@ describe("Hono API behavior", () => {
     await expect(client.labelBulk(["some-id"], "")).rejects.toMatchObject({ status: 400 });
   });
 
+  // --- Bulk UUID validation tests ---
+
+  it("rejects bulk ack with invalid UUID in message_ids", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.ackBulk(["not-a-uuid"])).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects bulk read with invalid UUID in message_ids", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.readBulk(["not-a-uuid"])).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects bulk delete with invalid UUID in message_ids", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.deleteBulk(["not-a-uuid"])).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects bulk label with invalid UUID in message_ids", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    await expect(client.labelBulk(["not-a-uuid"], "important")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects bulk ack when mix of valid and invalid UUIDs", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "test" } });
+
+    const betaClient = createClient(beta.secret);
+    await expect(betaClient.ackBulk([sent.id, "sql-injection-attempt"])).rejects.toMatchObject({ status: 400 });
+  });
+
   // --- Message edit tests ---
 
   it("sender can edit a message payload", async () => {
@@ -6513,6 +6552,33 @@ describe("Hono API behavior", () => {
       payload: { content: "I blocked you but I can still write" },
     });
     expect(sent.id).toBeDefined();
+  });
+
+  it("blocked agent cannot reply to messages received before being blocked", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Beta sends a message to alpha
+    const sent = await betaClient.send({
+      to: alpha.agent_id,
+      type: "question",
+      payload: { content: "Hey alpha" },
+    });
+
+    // Beta then blocks alpha
+    await betaClient.blockContact(alpha.agent_id);
+
+    // Alpha received the message — get it from inbox
+    const inbox = await alphaClient.inbox();
+    const msgFromBeta = inbox.messages[0];
+
+    // Alpha tries to reply to beta's message — should fail because beta blocked alpha
+    await expect(
+      alphaClient.reply(msgFromBeta.id, {
+        type: "response",
+        payload: { content: "reply after being blocked" },
+      })
+    ).rejects.toMatchObject({ status: 403 });
   });
 
   it("returns already_blocked on duplicate block", async () => {
