@@ -3,7 +3,7 @@ import { html } from "hono/html";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, roomMembers, rooms, tasks, workspaceContacts, workspaces } from "../db/schema.js";
-import { and, eq, or, desc, inArray } from "drizzle-orm";
+import { and, eq, or, desc, asc, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
@@ -204,7 +204,7 @@ app.get("/", async (c) => {
     t.participants.add(m.fromAgent);
     if (m.createdAt > t.lastActivity) t.lastActivity = m.createdAt;
   }
-  const transcriptMessages = [...recentMessages].reverse();
+  const transcriptMessages = recentMessages;
   const openRoomTasks = roomTaskRows.filter((task) => task.status !== "done");
 
   return c.html(html`<!DOCTYPE html>
@@ -245,7 +245,7 @@ app.get("/", async (c) => {
             const members = memberRows.filter((member) => member.roomId === room.id);
             const roomTasks = roomTaskRows.filter((task) => task.scope === `room:${room.id}` && task.status !== "done");
             return html`
-              <a class="sidebar-item room" href="/dashboard">
+              <a class="sidebar-item room" href="/dashboard/room/${room.id}">
                 <span class="room-hash">#</span>
                 <span class="sidebar-main">${room.name}</span>
                 <span class="sidebar-count">${roomTasks.length}</span>
@@ -253,6 +253,21 @@ app.get("/", async (c) => {
               </a>
             `;
           })}
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Navigation</div>
+        <a class="sidebar-item" href="/dashboard">
+          <span style="font-size:0.8rem;">&#9776;</span>
+          <span class="sidebar-main">Feed</span>
+        </a>
+        <a class="sidebar-item" href="/dashboard/inbox">
+          <span style="font-size:0.8rem;">&#9993;</span>
+          <span class="sidebar-main">Inbox</span>
+        </a>
+        <a class="sidebar-item" href="/dashboard/gantt">
+          <span style="font-size:0.8rem;">&#9638;</span>
+          <span class="sidebar-main">Mission Control</span>
+        </a>
       </div>
       <div class="sidebar-footer">
         <div class="sidebar-label">Pairing code</div>
@@ -508,6 +523,346 @@ app.get("/inbox", async (c) => {
           </div>
         `;
       })}
+  </div>
+</body>
+</html>`);
+});
+
+// Room detail view — messages, tasks, gantt for a single room
+app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
+  const agent = c.get("agent");
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+
+  const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.text("Too many requests. Please try again later.", 429);
+  }
+
+  // Verify membership
+  const membership = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
+  if (membership.length === 0) {
+    return c.text("Not a member of this room", 403);
+  }
+
+  // Room info
+  const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1);
+  if (!room) return c.text("Room not found", 404);
+
+  // Members
+  const members = await db.select().from(roomMembers).where(eq(roomMembers.roomId, roomId));
+
+  // Room messages (newest first)
+  const roomMessages = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.toRoom, roomId))
+    .orderBy(desc(messages.createdAt))
+    .limit(50);
+
+  // Room tasks
+  const roomTasks = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.scope, `room:${roomId}`))
+    .orderBy(tasks.sequence, tasks.createdAt);
+
+  // Resolve all agent names
+  const allAgentIds = unique([
+    agentId,
+    ...members.map(m => m.agentId),
+    ...roomMessages.flatMap(m => [m.fromAgent, m.toAgent]),
+    ...roomTasks.map(t => t.owner).filter(Boolean) as string[],
+    ...roomTasks.map(t => t.createdBy).filter(Boolean) as string[],
+  ]);
+  const agentRows = allAgentIds.length > 0
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...allAgentIds.map(id => eq(agents.id, id))))
+    : [];
+  const nameMap = new Map(agentRows.map(a => [a.id, a.name]));
+
+  // Task stats
+  const totalTasks = roomTasks.length;
+  const doneTasks = roomTasks.filter(t => t.status === "done").length;
+  const inProgressTasks = roomTasks.filter(t => t.status === "in-progress").length;
+  const blockedTasks = roomTasks.filter(t => t.status === "blocked").length;
+  const openTasks = roomTasks.filter(t => t.status === "open").length;
+  const overallProgress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+  const doneIds = new Set(roomTasks.filter(t => t.status === "done").map(t => t.id));
+
+  // Group tasks by module
+  type TaskRow = typeof roomTasks[0];
+  const groupMap = new Map<string, TaskRow[]>();
+  const ungrouped: TaskRow[] = [];
+  for (const t of roomTasks) {
+    if (t.group) {
+      if (!groupMap.has(t.group)) groupMap.set(t.group, []);
+      groupMap.get(t.group)!.push(t);
+    } else {
+      ungrouped.push(t);
+    }
+  }
+
+  function statusIcon(status: string) {
+    switch (status) {
+      case "done": return "✓";
+      case "in-progress": return "▶";
+      case "blocked": return "✕";
+      default: return "○";
+    }
+  }
+
+  function statusClass(status: string) {
+    switch (status) {
+      case "done": return "st-done";
+      case "in-progress": return "st-active";
+      case "blocked": return "st-blocked";
+      default: return "st-open";
+    }
+  }
+
+  // Get all rooms + their member/task counts for sidebar
+  const allMemberships = await db.select().from(roomMembers).where(eq(roomMembers.agentId, agentId));
+  const allRoomIds = allMemberships.map(m => m.roomId);
+  const allRooms = allRoomIds.length > 0
+    ? await db.select().from(rooms).where(or(...allRoomIds.map(id => eq(rooms.id, id))))
+    : [];
+  const allRoomMembers = allRoomIds.length > 0
+    ? await db.select().from(roomMembers).where(or(...allRoomIds.map(id => eq(roomMembers.roomId, id))))
+    : [];
+  const allRoomTasks = allRoomIds.length > 0
+    ? await db.select().from(tasks).where(or(...allRoomIds.map(id => eq(tasks.scope, `room:${id}`))))
+    : [];
+
+  return c.html(html`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${room.name} — Trunk</title>
+  <style>${dashboardStyles()}</style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <a href="/dashboard" class="logo" style="text-decoration:none;color:#fff;">trunk</a>
+        <div class="agent-name">${agent.name}</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Rooms</div>
+        ${allRooms.map((r) => {
+          const mCount = allRoomMembers.filter(m => m.roomId === r.id).length;
+          const tCount = allRoomTasks.filter(t => t.scope === `room:${r.id}` && t.status !== "done").length;
+          const isActive = r.id === roomId;
+          return html`
+            <a class="sidebar-item room" href="/dashboard/room/${r.id}" style="${isActive ? "background:#151511;border-color:var(--line);" : ""}">
+              <span class="room-hash">#</span>
+              <span class="sidebar-main">${r.name}</span>
+              <span class="sidebar-count">${tCount}</span>
+              <span class="sidebar-sub">${mCount} agents</span>
+            </a>
+          `;
+        })}
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Navigation</div>
+        <a class="sidebar-item" href="/dashboard">
+          <span style="font-size:0.8rem;">&#9776;</span>
+          <span class="sidebar-main">Feed</span>
+        </a>
+        <a class="sidebar-item" href="/dashboard/inbox">
+          <span style="font-size:0.8rem;">&#9993;</span>
+          <span class="sidebar-main">Inbox</span>
+        </a>
+        <a class="sidebar-item" href="/dashboard/gantt">
+          <span style="font-size:0.8rem;">&#9638;</span>
+          <span class="sidebar-main">Mission Control</span>
+        </a>
+      </div>
+    </aside>
+
+    <main class="conversation-panel">
+      <header class="conversation-header">
+        <div>
+          <div class="eyebrow">Room</div>
+          <h1># ${room.name}</h1>
+        </div>
+        <div class="health-strip">
+          <div><span>Members</span><strong>${members.length}</strong></div>
+          <div><span>Messages</span><strong>${roomMessages.length}</strong></div>
+          <div><span>Tasks</span><strong>${totalTasks}</strong></div>
+          <div><span>Progress</span><strong class="good">${overallProgress}%</strong></div>
+        </div>
+      </header>
+
+      <section class="conversation-body">
+        <div class="chat-stream">
+          <!-- Members -->
+          <div class="stream-title"><span>Members</span></div>
+          <div class="pill-row" style="margin-bottom:1.5rem;">
+            ${members.map(m => html`<span class="pill">${nameMap.get(m.agentId) ?? m.agentId.slice(0, 8)} <span style="color:#6f6b60;font-size:0.65rem;">${m.role}</span></span>`)}
+          </div>
+
+          <!-- Messages -->
+          <div class="stream-title"><span>Messages</span></div>
+          ${roomMessages.length === 0
+            ? html`<p class="empty">No messages in this room yet.</p>`
+            : roomMessages.map((m) => {
+              const from = nameMap.get(m.fromAgent) ?? m.fromAgent.slice(0, 8);
+              const isMine = m.fromAgent === agentId;
+              const payload = m.payload as Record<string, unknown>;
+              const content = (payload.content as string) || JSON.stringify(m.payload);
+              const context = payload.context as string | undefined;
+              const finality = payload.finality as string | undefined;
+              return html`
+                <article class="chat-message ${isMine ? "mine" : "theirs"}">
+                  <div class="avatar">${initials(from)}</div>
+                  <div class="bubble">
+                    <div class="message-heading">
+                      <strong>${from}</strong>
+                      <span>${m.type}</span>
+                      ${finality ? html`<span>${finality}</span>` : ""}
+                      <time>${timeAgo(m.createdAt)}</time>
+                    </div>
+                    <div class="message-copy">${content}</div>
+                    ${context ? html`<div class="message-context">${context}</div>` : ""}
+                  </div>
+                </article>
+              `;
+            })}
+
+          <!-- Tasks gantt -->
+          <div class="stream-title" style="margin-top:2rem;"><span>Tasks</span><span style="color:var(--muted);font-size:0.72rem;">${doneTasks}/${totalTasks} done</span></div>
+          ${totalTasks === 0
+            ? html`<p class="empty">No tasks in this room yet.</p>`
+            : html`
+              <div style="margin-bottom:0.75rem;">
+                <div style="display:flex;gap:0.75rem;font-size:0.75rem;margin-bottom:0.5rem;">
+                  ${inProgressTasks > 0 ? html`<span style="color:var(--accent);">${inProgressTasks} active</span>` : ""}
+                  ${blockedTasks > 0 ? html`<span style="color:var(--danger);">${blockedTasks} blocked</span>` : ""}
+                  ${openTasks > 0 ? html`<span style="color:var(--muted);">${openTasks} queued</span>` : ""}
+                  ${doneTasks > 0 ? html`<span style="color:var(--good);">${doneTasks} done</span>` : ""}
+                </div>
+                <div style="height:4px;background:#1a1a18;border-radius:2px;overflow:hidden;margin-bottom:1rem;">
+                  <div style="height:100%;width:${overallProgress}%;background:var(--good);border-radius:2px;"></div>
+                </div>
+              </div>
+              ${Array.from(groupMap.entries()).map(([name, moduleTasks]) => {
+                const mDone = moduleTasks.filter(t => t.status === "done").length;
+                const mTotal = moduleTasks.length;
+                const mPct = mTotal > 0 ? Math.round((mDone / mTotal) * 100) : 0;
+                const statusOrder: Record<string, number> = { "in-progress": 0, "blocked": 1, "open": 2, "done": 3 };
+                const sorted = [...moduleTasks].sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
+                return html`
+                  <div style="border:1px solid var(--line);border-radius:8px;background:rgba(18,18,15,0.92);margin-bottom:0.75rem;overflow:hidden;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.6rem 0.85rem;border-bottom:1px solid var(--line);background:var(--panel);">
+                      <span style="font-size:0.82rem;font-weight:700;color:var(--accent-2);text-transform:uppercase;letter-spacing:0.04em;">${name}</span>
+                      <span style="font-size:0.72rem;color:var(--muted);">${mPct}%</span>
+                    </div>
+                    ${sorted.map(t => {
+                      const deps = (t.dependsOn as string[]) || [];
+                      const blockedBy = deps.filter(d => !doneIds.has(d));
+                      const owner = t.owner ? (nameMap.get(t.owner) || t.owner.slice(0, 8)) : null;
+                      const pri = t.priority === "critical" ? "!!!" : t.priority === "high" ? "!!" : "";
+                      return html`
+                        <div style="padding:0.45rem 0.85rem;border-bottom:1px solid #1a1a18;">
+                          <div style="display:flex;align-items:center;gap:0.4rem;">
+                            <span style="font-size:0.72rem;min-width:1rem;color:${t.status === "done" ? "var(--good)" : t.status === "in-progress" ? "var(--accent)" : t.status === "blocked" ? "var(--danger)" : "var(--muted)"};">${statusIcon(t.status)}</span>
+                            <span style="font-size:0.82rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${t.status === "done" ? "color:var(--muted);text-decoration:line-through;" : ""}">${t.title}</span>
+                            ${pri ? html`<span style="font-size:0.65rem;color:var(--danger);font-weight:700;">${pri}</span>` : ""}
+                          </div>
+                          <div style="display:flex;gap:0.5rem;font-size:0.7rem;color:#6f6b60;padding-left:1.4rem;margin-top:0.1rem;">
+                            ${owner ? html`<span style="color:#a7a193;">${owner}</span>` : ""}
+                            ${blockedBy.length > 0 ? html`<span style="color:var(--danger);">blocked by ${blockedBy.length}</span>` : ""}
+                            <span style="margin-left:auto;">${timeAgo(t.updatedAt)}</span>
+                          </div>
+                        </div>
+                      `;
+                    })}
+                  </div>
+                `;
+              })}
+              ${ungrouped.length > 0 ? html`
+                <div style="border:1px solid var(--line);border-radius:8px;background:rgba(18,18,15,0.92);margin-bottom:0.75rem;overflow:hidden;">
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:0.6rem 0.85rem;border-bottom:1px solid var(--line);background:var(--panel);">
+                    <span style="font-size:0.82rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;">ungrouped</span>
+                  </div>
+                  ${ungrouped.map(t => {
+                    const deps = (t.dependsOn as string[]) || [];
+                    const blockedBy = deps.filter(d => !doneIds.has(d));
+                    const owner = t.owner ? (nameMap.get(t.owner) || t.owner.slice(0, 8)) : null;
+                    return html`
+                      <div style="padding:0.45rem 0.85rem;border-bottom:1px solid #1a1a18;">
+                        <div style="display:flex;align-items:center;gap:0.4rem;">
+                          <span style="font-size:0.72rem;min-width:1rem;color:${t.status === "done" ? "var(--good)" : t.status === "in-progress" ? "var(--accent)" : t.status === "blocked" ? "var(--danger)" : "var(--muted)"};">${statusIcon(t.status)}</span>
+                          <span style="font-size:0.82rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${t.status === "done" ? "color:var(--muted);text-decoration:line-through;" : ""}">${t.title}</span>
+                        </div>
+                        <div style="display:flex;gap:0.5rem;font-size:0.7rem;color:#6f6b60;padding-left:1.4rem;margin-top:0.1rem;">
+                          ${owner ? html`<span style="color:#a7a193;">${owner}</span>` : ""}
+                          ${blockedBy.length > 0 ? html`<span style="color:var(--danger);">blocked by ${blockedBy.length}</span>` : ""}
+                          <span style="margin-left:auto;">${timeAgo(t.updatedAt)}</span>
+                        </div>
+                      </div>
+                    `;
+                  })}
+                </div>
+              ` : ""}
+            `}
+        </div>
+
+        <aside class="context-rail">
+          <section class="rail-section">
+            <div class="rail-title">Room info</div>
+            <div style="font-size:0.82rem;color:var(--muted);">Created ${timeAgo(room.createdAt)}</div>
+            <div style="font-size:0.82rem;color:var(--muted);">Pairing code: <span class="mono" style="color:var(--accent);">${room.pairingCode}</span></div>
+          </section>
+
+          <section class="rail-section">
+            <div class="rail-title">Blocked tasks</div>
+            ${roomTasks.filter(t => t.status === "blocked").length === 0
+              ? html`<div style="color:var(--good);font-size:0.8rem;">Nothing blocked</div>`
+              : roomTasks.filter(t => t.status === "blocked").map(t => {
+                const deps = (t.dependsOn as string[]) || [];
+                const waitingOn = deps.filter(d => !doneIds.has(d));
+                const waitingNames = waitingOn.map(d => {
+                  const dep = roomTasks.find(x => x.id === d);
+                  return dep ? dep.title : d.slice(0, 8);
+                });
+                return html`
+                  <div style="font-size:0.78rem;padding:0.35rem 0;border-bottom:1px solid #1a1a18;">
+                    <div style="color:var(--danger);">✕ ${t.title}</div>
+                    <div style="color:#6f6b60;font-size:0.7rem;margin-top:0.15rem;">waiting on: ${waitingNames.join(", ")}</div>
+                  </div>
+                `;
+              })}
+          </section>
+
+          <section class="rail-section">
+            <div class="rail-title">Recent completions</div>
+            ${roomTasks.filter(t => t.status === "done").length === 0
+              ? html`<div style="color:var(--muted);font-size:0.8rem;">Nothing completed yet</div>`
+              : roomTasks.filter(t => t.status === "done")
+                  .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+                  .slice(0, 8)
+                  .map(t => {
+                    const owner = t.owner ? (nameMap.get(t.owner) || t.owner.slice(0, 8)) : "unknown";
+                    return html`
+                      <div style="font-size:0.78rem;padding:0.35rem 0;border-bottom:1px solid #1a1a18;display:flex;gap:0.4rem;">
+                        <span style="color:var(--good);">✓</span>
+                        <span style="flex:1;">${t.title}</span>
+                        <span style="color:#4a4840;font-size:0.7rem;">${timeAgo(t.updatedAt)}</span>
+                      </div>
+                    `;
+                  })}
+          </section>
+        </aside>
+      </section>
+    </main>
   </div>
 </body>
 </html>`);

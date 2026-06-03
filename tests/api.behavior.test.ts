@@ -9135,6 +9135,45 @@ describe("Hono API behavior", () => {
     expect(body).toContain("No tasks yet");
   });
 
+  it("dashboard room view requires auth", async () => {
+    const res = await app.request("/dashboard/room/00000000-0000-0000-0000-000000000000");
+    expect(res.status).toBe(401);
+  });
+
+  it("dashboard room view returns 403 for non-member", async () => {
+    const registered = await createClient().register({ name: "room-outsider" });
+    const roomCreator = await createClient().register({ name: "room-creator" });
+    const roomRes = await createRoomRaw(roomCreator.secret, { name: "Private Room View" });
+    const room = await roomRes.json();
+    const res = await app.request(`/dashboard/room/${room.id}`, {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("dashboard room view renders room detail for member", async () => {
+    const registered = await createClient().register({ name: "room-member" });
+    const roomRes = await createRoomRaw(registered.secret, { name: "Dashboard Room" });
+    const room = await roomRes.json();
+    const res = await app.request(`/dashboard/room/${room.id}`, {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Dashboard Room");
+    expect(body).toContain("Members");
+    expect(body).toContain("Messages");
+    expect(body).toContain("Tasks");
+  });
+
+  it("dashboard room view rejects invalid UUID", async () => {
+    const registered = await createClient().register({ name: "room-bad-id" });
+    const res = await app.request("/dashboard/room/not-a-uuid", {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("completing a dependency auto-unblocks a blocked downstream task", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
