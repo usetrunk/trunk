@@ -496,8 +496,8 @@ app.get("/inbox", async (c) => {
     </div>
 
     <div style="margin-bottom:1rem;display:flex;gap:0.5rem;">
-      ${["pending", "read", "replied"].map(s => html`
-        <a href="/dashboard/inbox&status=${s}"
+      ${["pending", "delivered", "processed", "replied"].map(s => html`
+        <a href="/dashboard/inbox?status=${s}"
            style="padding:0.4rem 0.8rem;background:${s === statusFilter ? "#7c6aef" : "#1a1a1a"};border:1px solid ${s === statusFilter ? "#7c6aef" : "#333"};border-radius:6px;color:#fff;text-decoration:none;font-size:0.8rem;">${s}</a>
       `)}
     </div>

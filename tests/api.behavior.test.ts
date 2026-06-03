@@ -9683,6 +9683,24 @@ describe("Hono API behavior", () => {
     expect(body).toContain("replied");
   });
 
+  it("dashboard inbox filter links use ? not & for query params", async () => {
+    const registered = await createClient().register({ name: "link-checker" });
+    const res = await app.request(`/dashboard/inbox`, {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    // Links should use ?status= not &status=
+    expect(body).toContain('href="/dashboard/inbox?status=pending"');
+    expect(body).toContain('href="/dashboard/inbox?status=delivered"');
+    expect(body).toContain('href="/dashboard/inbox?status=processed"');
+    expect(body).toContain('href="/dashboard/inbox?status=replied"');
+    // Should NOT contain the broken & format
+    expect(body).not.toContain('href="/dashboard/inbox&status=');
+    // Should NOT contain "read" as a filter (not a valid status)
+    expect(body).not.toMatch(/href="[^"]*status=read"/);
+  });
+
   it("dashboard gantt view renders mission control with no tasks", async () => {
     const registered = await createClient().register({ name: "gantt-agent" });
     const res = await app.request(`/dashboard/gantt`, {
