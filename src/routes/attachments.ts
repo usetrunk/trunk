@@ -150,6 +150,11 @@ app.get("/message/:messageId", async (c) => {
 // Delete an attachment (only uploader can delete)
 app.delete("/:id", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const attachmentId = c.req.param("id");
 
   const [attachment] = await db.select().from(attachments).where(eq(attachments.id, attachmentId)).limit(1);

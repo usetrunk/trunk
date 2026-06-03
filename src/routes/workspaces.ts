@@ -198,6 +198,11 @@ app.patch("/me", async (c) => {
 // Leave workspace
 app.post("/leave", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
@@ -252,6 +257,11 @@ app.get("/:id/members", async (c) => {
 // Kick a member from workspace (admin only)
 app.post("/kick", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const body = await c.req.json<{ agent_id: string }>();
 
   if (!body.agent_id) return c.json({ error: "agent_id is required", code: "MISSING_FIELD" }, 400);
@@ -285,6 +295,11 @@ app.post("/kick", async (c) => {
 // Change a member's role (admin only)
 app.patch("/members/:id/role", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const targetId = c.req.param("id");
   const body = await c.req.json<{ role: string }>();
 
@@ -321,6 +336,11 @@ app.patch("/members/:id/role", async (c) => {
 // Delete workspace (admin only) — removes all members
 app.delete("/", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {

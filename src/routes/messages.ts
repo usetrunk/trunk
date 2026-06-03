@@ -675,6 +675,11 @@ app.get("/searches", async (c) => {
 // Save a search
 app.post("/searches", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const body = await c.req.json<{ name: string; query: Record<string, string> }>();
 
   if (!body.name || !body.query) {
@@ -709,6 +714,11 @@ app.post("/searches", async (c) => {
 // Delete a saved search
 app.delete("/searches/:id", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const searchId = c.req.param("id");
 
   const [search] = await db
@@ -822,6 +832,11 @@ app.get("/labels/all", async (c) => {
 // Cancel a scheduled message (only sender, only if still scheduled)
 app.post("/:id/cancel", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
 
   const [msg] = await db
@@ -1046,6 +1061,11 @@ app.get("/thread/:threadId", async (c) => {
 
 app.delete("/:id", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
 
   const [msg] = await db
@@ -1067,6 +1087,11 @@ app.delete("/:id", async (c) => {
 // Edit a sent message (only sender can edit, only payload)
 app.patch("/:id", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
   const body = await c.req.json<{
     payload: Record<string, unknown>;
@@ -1347,6 +1372,11 @@ app.post("/label-bulk", async (c) => {
 // Mark a message as read (without processing/acking)
 app.post("/:id/read", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
 
   const [msg] = await db
@@ -1369,6 +1399,11 @@ app.post("/:id/read", async (c) => {
 // Acknowledge a message (mark as read)
 app.post("/:id/ack", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
 
   const [msg] = await db
@@ -1479,6 +1514,11 @@ app.post("/:id/reply", async (c) => {
 // Forward a message to another contact
 app.post("/:id/forward", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
   const body = await c.req.json<{ to: string; comment?: string }>();
   const idempotencyKey = requireIdempotencyKey(c);
@@ -1574,6 +1614,11 @@ app.post("/:id/forward", async (c) => {
 // Add a reaction to a message
 app.post("/:id/react", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
   const body = await c.req.json<{ emoji: string }>();
 
@@ -1632,6 +1677,11 @@ app.post("/:id/react", async (c) => {
 // Remove a reaction from a message
 app.delete("/:id/react/:emoji", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
   const emoji = decodeURIComponent(c.req.param("emoji"));
 
@@ -1719,6 +1769,11 @@ app.get("/:id/reactions", async (c) => {
 // Pin a message in a thread — either sender or recipient can pin
 app.post("/:id/pin", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
 
   const [msg] = await db
@@ -1747,6 +1802,11 @@ app.post("/:id/pin", async (c) => {
 // Unpin a message
 app.post("/:id/unpin", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
 
   const [msg] = await db
@@ -1821,6 +1881,11 @@ app.get("/thread/:threadId/pins", async (c) => {
 // Add a label to a message
 app.post("/:id/labels", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
   const body = await c.req.json<{ label: string }>();
   if (!body.label || typeof body.label !== "string" || body.label.trim().length === 0) {
@@ -1855,6 +1920,11 @@ app.post("/:id/labels", async (c) => {
 // Remove a label from a message
 app.delete("/:id/labels/:label", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("id");
   const label = c.req.param("label").trim().toLowerCase();
 

@@ -165,6 +165,11 @@ app.patch("/me", authMiddleware, async (c) => {
 // Set or clear custom status text
 app.put("/me/status", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const body = await c.req.json<{ text: string | null }>();
 
   if (body.text !== undefined && body.text !== null && typeof body.text === "string" && body.text.length > 500) {
@@ -293,6 +298,11 @@ app.get("/me/webhook", authMiddleware, async (c) => {
 // Set/update webhook configuration
 app.put("/me/webhook", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const body = await c.req.json<{ url: string }>();
 
   if (!body.url) {
@@ -321,6 +331,11 @@ app.put("/me/webhook", authMiddleware, async (c) => {
 // Remove webhook configuration
 app.delete("/me/webhook", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
 
   await db
     .update(agents)
@@ -333,6 +348,11 @@ app.delete("/me/webhook", authMiddleware, async (c) => {
 // Rotate webhook signing secret
 app.post("/me/webhook/rotate-secret", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const newWebhookSecret = generateSecret();
 
   await db
@@ -379,6 +399,11 @@ app.get("/me/webhook/deliveries", authMiddleware, async (c) => {
 // Retry a failed webhook delivery
 app.post("/me/webhook/deliveries/:id/retry", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const agent = c.get("agent");
   const deliveryId = c.req.param("id");
 
@@ -500,6 +525,12 @@ app.post("/me/webhook/deliveries/:id/retry", authMiddleware, async (c) => {
 
 // Test webhook — sends a ping to the agent's configured webhook URL
 app.post("/me/webhook/test", authMiddleware, async (c) => {
+  const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const agent = c.get("agent");
   if (!agent.webhookUrl) {
     return c.json({ error: "No webhook URL configured. Set one with PUT /agents/me/webhook", code: "VALIDATION_ERROR" }, 400);
@@ -675,6 +706,11 @@ app.get("/me/analytics", authMiddleware, async (c) => {
 // Rotate secret
 app.post("/me/rotate-secret", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const newSecret = generateSecret();
   const newHash = await hashSecretAsync(newSecret);
 

@@ -10748,6 +10748,504 @@ describe("Hono API behavior", () => {
     });
     expect(res.status).toBe(404);
   });
+
+  // --- Hardening: message write endpoint rate limiting ---
+
+  it("rate limits message cancel at 30/min", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      const res = await app.request("/messages/nonexistent/cancel", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      // 404 is fine — rate limit counts regardless
+    }
+
+    const blocked = await app.request("/messages/nonexistent/cancel", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message delete at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message edit at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ payload: { content: "test" } }),
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: { content: "test" } }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message read-mark at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent/read", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/read", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message ack at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent/ack", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/ack", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message forward at 60/min (shared with sends)", async () => {
+    const { alpha } = await registerPair();
+
+    // Exhaust the messages rate limit (60/min)
+    for (let i = 0; i < 60; i++) {
+      await app.request("/messages/nonexistent/forward", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json", "Idempotency-Key": `fwd-${i}` },
+        body: JSON.stringify({ to: "someone" }),
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/forward", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json", "Idempotency-Key": "fwd-overflow" },
+      body: JSON.stringify({ to: "someone" }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message react at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent/react", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ emoji: "👍" }),
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/react", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ emoji: "👍" }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message unreact at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent/react/%F0%9F%91%8D", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/react/%F0%9F%91%8D", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message pin at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent/pin", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/pin", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits message unpin at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent/unpin", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/unpin", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits add label at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent/labels", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ label: "test" }),
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/labels", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "test" }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits remove label at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/nonexistent/labels/test", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/nonexistent/labels/test", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits save search at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/searches", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `search-${i}`, query: { type: "test" } }),
+      });
+    }
+
+    const blocked = await app.request("/messages/searches", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "search-overflow", query: { type: "test" } }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits delete search at 30/min", async () => {
+    const { alpha } = await registerPair();
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/messages/searches/nonexistent", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/searches/nonexistent", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  // --- Hardening: agent write endpoint rate limiting ---
+
+  it("rate limits agent status update at 30/min", async () => {
+    const alpha = await createClient().register({ name: "status-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/agents/me/status", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text: `status-${i}` }),
+      });
+    }
+
+    const blocked = await app.request("/agents/me/status", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "overflow" }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits webhook set at 30/min", async () => {
+    const alpha = await createClient().register({ name: "webhook-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/agents/me/webhook", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ url: `https://example.com/hook${i}` }),
+      });
+    }
+
+    const blocked = await app.request("/agents/me/webhook", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/overflow" }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits webhook delete at 30/min", async () => {
+    const alpha = await createClient().register({ name: "webhook-del-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/agents/me/webhook", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/agents/me/webhook", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits webhook rotate-secret at 30/min", async () => {
+    const alpha = await createClient().register({ name: "wh-rotate-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/agents/me/webhook/rotate-secret", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/agents/me/webhook/rotate-secret", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits webhook test at 30/min", async () => {
+    const alpha = await createClient().register({ name: "wh-test-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/agents/me/webhook/test", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/agents/me/webhook/test", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits secret rotation at 30/min", async () => {
+    const alpha = await createClient().register({ name: "rotate-rl" });
+    let currentSecret = alpha.secret;
+
+    for (let i = 0; i < 30; i++) {
+      const res = await app.request("/agents/me/rotate-secret", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${currentSecret}` },
+      });
+      if (res.status === 200) {
+        const body = await res.json();
+        currentSecret = body.secret;
+      }
+    }
+
+    const blocked = await app.request("/agents/me/rotate-secret", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${currentSecret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  // --- Hardening: workspace write endpoint rate limiting ---
+
+  it("rate limits workspace leave at 30/min", async () => {
+    const alpha = await createClient().register({ name: "ws-leave-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/workspaces/leave", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/workspaces/leave", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits workspace kick at 30/min", async () => {
+    const alpha = await createClient().register({ name: "ws-kick-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/workspaces/kick", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: "nonexistent" }),
+      });
+    }
+
+    const blocked = await app.request("/workspaces/kick", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: "nonexistent" }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits workspace role change at 30/min", async () => {
+    const alpha = await createClient().register({ name: "ws-role-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/workspaces/members/nonexistent/role", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "member" }),
+      });
+    }
+
+    const blocked = await app.request("/workspaces/members/nonexistent/role", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "member" }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits workspace delete at 30/min", async () => {
+    const alpha = await createClient().register({ name: "ws-del-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/workspaces", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/workspaces", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  // --- Hardening: document write endpoint rate limiting ---
+
+  it("rate limits document update at 30/min", async () => {
+    const alpha = await createClient().register({ name: "doc-update-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/documents/nonexistent/nonexistent", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ body: "test content" }),
+      });
+    }
+
+    const blocked = await app.request("/documents/nonexistent/nonexistent", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "test content" }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits document delete at 30/min", async () => {
+    const alpha = await createClient().register({ name: "doc-del-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/documents/nonexistent/nonexistent", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/documents/nonexistent/nonexistent", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  // --- Hardening: attachment delete rate limiting ---
+
+  it("rate limits attachment delete at 30/min", async () => {
+    const alpha = await createClient().register({ name: "att-del-rl" });
+
+    for (let i = 0; i < 30; i++) {
+      await app.request("/attachments/nonexistent", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/attachments/nonexistent", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
 });
 
 async function registerPair(): Promise<{

@@ -142,6 +142,11 @@ app.get("/room/:roomId/:docId", requireRoomMember(), async (c) => {
 
 app.put("/room/:roomId/:docId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
 
@@ -249,6 +254,11 @@ app.get("/room/:roomId/:docId/versions/:version", requireRoomMember(), async (c)
 
 app.delete("/room/:roomId/:docId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
 
@@ -339,6 +349,11 @@ app.get("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) =>
 
 app.put("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
 
@@ -417,6 +432,11 @@ app.get("/workspace/:workspaceId/:docId/versions/:version", requireWorkspaceMemb
 
 app.delete("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
 
@@ -566,6 +586,11 @@ app.get("/:contactId/:docId", async (c) => {
 // Update a document (creates new version)
 app.put("/:contactId/:docId", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
 
@@ -676,6 +701,11 @@ app.get("/:contactId/:docId/versions/:version", async (c) => {
 // Delete a document and all its versions
 app.delete("/:contactId/:docId", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
 
