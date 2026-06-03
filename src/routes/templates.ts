@@ -78,6 +78,12 @@ app.post("/", async (c) => {
   if (!body.name || !body.type || !body.payload) {
     return c.json({ error: "name, type, and payload are required", code: "MISSING_FIELD" }, 400);
   }
+  if (!body.name.trim()) {
+    return c.json({ error: "name must not be blank", code: "INVALID_FIELD" }, 400);
+  }
+  if (!body.type.trim()) {
+    return c.json({ error: "type must not be blank", code: "INVALID_FIELD" }, 400);
+  }
   if (body.name.length > 200) {
     return c.json({ error: "name must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
@@ -186,6 +192,12 @@ app.patch("/:id", requireValidUUIDs("id"), async (c) => {
 
   if (!template) return c.json({ error: "Template not found", code: "TEMPLATE_NOT_FOUND" }, 404);
 
+  if (body.name !== undefined && body.name !== null && !String(body.name).trim()) {
+    return c.json({ error: "name must not be blank", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.type !== undefined && body.type !== null && !String(body.type).trim()) {
+    return c.json({ error: "type must not be blank", code: "INVALID_FIELD" }, 400);
+  }
   if (body.name && body.name.length > 200) {
     return c.json({ error: "name must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
   }

@@ -27,6 +27,7 @@ app.post("/", async (c) => {
   const body = await c.req.json<{ name: string; metadata?: Record<string, unknown> }>();
 
   if (!body.name) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
+  if (!body.name.trim()) return c.json({ error: "name must not be blank", code: "INVALID_FIELD" }, 400);
   if (body.name.length > 100) return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (body.metadata && JSON.stringify(body.metadata).length > 10000) {
     return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
@@ -195,6 +196,9 @@ app.patch("/:roomId", requireValidUUIDs("roomId"), async (c) => {
 
   if (!body.name && !body.metadata) {
     return c.json({ error: "name or metadata is required", code: "MISSING_FIELD" }, 400);
+  }
+  if (body.name !== undefined && body.name !== null && !String(body.name).trim()) {
+    return c.json({ error: "name must not be blank", code: "INVALID_FIELD" }, 400);
   }
   if (body.name && body.name.length > 100) {
     return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);

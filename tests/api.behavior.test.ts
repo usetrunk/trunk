@@ -19726,6 +19726,457 @@ describe("Hono API behavior", () => {
       await expect(alphaClient.getWorkspaceDocument(ws.id, fakeDocId)).rejects.toMatchObject({ status: 404 });
     });
   });
+
+  describe("template hardening", () => {
+    it("rejects whitespace-only template name on create", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-ws-name" });
+      const client = createClient(alpha.secret);
+
+      await expect(client.createTemplate({
+        name: "   ",
+        type: "update",
+        payload: { content: "test" },
+      })).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects whitespace-only template type on create", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-ws-type" });
+      const client = createClient(alpha.secret);
+
+      await expect(client.createTemplate({
+        name: "valid-name",
+        type: "   ",
+        payload: { content: "test" },
+      })).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects whitespace-only name on template update", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-ws-upd" });
+      const client = createClient(alpha.secret);
+      const tpl = await client.createTemplate({
+        name: "original",
+        type: "update",
+        payload: { content: "test" },
+      });
+
+      await expect(client.updateTemplate(tpl.id, { name: "   " })).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects whitespace-only type on template update", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-ws-type-upd" });
+      const client = createClient(alpha.secret);
+      const tpl = await client.createTemplate({
+        name: "orig",
+        type: "update",
+        payload: { content: "test" },
+      });
+
+      await expect(client.updateTemplate(tpl.id, { type: "   " })).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects duplicate template name on create", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-dup" });
+      const client = createClient(alpha.secret);
+
+      await client.createTemplate({
+        name: "unique-name",
+        type: "update",
+        payload: { content: "first" },
+      });
+
+      await expect(client.createTemplate({
+        name: "unique-name",
+        type: "update",
+        payload: { content: "second" },
+      })).rejects.toMatchObject({ status: 409 });
+    });
+
+    it("rejects duplicate name on template rename", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-dup-rename" });
+      const client = createClient(alpha.secret);
+
+      await client.createTemplate({
+        name: "taken",
+        type: "update",
+        payload: { content: "first" },
+      });
+
+      const second = await client.createTemplate({
+        name: "available",
+        type: "update",
+        payload: { content: "second" },
+      });
+
+      await expect(client.updateTemplate(second.id, { name: "taken" })).rejects.toMatchObject({ status: 409 });
+    });
+
+    it("rejects name exceeding 200 characters", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-long-name" });
+      const client = createClient(alpha.secret);
+
+      await expect(client.createTemplate({
+        name: "a".repeat(201),
+        type: "update",
+        payload: { content: "test" },
+      })).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects type exceeding 100 characters", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-long-type" });
+      const client = createClient(alpha.secret);
+
+      await expect(client.createTemplate({
+        name: "valid",
+        type: "t".repeat(101),
+        payload: { content: "test" },
+      })).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects description exceeding 500 characters", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-long-desc" });
+      const client = createClient(alpha.secret);
+
+      await expect(client.createTemplate({
+        name: "valid",
+        type: "update",
+        payload: { content: "test" },
+        description: "d".repeat(501),
+      })).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("lists templates with pagination", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-page" });
+      const client = createClient(alpha.secret);
+
+      for (let i = 0; i < 5; i++) {
+        await client.createTemplate({
+          name: `tpl-${i}`,
+          type: "update",
+          payload: { content: `content-${i}` },
+        });
+      }
+
+      const page1 = await client.listTemplates({ limit: 3 });
+      expect(page1.templates).toHaveLength(3);
+      expect(page1.has_more).toBe(true);
+      expect(page1.next_cursor).toBeTruthy();
+
+      const page2 = await client.listTemplates({ limit: 3, cursor: page1.next_cursor! });
+      expect(page2.templates).toHaveLength(2);
+      expect(page2.has_more).toBe(false);
+    });
+
+    it("cannot update another agent's template", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-xagent-a" });
+      const beta = await anon.register({ name: "tpl-xagent-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const tpl = await clientA.createTemplate({
+        name: "private",
+        type: "update",
+        payload: { content: "mine" },
+      });
+
+      await expect(clientB.updateTemplate(tpl.id, { name: "hacked" })).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("allows same template name for different agents", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-same-a" });
+      const beta = await anon.register({ name: "tpl-same-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const tplA = await clientA.createTemplate({
+        name: "shared-name",
+        type: "update",
+        payload: { content: "alpha" },
+      });
+      const tplB = await clientB.createTemplate({
+        name: "shared-name",
+        type: "update",
+        payload: { content: "beta" },
+      });
+
+      expect(tplA.name).toBe("shared-name");
+      expect(tplB.name).toBe("shared-name");
+      expect(tplA.id).not.toBe(tplB.id);
+    });
+  });
+
+  describe("room hardening", () => {
+    it("rejects whitespace-only room name on create", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-ws-name" });
+      const client = createClient(alpha.secret);
+
+      const res = await createRoomRaw(alpha.secret, { name: "   " });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects whitespace-only room name on update", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-ws-upd" });
+      const client = createClient(alpha.secret);
+
+      const room = await client.createRoom({ name: "valid-room" });
+
+      const res = await app.request(`/rooms/${room.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ name: "   " }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("non-member cannot list room members", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-nonmem-a" });
+      const beta = await anon.register({ name: "room-nonmem-b" });
+      const clientA = createClient(alpha.secret);
+
+      const room = await clientA.createRoom({ name: "private-room" });
+
+      const res = await app.request(`/rooms/${room.id}/members`, {
+        headers: { "Authorization": `Bearer ${beta.secret}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("non-member cannot update room", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-noupd-a" });
+      const beta = await anon.register({ name: "room-noupd-b" });
+      const clientA = createClient(alpha.secret);
+
+      const room = await clientA.createRoom({ name: "my-room" });
+
+      const res = await app.request(`/rooms/${room.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${beta.secret}`,
+        },
+        body: JSON.stringify({ name: "hijacked" }),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("regular member cannot update room", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-memupd-a" });
+      const beta = await anon.register({ name: "room-memupd-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const room = await clientA.createRoom({ name: "creator-room" });
+      await clientB.joinRoom({ code: room.pairing_code });
+
+      const res = await app.request(`/rooms/${room.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${beta.secret}`,
+        },
+        body: JSON.stringify({ name: "member-rename" }),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("creator cannot leave room with other members", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-leave-a" });
+      const beta = await anon.register({ name: "room-leave-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const room = await clientA.createRoom({ name: "busy-room" });
+      await clientB.joinRoom({ code: room.pairing_code });
+
+      const res = await app.request(`/rooms/${room.id}/leave`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("CREATOR_CANNOT_LEAVE");
+    });
+
+    it("creator can leave room when they are the last member", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-leave-solo" });
+      const clientA = createClient(alpha.secret);
+
+      const room = await clientA.createRoom({ name: "solo-room" });
+
+      const res = await app.request(`/rooms/${room.id}/leave`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("non-member cannot delete room", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-del-a" });
+      const beta = await anon.register({ name: "room-del-b" });
+      const clientA = createClient(alpha.secret);
+
+      const room = await clientA.createRoom({ name: "protected" });
+
+      const res = await app.request(`/rooms/${room.id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${beta.secret}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("regular member cannot delete room", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-mdel-a" });
+      const beta = await anon.register({ name: "room-mdel-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const room = await clientA.createRoom({ name: "no-delete" });
+      await clientB.joinRoom({ code: room.pairing_code });
+
+      const res = await app.request(`/rooms/${room.id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${beta.secret}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("member cannot kick themselves", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-selfkick" });
+      const clientA = createClient(alpha.secret);
+
+      const room = await clientA.createRoom({ name: "self-kick-room" });
+
+      const res = await app.request(`/rooms/${room.id}/kick`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ agent_id: alpha.agent_id }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("SELF_ACTION");
+    });
+
+    it("admin cannot kick creator", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-adkick-a" });
+      const beta = await anon.register({ name: "room-adkick-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const room = await clientA.createRoom({ name: "admin-kick-room" });
+      await clientB.joinRoom({ code: room.pairing_code });
+
+      // Promote beta to admin
+      await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ role: "admin" }),
+      });
+
+      // Admin tries to kick creator
+      const res = await app.request(`/rooms/${room.id}/kick`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${beta.secret}`,
+        },
+        body: JSON.stringify({ agent_id: alpha.agent_id }),
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.code).toBe("INSUFFICIENT_ROLE");
+    });
+
+    it("cannot change own role", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-selfrole" });
+      const clientA = createClient(alpha.secret);
+
+      const room = await clientA.createRoom({ name: "self-role-room" });
+
+      const res = await app.request(`/rooms/${room.id}/members/${alpha.agent_id}/role`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ role: "member" }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("SELF_ACTION");
+    });
+
+    it("room delete cascades all scoped data", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-cascade-a" });
+      const beta = await anon.register({ name: "room-cascade-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const room = await clientA.createRoom({ name: "cascade-room" });
+      await clientB.joinRoom({ code: room.pairing_code });
+
+      // Create room-scoped task
+      await createRoomTaskRaw(alpha.secret, room.id, {
+        title: "task-to-delete",
+        priority: "medium",
+      });
+
+      // Delete room
+      const res = await app.request(`/rooms/${room.id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+
+      // Room no longer accessible
+      const listRes = await app.request(`/rooms/${room.id}/members`, {
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+      expect(listRes.status).toBe(403);
+    });
+  });
 });
 
 async function registerPair(): Promise<{
