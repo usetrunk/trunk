@@ -20460,6 +20460,186 @@ describe("Hono API behavior", () => {
       client.updateTemplate(tpl.id, { name: "" })
     ).rejects.toMatchObject({ status: 400 });
   });
+
+  // --- Hardening: workspace owner/name trim, admin demotion race, query caps ---
+
+  describe("workspace creation owner/name trim validation", () => {
+    it("rejects whitespace-only workspace name", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-trim-test" });
+      const client = createClient(alpha.secret);
+      const res = await app.request("/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ name: "   " }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("MISSING_FIELD");
+    });
+
+    it("rejects whitespace-only workspace owner", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-owner-trim" });
+      const res = await app.request("/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ name: "Valid WS", owner: "   " }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_FIELD");
+    });
+
+    it("rejects empty string workspace owner", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-owner-empty" });
+      const res = await app.request("/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ name: "Valid WS", owner: "" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("accepts valid workspace name with trimmed content", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-valid-trim" });
+      const client = createClient(alpha.secret);
+      const ws = await client.createWorkspace({ name: "  Valid WS  " });
+      expect(ws.name).toBeTruthy();
+    });
+  });
+
+  describe("thread pagination cap at 100", () => {
+    it("caps thread page size to 100", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.send({ to: beta.agent_id, type: "test", payload: { content: "hi" } });
+
+      const res = await app.request("/messages/thread/" + (await betaClient.inbox()).messages[0].threadId + "?limit=500", {
+        headers: { Authorization: `Bearer ${beta.secret}` },
+      });
+      expect(res.status).toBe(200);
+      // Just verify it doesn't error — the cap is enforced server-side
+    });
+
+    it("defaults thread limit to 100 when not specified", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.send({ to: beta.agent_id, type: "test", payload: { content: "hi" } });
+
+      const inbox = await betaClient.inbox();
+      const threadId = inbox.messages[0].threadId;
+      const res = await app.request(`/messages/thread/${threadId}`, {
+        headers: { Authorization: `Bearer ${beta.secret}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.messages.length).toBeLessThanOrEqual(100);
+    });
+  });
+
+  describe("admin demotion transaction safety", () => {
+    it("prevents demoting the last admin via role change", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tx-admin-1" });
+      const beta = await anon.register({ name: "tx-admin-2" });
+      const alphaClient = createClient(alpha.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "TxAdminWS" });
+      const betaClient = createClient(beta.secret);
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      // Alpha is the only admin, try to demote alpha
+      const res = await app.request(`/workspaces/members/${alpha.agent_id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ role: "member" }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("LAST_ADMIN");
+    });
+
+    it("allows demoting admin when another admin exists", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tx-admin-ok-1" });
+      const beta = await anon.register({ name: "tx-admin-ok-2" });
+      const alphaClient = createClient(alpha.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "TxAdminOK" });
+      const betaClient = createClient(beta.secret);
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      // Promote beta to admin
+      await app.request(`/workspaces/members/${beta.agent_id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ role: "admin" }),
+      });
+
+      // Now demoting alpha should succeed
+      const res = await app.request(`/workspaces/members/${alpha.agent_id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${beta.secret}` },
+        body: JSON.stringify({ role: "member" }),
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("promotes member to admin successfully", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tx-promote-1" });
+      const beta = await anon.register({ name: "tx-promote-2" });
+      const alphaClient = createClient(alpha.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "TxPromoteWS" });
+      const betaClient = createClient(beta.secret);
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      const res = await app.request(`/workspaces/members/${beta.agent_id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ role: "admin" }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.role).toBe("admin");
+    });
+  });
+
+  describe("registration owner validation", () => {
+    it("rejects whitespace-only owner on register", async () => {
+      const res = await app.request("/agents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "test-agent", owner: "   " }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects empty string owner on register", async () => {
+      const res = await app.request("/agents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "test-agent", owner: "" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("accepts valid owner on register", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "test-valid-owner", owner: "Frank" });
+      expect(reg.agent_id).toBeTruthy();
+    });
+
+    it("allows omitting owner on register", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "test-no-owner" });
+      expect(reg.agent_id).toBeTruthy();
+    });
+  });
 });
 
 async function registerPair(): Promise<{

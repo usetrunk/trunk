@@ -25,9 +25,12 @@ app.post("/", async (c) => {
 
   const body = await c.req.json<{ name: string; owner?: string }>();
 
-  if (!body.name) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
+  if (!body.name || (typeof body.name === "string" && body.name.trim().length === 0)) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
   if (body.name.length > 100) return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
-  if (body.owner !== undefined && body.owner.length > 100) return c.json({ error: "owner must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  if (body.owner !== undefined) {
+    if (typeof body.owner !== "string" || body.owner.trim().length === 0) return c.json({ error: "owner must not be empty", code: "INVALID_FIELD" }, 400);
+    if (body.owner.length > 100) return c.json({ error: "owner must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
 
   // Check if agent already belongs to a workspace
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
@@ -351,31 +354,41 @@ app.patch("/members/:id/role", requireValidUUIDs("id"), async (c) => {
     return c.json({ error: "Agent is not a member of this workspace", code: "NOT_FOUND" }, 404);
   }
 
-  // Prevent demoting the last admin
+  // Prevent demoting the last admin — use transaction to avoid TOCTOU race
   if (target.workspaceRole === "admin" && body.role === "member") {
-    const otherAdmins = await db
-      .select({ id: agents.id })
-      .from(agents)
-      .where(
-        and(
-          eq(agents.workspaceId, agent.workspaceId),
-          eq(agents.workspaceRole, "admin"),
-        ),
-      )
-      .limit(2);
-    const remainingAdmins = otherAdmins.filter((a) => a.id !== targetId);
-    if (remainingAdmins.length === 0) {
+    const demoted = await db.transaction(async (tx) => {
+      const otherAdmins = await tx
+        .select({ id: agents.id })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.workspaceId, agent.workspaceId),
+            eq(agents.workspaceRole, "admin"),
+          ),
+        )
+        .limit(2);
+      const remainingAdmins = otherAdmins.filter((a) => a.id !== targetId);
+      if (remainingAdmins.length === 0) {
+        return false;
+      }
+      await tx
+        .update(agents)
+        .set({ workspaceRole: body.role })
+        .where(eq(agents.id, targetId));
+      return true;
+    });
+    if (!demoted) {
       return c.json({
         error: "Cannot demote the last admin. Promote another member first.",
         code: "LAST_ADMIN",
       }, 400);
     }
+  } else {
+    await db
+      .update(agents)
+      .set({ workspaceRole: body.role })
+      .where(eq(agents.id, targetId));
   }
-
-  await db
-    .update(agents)
-    .set({ workspaceRole: body.role })
-    .where(eq(agents.id, targetId));
 
   await audit(agentId, "workspace.change_role", "workspace", agent.workspaceId, {
     target: targetId,

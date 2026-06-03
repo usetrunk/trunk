@@ -660,13 +660,13 @@ app.get("/me/analytics", authMiddleware, async (c) => {
     .select()
     .from(messages)
     .where(and(eq(messages.fromAgent, agentId), gte(messages.createdAt, since)))
-    .limit(10000);
+    .limit(2000);
 
   const received = await db
     .select()
     .from(messages)
     .where(and(eq(messages.toAgent, agentId), gte(messages.createdAt, since)))
-    .limit(10000);
+    .limit(2000);
 
   // Volume by day
   const volumeByDay: Record<string, { sent: number; received: number }> = {};

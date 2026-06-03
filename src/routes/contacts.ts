@@ -268,7 +268,7 @@ app.get("/blocked", async (c) => {
     .select()
     .from(blockedContacts)
     .where(eq(blockedContacts.agentId, myId))
-    .limit(500);
+    .limit(200);
 
   const agentIds = rows.map((r) => r.blockedAgentId);
   const agentRows = agentIds.length > 0
@@ -822,7 +822,7 @@ app.get("/tags/all", async (c) => {
     .select()
     .from(contactTags)
     .where(eq(contactTags.agentId, agentId))
-    .limit(5000);
+    .limit(1000);
 
   const tagCounts: Record<string, number> = {};
   for (const row of rows) {

@@ -501,7 +501,7 @@ app.get("/threads", async (c) => {
       or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
     )
     .orderBy(desc(messages.createdAt))
-    .limit(5000);
+    .limit(2000);
 
   const visible = rows.filter((r) => r.status !== "deleted" && r.threadId);
 
@@ -908,7 +908,7 @@ app.get("/labels/all", async (c) => {
     .select()
     .from(messageLabels)
     .where(eq(messageLabels.agentId, agentId))
-    .limit(5000);
+    .limit(2000);
 
   const labelCounts: Record<string, number> = {};
   for (const r of rows) {
@@ -1162,8 +1162,8 @@ app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
   }
   const threadId = c.req.param("threadId");
   const queryLimit = Math.min(
-    Math.max(1, parseInt(c.req.query("limit") || "200", 10) || 200),
-    200
+    Math.max(1, parseInt(c.req.query("limit") || "100", 10) || 100),
+    100
   );
   const cursorParam = c.req.query("cursor");
 
