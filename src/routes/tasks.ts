@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { tasks, roomMembers, agents } from "../db/schema.js";
+import { tasks, agents } from "../db/schema.js";
 import { eq, and, desc, lt, or, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
+import { contactScope, verifyRoomAccess } from "../lib/context.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -31,27 +32,6 @@ function taskToJson(t: typeof tasks.$inferSelect) {
     created_at: t.createdAt,
     updated_at: t.updatedAt,
   };
-}
-
-// Helper: build scope string for a contact pair (sorted for consistency)
-function contactScope(a: string, b: string): string {
-  return `contact:${[a, b].sort().join("-")}`;
-}
-
-// Helper: verify two agents can access shared tasks — same rules as messaging
-// (direct contact, workspace co-members, or cross-workspace pairings)
-async function verifyAccess(agentId: string, otherId: string): Promise<boolean> {
-  return canMessage(agentId, otherId);
-}
-
-// Helper: verify agent is a room member
-async function verifyRoomAccess(agentId: string, roomId: string): Promise<boolean> {
-  const members = await db
-    .select()
-    .from(roomMembers)
-    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
-    .limit(1);
-  return members.length > 0;
 }
 
 // Create a task (contact-scoped, room-scoped, or workspace-scoped)
@@ -89,7 +69,7 @@ app.post("/", async (c) => {
     if (!hasAccess) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
     scope = `room:${body.room_id}`;
   } else {
-    const hasAccess = await verifyAccess(agentId, body.contact_id!);
+    const hasAccess = await canMessage(agentId, body.contact_id!);
     if (!hasAccess) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
     scope = contactScope(agentId, body.contact_id!);
   }
@@ -129,7 +109,7 @@ app.get("/:contactId", async (c) => {
     cursor: c.req.query("cursor"),
   });
 
-  const hasAccess = await verifyAccess(agentId, contactId);
+  const hasAccess = await canMessage(agentId, contactId);
   if (!hasAccess) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
   const scope = contactScope(agentId, contactId);
@@ -259,7 +239,7 @@ app.patch("/:scopeId/:taskId", async (c) => {
   const taskId = c.req.param("taskId");
 
   // Verify access — could be a contact ID, room ID, or workspace ID
-  const hasContactAccess = await verifyAccess(agentId, scopeId);
+  const hasContactAccess = await canMessage(agentId, scopeId);
   const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
   const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
   if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
@@ -394,7 +374,7 @@ app.delete("/:scopeId/:taskId", async (c) => {
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");
 
-  const hasContactAccess = await verifyAccess(agentId, scopeId);
+  const hasContactAccess = await canMessage(agentId, scopeId);
   const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
   const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
   if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
