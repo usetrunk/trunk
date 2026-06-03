@@ -8,6 +8,17 @@ import { contactScope, verifyRoomAccess, resolveScopeAccess } from "../lib/conte
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import type { AgentVariables } from "../lib/types.js";
 
+const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
+const VALID_PRIORITIES = ["critical", "high", "medium", "low"] as const;
+
+function isValidStatus(s: string): boolean {
+  return (VALID_STATUSES as readonly string[]).includes(s);
+}
+
+function isValidPriority(p: string): boolean {
+  return (VALID_PRIORITIES as readonly string[]).includes(p);
+}
+
 const app = new Hono<AgentVariables>();
 
 app.use("/*", authMiddleware);
@@ -56,7 +67,11 @@ app.post("/", async (c) => {
   }>();
 
   if (!body.title) return c.json({ error: "title is required", code: "MISSING_FIELD" }, 400);
+  if (body.title.length > 500) return c.json({ error: "title must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (!body.contact_id && !body.room_id && !body.workspace_id) return c.json({ error: "contact_id, room_id, or workspace_id is required", code: "MISSING_FIELD" }, 400);
+  if (body.priority && !isValidPriority(body.priority)) {
+    return c.json({ error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
 
   let scope: string;
 
@@ -102,6 +117,9 @@ app.get("/:contactId", async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
   const status = c.req.query("status");
+  if (status && !isValidStatus(status)) {
+    return c.json({ error: `Invalid status filter. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
   const ownerFilter = c.req.query("owner");
   const groupFilter = c.req.query("group");
   const { limit, cursor } = parsePaginationQuery({
@@ -147,6 +165,9 @@ app.get("/room/:roomId", async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const status = c.req.query("status");
+  if (status && !isValidStatus(status)) {
+    return c.json({ error: `Invalid status filter. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
   const ownerFilter = c.req.query("owner");
   const groupFilter = c.req.query("group");
   const { limit, cursor } = parsePaginationQuery({
@@ -192,6 +213,9 @@ app.get("/workspace/:workspaceId", async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const status = c.req.query("status");
+  if (status && !isValidStatus(status)) {
+    return c.json({ error: `Invalid status filter. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
   const ownerFilter = c.req.query("owner");
   const groupFilter = c.req.query("group");
   const { limit, cursor } = parsePaginationQuery({
@@ -256,6 +280,16 @@ app.patch("/:scopeId/:taskId", async (c) => {
     context_ref?: string;
     metadata?: Record<string, unknown>;
   }>();
+
+  if (body.status !== undefined && !isValidStatus(body.status)) {
+    return c.json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+  if (body.priority !== undefined && !isValidPriority(body.priority)) {
+    return c.json({ error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+  if (body.title !== undefined && body.title.length > 500) {
+    return c.json({ error: "title must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (body.title !== undefined) updates.title = body.title;

@@ -6879,6 +6879,137 @@ describe("Hono API behavior", () => {
     const unchanged = allTasks.tasks.find((t: { id: string }) => t.id === task.id);
     expect(unchanged.status).toBe("in-progress");
   });
+
+  // --- Input validation tests ---
+
+  it("rejects task creation with invalid priority", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Test task",
+      priority: "urgent",
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("priority");
+  });
+
+  it("accepts task creation with valid priorities", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (const priority of ["critical", "high", "medium", "low"]) {
+      const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+        title: `Task ${priority}`,
+        priority,
+      });
+      expect(res.status).toBe(201);
+    }
+  });
+
+  it("rejects task update with invalid status", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Test task" });
+    const task = await createRes.json();
+
+    const updateRes = await updateTaskRaw(alpha.secret, beta.agent_id, task.id, {
+      status: "completed",
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("status");
+  });
+
+  it("rejects task update with invalid priority", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Test task" });
+    const task = await createRes.json();
+
+    const updateRes = await updateTaskRaw(alpha.secret, beta.agent_id, task.id, {
+      priority: "super-high",
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("priority");
+  });
+
+  it("rejects task list with invalid status filter", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await listTasksRaw(alpha.secret, beta.agent_id, "invalid-status");
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("status");
+  });
+
+  it("rejects task creation with title exceeding 500 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "x".repeat(501),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("500");
+  });
+
+  it("rejects workspace creation with name exceeding 100 characters", async () => {
+    const alpha = await createClient().register({ name: "agent-val", owner: "Frank" });
+
+    const res = await app.request("/workspaces", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "x".repeat(101) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
+
+  it("rejects room creation with name exceeding 100 characters", async () => {
+    const alpha = await createClient().register({ name: "agent-room-val", owner: "Frank" });
+
+    const res = await createRoomRaw(alpha.secret, { name: "x".repeat(101) });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
+
+  it("rejects room rename with name exceeding 100 characters", async () => {
+    const alpha = await createClient().register({ name: "agent-rename-val", owner: "Frank" });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Good Name" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "x".repeat(101) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
 });
 
 async function registerPair(): Promise<{
