@@ -9540,6 +9540,54 @@ describe("Hono API behavior", () => {
     expect(result.tags).toEqual([]);
   });
 
+  // --- Notification preferences ---
+
+  it("notificationPrefs returns defaults when no prefs set", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.notificationPrefs(beta.agent_id);
+    expect(result.muted).toBe(false);
+    expect(result.urgency_filter).toBe("all");
+  });
+
+  it("setNotificationPrefs creates new prefs", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true, urgency_filter: "sync_only" });
+    expect(result.muted).toBe(true);
+    expect(result.urgency_filter).toBe("sync_only");
+  });
+
+  it("setNotificationPrefs updates existing prefs", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true });
+    const updated = await alphaClient.setNotificationPrefs(beta.agent_id, { muted: false });
+    expect(updated.muted).toBe(false);
+  });
+
+  it("setNotificationPrefs rejects invalid urgency_filter", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(
+      alphaClient.setNotificationPrefs(beta.agent_id, { urgency_filter: "invalid" })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("notificationPrefs returns stored values after set", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true, urgency_filter: "sync_only" });
+    const result = await alphaClient.notificationPrefs(beta.agent_id);
+    expect(result.muted).toBe(true);
+    expect(result.urgency_filter).toBe("sync_only");
+  });
+
   // --- Additional audit log filter edge cases ---
 
   it("auditLog combines action and target_type filters", async () => {
