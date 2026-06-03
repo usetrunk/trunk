@@ -13509,6 +13509,205 @@ describe("Hono API behavior", () => {
     const body = await leaveRes.json();
     expect(body.ok).toBe(true);
   });
+
+  // --- Hardening: cross-agent authorization for threads, pins, and reactions ---
+
+  it("non-participant cannot read a thread between two other agents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "thread-a" });
+    const beta = await anon.register({ name: "thread-b" });
+    const gamma = await anon.register({ name: "thread-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    // Alpha and beta pair and exchange messages
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "private thread message" },
+    });
+
+    // Gamma pairs with alpha but is NOT part of this thread
+    await gammaClient.pair({ code: alpha.pairing_code });
+
+    // Gamma tries to read the thread — should see no messages
+    const threadRes = await app.request(`/messages/thread/${sent.thread_id}`, {
+      headers: { Authorization: `Bearer ${gamma.secret}` },
+    });
+    expect(threadRes.status).toBe(200);
+    const thread = await threadRes.json() as { messages: unknown[] };
+    expect(thread.messages).toHaveLength(0);
+  });
+
+  it("non-participant cannot read thread summary between two other agents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "summary-a" });
+    const beta = await anon.register({ name: "summary-b" });
+    const gamma = await anon.register({ name: "summary-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "decision",
+      payload: { content: "secret decision" },
+    });
+
+    // Gamma pairs with alpha to have auth but is not in the thread
+    await gammaClient.pair({ code: alpha.pairing_code });
+
+    // Gamma tries to get thread summary — should get 404
+    await expect(gammaClient.threadSummary(sent.thread_id)).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("non-participant cannot pin a message between two other agents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "pin-a" });
+    const beta = await anon.register({ name: "pin-b" });
+    const gamma = await anon.register({ name: "pin-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "pin target" },
+    });
+
+    await gammaClient.pair({ code: alpha.pairing_code });
+
+    // Gamma tries to pin the message — should get 404
+    await expect(gammaClient.pin(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("non-participant cannot unpin a message between two other agents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "unpin-a" });
+    const beta = await anon.register({ name: "unpin-b" });
+    const gamma = await anon.register({ name: "unpin-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "unpin target" },
+    });
+    await alphaClient.pin(sent.id);
+
+    await gammaClient.pair({ code: alpha.pairing_code });
+
+    // Gamma tries to unpin — should get 404
+    await expect(gammaClient.unpin(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("non-participant cannot react to a message between two other agents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "react-a" });
+    const beta = await anon.register({ name: "react-b" });
+    const gamma = await anon.register({ name: "react-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "react target" },
+    });
+
+    await gammaClient.pair({ code: alpha.pairing_code });
+
+    // Gamma tries to react — should get 404
+    await expect(gammaClient.react(sent.id, "👍")).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("non-participant cannot view reactions on a message between two other agents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "rxn-a" });
+    const beta = await anon.register({ name: "rxn-b" });
+    const gamma = await anon.register({ name: "rxn-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "reaction target" },
+    });
+    await alphaClient.react(sent.id, "🔥");
+
+    await gammaClient.pair({ code: alpha.pairing_code });
+
+    // Gamma tries to view reactions — should get 404
+    await expect(gammaClient.reactions(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("non-participant cannot forward a message between two other agents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "fwd-a" });
+    const beta = await anon.register({ name: "fwd-b" });
+    const gamma = await anon.register({ name: "fwd-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "forward target" },
+    });
+
+    // Gamma pairs with alpha (so gamma has someone to forward to)
+    await gammaClient.pair({ code: alpha.pairing_code });
+
+    // Gamma tries to forward alpha→beta message to alpha — should get 404
+    await expect(gammaClient.forward(sent.id, alpha.agent_id)).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("non-participant cannot view edit history of a message between two other agents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "edit-a" });
+    const beta = await anon.register({ name: "edit-b" });
+    const gamma = await anon.register({ name: "edit-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "original" },
+    });
+    await alphaClient.editMessage(sent.id, { content: "edited" });
+
+    await gammaClient.pair({ code: alpha.pairing_code });
+
+    // Gamma tries to view edit history — should get 404
+    await expect(gammaClient.messageEditHistory(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+  });
 });
 
 async function registerPair(): Promise<{
