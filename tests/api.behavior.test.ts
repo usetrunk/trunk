@@ -9143,6 +9143,195 @@ describe("Hono API behavior", () => {
     const body = await blocked.json();
     expect(body).toMatchObject({ error: "Rate limit exceeded", code: "RATE_LIMITED" });
   });
+
+  // --- Room role change edge cases ---
+
+  it("rejects invalid role value in room role change", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Invalid Role Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const roleRes = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "superadmin" }),
+    });
+    expect(roleRes.status).toBe(400);
+    const body = await roleRes.json();
+    expect(body).toMatchObject({ error: "role must be 'admin' or 'member'", code: "INVALID_INPUT" });
+  });
+
+  it("rejects missing role in room role change", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Missing Role Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const roleRes = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({}),
+    });
+    expect(roleRes.status).toBe(400);
+    const body = await roleRes.json();
+    expect(body).toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("cannot change own role in a room", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Self Role Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const roleRes = await app.request(`/rooms/${room.id}/members/${alpha.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "member" }),
+    });
+    expect(roleRes.status).toBe(400);
+    const body = await roleRes.json();
+    expect(body).toMatchObject({ code: "SELF_ACTION" });
+  });
+
+  it("returns 404 when changing role of non-member in room", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Ghost Role Room" });
+    const room = await roomRes.json();
+    // beta does NOT join the room
+
+    const roleRes = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect(roleRes.status).toBe(404);
+    const body = await roleRes.json();
+    expect(body).toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("creator can demote admin back to member", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Demote Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Promote beta to admin
+    const promoteRes = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect(promoteRes.status).toBe(200);
+
+    // Demote beta back to member
+    const demoteRes = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "member" }),
+    });
+    expect(demoteRes.status).toBe(200);
+    const body = await demoteRes.json();
+    expect(body.role).toBe("member");
+  });
+
+  it("non-member caller gets 403 for room role change", async () => {
+    const { alpha, beta } = await registerPair();
+    const gamma = await createClient().register({ name: "gamma", owner: "Tester" });
+    const gammaClient = createClient(gamma.secret);
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Outsider Role Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const roleRes = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${gamma.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect(roleRes.status).toBe(403);
+    const body = await roleRes.json();
+    expect(body).toMatchObject({ code: "NOT_MEMBER" });
+  });
+
+  // --- Audit log filter edge cases ---
+
+  it("auditLog filters by target_id", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Pairing creates audit events with target_id = beta.agent_id
+    const result = await alphaClient.auditLog({ target_id: beta.agent_id });
+    expect(result.events.length).toBeGreaterThan(0);
+    expect(result.events.every((e) => e.target_id === beta.agent_id)).toBe(true);
+  });
+
+  it("auditLog filters by after date", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Use a date far in the past — all events should be included
+    const result = await alphaClient.auditLog({ after: "2020-01-01T00:00:00Z" });
+    expect(result.events.length).toBeGreaterThan(0);
+  });
+
+  it("auditLog filters by before date (future date includes all)", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.auditLog({ before: "2099-01-01T00:00:00Z" });
+    expect(result.events.length).toBeGreaterThan(0);
+  });
+
+  it("auditLog returns empty when after date is in the future", async () => {
+    const { alphaClient } = await registerPair();
+
+    const result = await alphaClient.auditLog({ after: "2099-01-01T00:00:00Z" });
+    expect(result.events).toEqual([]);
+  });
+
+  it("auditLog returns empty when before date is in the past", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.auditLog({ before: "2000-01-01T00:00:00Z" });
+    expect(result.events).toEqual([]);
+  });
+
+  it("auditLog combines action and target_type filters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "combined filter test" },
+    });
+
+    const result = await alphaClient.auditLog({ action: "message.send", target_type: "message" });
+    expect(result.events.length).toBeGreaterThan(0);
+    expect(result.events.every((e) => e.action === "message.send" && e.target_type === "message")).toBe(true);
+  });
 });
 
 async function registerPair(): Promise<{
