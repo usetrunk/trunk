@@ -6,6 +6,7 @@ import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
+import { canMessage } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -434,6 +435,12 @@ app.put("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
     return c.json({ error: "content must not exceed 5000 characters", code: "INVALID_FIELD" }, 400);
   }
 
+  // Verify target is a contact or workspace co-member
+  const allowed = await canMessage(myId, targetId);
+  if (!allowed) {
+    return c.json({ error: "Not a contact", code: "NOT_CONTACT" }, 403);
+  }
+
   // Check for existing note
   const existing = await db
     .select()
@@ -471,6 +478,12 @@ app.get("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
 
   const targetId = c.req.param("agentId");
 
+  // Verify target is a contact or workspace co-member
+  const allowed = await canMessage(myId, targetId);
+  if (!allowed) {
+    return c.json({ error: "Not a contact", code: "NOT_CONTACT" }, 403);
+  }
+
   const [note] = await db
     .select()
     .from(contactNotes)
@@ -491,6 +504,12 @@ app.delete("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
   }
 
   const targetId = c.req.param("agentId");
+
+  // Verify target is a contact or workspace co-member
+  const allowed = await canMessage(myId, targetId);
+  if (!allowed) {
+    return c.json({ error: "Not a contact", code: "NOT_CONTACT" }, 403);
+  }
 
   const deleted = await db
     .delete(contactNotes)
@@ -514,6 +533,12 @@ app.get("/:id/notifications", requireValidUUIDs("id"), async (c) => {
   }
 
   const contactId = c.req.param("id");
+
+  // Verify target is a contact or workspace co-member
+  const allowed = await canMessage(agentId, contactId);
+  if (!allowed) {
+    return c.json({ error: "Not a contact", code: "NOT_CONTACT" }, 403);
+  }
 
   const [pref] = await db
     .select()
@@ -546,6 +571,13 @@ app.put("/:id/notifications", requireValidUUIDs("id"), async (c) => {
   }
 
   const contactId = c.req.param("id");
+
+  // Verify target is a contact or workspace co-member
+  const allowed = await canMessage(agentId, contactId);
+  if (!allowed) {
+    return c.json({ error: "Not a contact", code: "NOT_CONTACT" }, 403);
+  }
+
   const body = await c.req.json<{
     muted?: boolean;
     urgency_filter?: string;
@@ -613,6 +645,13 @@ app.post("/:id/tags", requireValidUUIDs("id"), async (c) => {
   }
 
   const contactId = c.req.param("id");
+
+  // Verify target is a contact or workspace co-member
+  const allowed = await canMessage(agentId, contactId);
+  if (!allowed) {
+    return c.json({ error: "Not a contact", code: "NOT_CONTACT" }, 403);
+  }
+
   const body = await c.req.json<{ tag: string }>();
 
   if (!body.tag || typeof body.tag !== "string") {
@@ -662,6 +701,13 @@ app.delete("/:id/tags/:tag", requireValidUUIDs("id"), async (c) => {
   }
 
   const contactId = c.req.param("id");
+
+  // Verify target is a contact or workspace co-member
+  const allowed = await canMessage(agentId, contactId);
+  if (!allowed) {
+    return c.json({ error: "Not a contact", code: "NOT_CONTACT" }, 403);
+  }
+
   const rawTag = c.req.param("tag");
   if (!rawTag || rawTag.length > 50) {
     return c.json({ error: "Tag must be 1-50 characters", code: "INVALID_INPUT" }, 400);
@@ -691,6 +737,12 @@ app.get("/:id/tags", requireValidUUIDs("id"), async (c) => {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
   const contactId = c.req.param("id");
+
+  // Verify target is a contact or workspace co-member
+  const allowed = await canMessage(agentId, contactId);
+  if (!allowed) {
+    return c.json({ error: "Not a contact", code: "NOT_CONTACT" }, 403);
+  }
 
   const rows = await db
     .select()

@@ -7419,6 +7419,7 @@ describe("Hono API behavior", () => {
   // ── Contact Notes ──
   it("can set, get, and update a contact note", async () => {
     const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
 
     // Set a note
     const created = await alphaClient.setContactNote(beta.agent_id, "Good collaborator, prefers short messages");
@@ -7440,12 +7441,14 @@ describe("Hono API behavior", () => {
 
   it("returns null content for a contact without notes", async () => {
     const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
     const note = await alphaClient.contactNote(beta.agent_id);
     expect(note.content).toBeNull();
   });
 
   it("can delete a contact note", async () => {
     const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
     await alphaClient.setContactNote(beta.agent_id, "temp note");
     await alphaClient.deleteContactNote(beta.agent_id);
     const note = await alphaClient.contactNote(beta.agent_id);
@@ -7704,6 +7707,7 @@ describe("Hono API behavior", () => {
 
   it("contact notes are private to each agent", async () => {
     const { alphaClient, beta, betaClient, alpha } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
     await alphaClient.setContactNote(beta.agent_id, "alpha's note about beta");
     await betaClient.setContactNote(alpha.agent_id, "beta's note about alpha");
 
@@ -7763,8 +7767,113 @@ describe("Hono API behavior", () => {
 
   it("accepts contact note at exactly 5000 characters", async () => {
     const { alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
     const result = await alphaClient.setContactNote(beta.agent_id, "x".repeat(5000));
     expect(result.content).toBe("x".repeat(5000));
+  });
+
+  // --- Contact verification: notes/tags/prefs require contact relationship ---
+
+  it("rejects contact note set for non-contacts", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "note-blocker-a" });
+    const b = await anon.register({ name: "note-blocker-b" });
+    const aClient = createClient(a.secret);
+
+    await expect(aClient.setContactNote(b.agent_id, "should fail")).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects contact note get for non-contacts", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "note-get-a" });
+    const b = await anon.register({ name: "note-get-b" });
+    const aClient = createClient(a.secret);
+
+    await expect(aClient.contactNote(b.agent_id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects contact note delete for non-contacts", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "note-del-a" });
+    const b = await anon.register({ name: "note-del-b" });
+    const aClient = createClient(a.secret);
+
+    await expect(aClient.deleteContactNote(b.agent_id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects notification prefs get for non-contacts", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "notif-get-a" });
+    const b = await anon.register({ name: "notif-get-b" });
+    const aClient = createClient(a.secret);
+
+    await expect(aClient.notificationPrefs(b.agent_id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects notification prefs set for non-contacts", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "notif-set-a" });
+    const b = await anon.register({ name: "notif-set-b" });
+    const aClient = createClient(a.secret);
+
+    await expect(aClient.setNotificationPrefs(b.agent_id, { muted: true })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects tag add for non-contacts", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "tag-add-a" });
+    const b = await anon.register({ name: "tag-add-b" });
+    const aClient = createClient(a.secret);
+
+    await expect(aClient.addContactTag(b.agent_id, "test")).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects tag remove for non-contacts", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "tag-rm-a" });
+    const b = await anon.register({ name: "tag-rm-b" });
+    const aClient = createClient(a.secret);
+
+    await expect(aClient.removeContactTag(b.agent_id, "test")).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects tag list for non-contacts", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "tag-ls-a" });
+    const b = await anon.register({ name: "tag-ls-b" });
+    const aClient = createClient(a.secret);
+
+    await expect(aClient.contactTags(b.agent_id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("allows contact notes for workspace co-members without explicit pairing", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "ws-note-a" });
+    const b = await anon.register({ name: "ws-note-b" });
+    const aClient = createClient(a.secret);
+    const bClient = createClient(b.secret);
+
+    const ws = await aClient.createWorkspace({ name: "NoteTest" });
+    await bClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Should succeed — workspace co-members are contacts
+    const note = await aClient.setContactNote(b.agent_id, "workspace buddy");
+    expect(note.content).toBe("workspace buddy");
+  });
+
+  it("allows tags for workspace co-members without explicit pairing", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "ws-tag-a" });
+    const b = await anon.register({ name: "ws-tag-b" });
+    const aClient = createClient(a.secret);
+    const bClient = createClient(b.secret);
+
+    const ws = await aClient.createWorkspace({ name: "TagTest" });
+    await bClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Should succeed — workspace co-members are contacts
+    const tag = await aClient.addContactTag(b.agent_id, "teammate");
+    expect(tag.tag).toBe("teammate");
   });
 
   // --- Message template tests ---
@@ -14055,7 +14164,8 @@ describe("Hono API behavior", () => {
   });
 
   it("GET /contacts/:id/tags includes rate limit headers", async () => {
-    const { alpha, beta } = await registerPair();
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
     const res = await app.request(`/contacts/${beta.agent_id}/tags`, {
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
