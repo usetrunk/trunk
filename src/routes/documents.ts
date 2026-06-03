@@ -38,22 +38,26 @@ app.post("/room/:roomId", requireValidUUIDs("roomId"), requireRoomMember(), asyn
 
   const scope = roomScope(roomId);
 
-  const [doc] = await db
-    .insert(sharedDocuments)
-    .values({
-      scope,
-      name: body.name,
-      body: body.body,
-      contentType: body.content_type || "text/markdown",
-      lastEditedBy: agentId,
-    })
-    .returning();
+  const doc = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(sharedDocuments)
+      .values({
+        scope,
+        name: body.name,
+        body: body.body,
+        contentType: body.content_type || "text/markdown",
+        lastEditedBy: agentId,
+      })
+      .returning();
 
-  await db.insert(sharedDocumentVersions).values({
-    documentId: doc.id,
-    version: 1,
-    body: body.body,
-    editedBy: agentId,
+    await tx.insert(sharedDocumentVersions).values({
+      documentId: created.id,
+      version: 1,
+      body: body.body,
+      editedBy: agentId,
+    });
+
+    return created;
   });
 
   await audit(agentId, "document.created", "shared_document", doc.id, { scope, name: body.name });
@@ -307,8 +311,10 @@ app.delete("/room/:roomId/:docId", requireValidUUIDs("roomId", "docId"), require
 
   if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
-  await db.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
-  await db.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
+  await db.transaction(async (tx) => {
+    await tx.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
+    await tx.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
+  });
 
   await audit(agentId, "document.deleted", "shared_document", docId, { scope: roomScope(roomId) });
 
@@ -335,12 +341,15 @@ app.post("/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWor
 
   const scope = workspaceScope(workspaceId);
 
-  const [doc] = await db
-    .insert(sharedDocuments)
-    .values({ scope, name: body.name, body: body.body, contentType: body.content_type || "text/markdown", lastEditedBy: agentId })
-    .returning();
+  const doc = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(sharedDocuments)
+      .values({ scope, name: body.name, body: body.body, contentType: body.content_type || "text/markdown", lastEditedBy: agentId })
+      .returning();
 
-  await db.insert(sharedDocumentVersions).values({ documentId: doc.id, version: 1, body: body.body, editedBy: agentId });
+    await tx.insert(sharedDocumentVersions).values({ documentId: created.id, version: 1, body: body.body, editedBy: agentId });
+    return created;
+  });
   await audit(agentId, "document.created", "shared_document", doc.id, { scope, name: body.name });
 
   return c.json({ id: doc.id, name: doc.name, content_type: doc.contentType, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt }, 201);
@@ -515,8 +524,10 @@ app.delete("/workspace/:workspaceId/:docId", requireValidUUIDs("workspaceId", "d
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
-  await db.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
-  await db.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
+  await db.transaction(async (tx) => {
+    await tx.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
+    await tx.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
+  });
   await audit(agentId, "document.deleted", "shared_document", docId, { scope: workspaceScope(workspaceId) });
 
   return c.json({ ok: true });
@@ -545,23 +556,26 @@ app.post("/:contactId", requireValidUUIDs("contactId"), async (c) => {
 
   const scope = contactScope(agentId, contactId);
 
-  const [doc] = await db
-    .insert(sharedDocuments)
-    .values({
-      scope,
-      name: body.name,
-      body: body.body,
-      contentType: body.content_type || "text/markdown",
-      lastEditedBy: agentId,
-    })
-    .returning();
+  const doc = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(sharedDocuments)
+      .values({
+        scope,
+        name: body.name,
+        body: body.body,
+        contentType: body.content_type || "text/markdown",
+        lastEditedBy: agentId,
+      })
+      .returning();
 
-  // Save first version
-  await db.insert(sharedDocumentVersions).values({
-    documentId: doc.id,
-    version: 1,
-    body: body.body,
-    editedBy: agentId,
+    await tx.insert(sharedDocumentVersions).values({
+      documentId: created.id,
+      version: 1,
+      body: body.body,
+      editedBy: agentId,
+    });
+
+    return created;
   });
 
   await audit(agentId, "document.created", "shared_document", doc.id, { scope, name: body.name });
@@ -840,9 +854,11 @@ app.delete("/:contactId/:docId", requireValidUUIDs("contactId", "docId"), async 
   const scope = contactScope(agentId, contactId);
   if (doc.scope !== scope) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
-  // Delete versions first, then document
-  await db.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
-  await db.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
+  // Delete versions and document atomically
+  await db.transaction(async (tx) => {
+    await tx.delete(sharedDocumentVersions).where(eq(sharedDocumentVersions.documentId, docId));
+    await tx.delete(sharedDocuments).where(eq(sharedDocuments.id, docId));
+  });
 
   await audit(agentId, "document.deleted", "shared_document", docId, { scope });
 

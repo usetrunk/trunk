@@ -16973,6 +16973,161 @@ describe("Hono API behavior", () => {
       ).rejects.toMatchObject({ status: 404 });
     });
   });
+
+  // --- lastSeenAt debounce tests ---
+
+  it("lastSeenAt is set on first API call", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "lastseen-init" });
+
+    // After register, make an authenticated call to trigger lastSeenAt
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.me();
+
+    const agentRow = testState.agents.find(a => a.id === alpha.agent_id);
+    expect(agentRow).toBeDefined();
+    expect(agentRow!.lastSeenAt).toBeDefined();
+    expect(agentRow!.lastSeenAt).toBeInstanceOf(Date);
+  });
+
+  it("lastSeenAt is not updated when less than 30 seconds old", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "lastseen-debounce" });
+    const alphaClient = createClient(alpha.secret);
+
+    // First call sets lastSeenAt
+    await alphaClient.me();
+    const agentRow = testState.agents.find(a => a.id === alpha.agent_id);
+    const firstSeenAt = agentRow!.lastSeenAt;
+    expect(firstSeenAt).toBeInstanceOf(Date);
+
+    // Second call within 30s should NOT update lastSeenAt
+    await alphaClient.me();
+    const afterSecondCall = testState.agents.find(a => a.id === alpha.agent_id)!.lastSeenAt;
+    expect(afterSecondCall!.getTime()).toBe(firstSeenAt!.getTime());
+  });
+
+  it("lastSeenAt IS updated when more than 30 seconds old", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "lastseen-stale" });
+    const alphaClient = createClient(alpha.secret);
+
+    // First call sets lastSeenAt
+    await alphaClient.me();
+    const agentRow = testState.agents.find(a => a.id === alpha.agent_id);
+
+    // Manually backdate lastSeenAt to 60 seconds ago
+    agentRow!.lastSeenAt = new Date(Date.now() - 60_000);
+    const backdatedTime = agentRow!.lastSeenAt.getTime();
+
+    // Next call should update since it's stale
+    await alphaClient.me();
+    const afterUpdate = testState.agents.find(a => a.id === alpha.agent_id)!.lastSeenAt;
+    expect(afterUpdate!.getTime()).toBeGreaterThan(backdatedTime);
+  });
+
+  // --- Document creation atomicity tests ---
+
+  it("document creation produces both document and version atomically", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "doc-atomic-a" });
+    const beta = await anon.register({ name: "doc-atomic-b" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "atomic-test.md",
+      body: "content",
+    });
+
+    // Verify document row exists
+    const docRow = testState["shared_documents"].find(d => d.id === doc.id);
+    expect(docRow).toBeDefined();
+    expect(docRow!.name).toBe("atomic-test.md");
+
+    // Verify version 1 was created
+    const versionRow = testState["shared_document_versions"].find(
+      v => v.documentId === doc.id && v.version === 1
+    );
+    expect(versionRow).toBeDefined();
+    expect(versionRow!.body).toBe("content");
+    expect(versionRow!.editedBy).toBe(alpha.agent_id);
+  });
+
+  it("document deletion removes both document and all versions atomically", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "doc-del-atomic-a" });
+    const beta = await anon.register({ name: "doc-del-atomic-b" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "delete-test.md",
+      body: "v1",
+    });
+
+    // Update to create version 2
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "v2" });
+
+    // Verify 2 versions exist
+    const versionsBefore = testState["shared_document_versions"].filter(
+      v => v.documentId === doc.id
+    );
+    expect(versionsBefore).toHaveLength(2);
+
+    // Delete the document
+    await alphaClient.deleteDocument(beta.agent_id, doc.id);
+
+    // Verify both document and versions are gone
+    const docAfter = testState["shared_documents"].find(d => d.id === doc.id);
+    expect(docAfter).toBeUndefined();
+    const versionsAfter = testState["shared_document_versions"].filter(
+      v => v.documentId === doc.id
+    );
+    expect(versionsAfter).toHaveLength(0);
+  });
+
+  it("room document creation produces both document and version atomically", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "rdoc-atomic-a" });
+    const alphaClient = createClient(alpha.secret);
+    const room = await alphaClient.createRoom({ name: "atomic-room" });
+
+    const doc = await alphaClient.createRoomDocument(room.id, {
+      name: "room-atomic.md",
+      body: "room content",
+    });
+
+    const docRow = testState["shared_documents"].find(d => d.id === doc.id);
+    expect(docRow).toBeDefined();
+
+    const versionRow = testState["shared_document_versions"].find(
+      v => v.documentId === doc.id && v.version === 1
+    );
+    expect(versionRow).toBeDefined();
+    expect(versionRow!.body).toBe("room content");
+  });
+
+  it("workspace document creation produces both document and version atomically", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "wdoc-atomic-a" });
+    const alphaClient = createClient(alpha.secret);
+    const ws = await alphaClient.createWorkspace({ name: "atomic-ws" });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, {
+      name: "ws-atomic.md",
+      body: "ws content",
+    });
+
+    const docRow = testState["shared_documents"].find(d => d.id === doc.id);
+    expect(docRow).toBeDefined();
+
+    const versionRow = testState["shared_document_versions"].find(
+      v => v.documentId === doc.id && v.version === 1
+    );
+    expect(versionRow).toBeDefined();
+    expect(versionRow!.body).toBe("ws content");
+  });
 });
 
 async function registerPair(): Promise<{

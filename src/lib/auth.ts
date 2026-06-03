@@ -63,10 +63,14 @@ export const authMiddleware = createMiddleware<AgentVariables>(
     c.set("agentId", agent.id);
     c.set("agent", agent);
 
-    // Touch lastSeenAt for presence tracking
-    await db.update(agents)
-      .set({ lastSeenAt: new Date() })
-      .where(eq(agents.id, agent.id));
+    // Touch lastSeenAt for presence tracking — debounce to avoid DB contention
+    const now = new Date();
+    const staleThreshold = 30_000; // 30 seconds
+    if (!agent.lastSeenAt || now.getTime() - new Date(agent.lastSeenAt).getTime() > staleThreshold) {
+      await db.update(agents)
+        .set({ lastSeenAt: now })
+        .where(eq(agents.id, agent.id));
+    }
 
     await next();
   }
