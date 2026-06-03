@@ -624,6 +624,9 @@ app.get("/search", async (c) => {
   }
 
   const q = c.req.query("q")?.slice(0, 500).toLowerCase();
+  if (q !== undefined && q.length < 2) {
+    return c.json({ error: "Search query must be at least 2 characters", code: "VALIDATION_ERROR" }, 400);
+  }
   const type = c.req.query("type");
   const contact = c.req.query("contact");
   if (contact && !isValidUUID(contact)) {

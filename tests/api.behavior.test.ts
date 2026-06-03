@@ -4192,6 +4192,18 @@ describe("Hono API behavior", () => {
 
   // --- Message search tests ---
 
+  it("rejects search query shorter than 2 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/messages/search?q=d", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
   it("searches messages by content text", async () => {
     const { beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
