@@ -7051,6 +7051,29 @@ describe("Hono API behavior", () => {
   it("rejects registration with name exceeding 100 characters", async () => {
     await expect(createClient().register({ name: "x".repeat(101) })).rejects.toMatchObject({ status: 400 });
   });
+
+  it("rejects registration with owner exceeding 100 characters", async () => {
+    await expect(createClient().register({ name: "valid", owner: "x".repeat(101) })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects updateMe with owner exceeding 100 characters", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+    await expect(client.updateMe({ owner: "x".repeat(101) })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects workspace creation with owner exceeding 100 characters", async () => {
+    const alpha = await createClient().register({ name: "ws-owner-val", owner: "Frank" });
+
+    const res = await app.request("/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Valid Workspace", owner: "x".repeat(101) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("100");
+  });
 });
 
 async function registerPair(): Promise<{

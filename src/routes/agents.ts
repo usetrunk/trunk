@@ -26,6 +26,9 @@ app.post("/register", async (c) => {
   if (body.name.length > 100) {
     return c.json({ error: "name must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
   }
+  if (body.owner !== undefined && body.owner.length > 100) {
+    return c.json({ error: "owner must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
+  }
 
   const secret = generateSecret();
   const secretHash = await hashSecretAsync(secret);
@@ -90,6 +93,9 @@ app.patch("/me", authMiddleware, async (c) => {
     if (body.name.length > 100) {
       return c.json({ error: "name must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
     }
+  }
+  if (body.owner !== undefined && body.owner.length > 100) {
+    return c.json({ error: "owner must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
   }
 
   const updates: Partial<typeof agents.$inferInsert> = {};

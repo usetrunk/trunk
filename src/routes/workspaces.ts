@@ -19,6 +19,7 @@ app.post("/", async (c) => {
 
   if (!body.name) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
   if (body.name.length > 100) return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  if (body.owner !== undefined && body.owner.length > 100) return c.json({ error: "owner must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
 
   // Check if agent already belongs to a workspace
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);

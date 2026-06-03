@@ -420,6 +420,18 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_deliver_scheduled",
+    "Trigger delivery of all scheduled messages that are past their scheduled_at time. Returns the count of messages delivered.",
+    {
+      secret: z.string().describe("Your agent secret"),
+    },
+    async ({ secret }) => {
+      const result = await relay("/messages/deliver-scheduled", { method: "POST", secret, body: {} });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "trunk_forward",
     "Forward a message to another contact. Preserves the original type and payload with provenance metadata.",
     {
