@@ -14565,6 +14565,531 @@ describe("Hono API behavior", () => {
       expect(versions[0]).toBe(2);
     }
   });
+
+  // ========== Contact Blocking ==========
+
+  describe("contact blocking", () => {
+    it("blocks an agent and prevents messaging", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const result = await alphaClient.blockContact(beta.agent_id, "spammy");
+
+      expect(result.ok).toBe(true);
+      expect(result.id).toEqual(expect.any(String));
+      expect(result.blocked_at).toEqual(expect.any(String));
+
+      // Blocked agent cannot send to blocker
+      await expect(
+        betaClient.send({ to: alpha.agent_id, type: "question", payload: { content: "hi" } })
+      ).rejects.toMatchObject({ status: 403 });
+    });
+
+    it("returns already_blocked when blocking the same agent twice", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.blockContact(beta.agent_id);
+
+      const second = await alphaClient.blockContact(beta.agent_id);
+
+      expect(second.ok).toBe(true);
+      expect(second.already_blocked).toBe(true);
+    });
+
+    it("cannot block yourself", async () => {
+      const alpha = await createClient().register({ name: "self-block" });
+      const client = createClient(alpha.secret);
+
+      await expect(client.blockContact(alpha.agent_id)).rejects.toMatchObject({
+        status: 400,
+        message: "Cannot block yourself",
+      });
+    });
+
+    it("lists blocked agents", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "blocker" });
+      const beta = await anon.register({ name: "blocked-1" });
+      const gamma = await anon.register({ name: "blocked-2" });
+      const client = createClient(alpha.secret);
+      await client.pair({ code: beta.pairing_code });
+      await client.pair({ code: gamma.pairing_code });
+
+      await client.blockContact(beta.agent_id, "reason-1");
+      await client.blockContact(gamma.agent_id, "reason-2");
+
+      const list = await client.blockedContacts();
+      expect(list.blocked).toHaveLength(2);
+      expect(list.count).toBe(2);
+      expect(list.blocked.map((b: { agent_id: string }) => b.agent_id).sort()).toEqual(
+        [beta.agent_id, gamma.agent_id].sort()
+      );
+    });
+
+    it("unblocks an agent and allows messaging again", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.blockContact(beta.agent_id);
+
+      await expect(alphaClient.unblockContact(beta.agent_id)).resolves.toMatchObject({ ok: true });
+
+      // After unblock, beta can send again
+      const sent = await betaClient.send({
+        to: alpha.agent_id,
+        type: "update",
+        payload: { content: "unblocked now" },
+      });
+      expect(sent.status).toBe("delivered");
+    });
+
+    it("unblocking a non-blocked agent returns 404", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(alphaClient.unblockContact(beta.agent_id)).rejects.toMatchObject({
+        status: 404,
+        message: "Not blocked",
+      });
+    });
+
+    it("rejects block reason over 500 characters", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(
+        alphaClient.blockContact(beta.agent_id, "x".repeat(501))
+      ).rejects.toMatchObject({ status: 400 });
+    });
+  });
+
+  // ========== Contact Notes ==========
+
+  describe("contact notes", () => {
+    it("creates a note about a contact", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const note = await alphaClient.setContactNote(beta.agent_id, "Great collaborator");
+
+      expect(note.contact_id).toBe(beta.agent_id);
+      expect(note.content).toBe("Great collaborator");
+      expect(note.created_at).toEqual(expect.any(String));
+    });
+
+    it("reads a note about a contact", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.setContactNote(beta.agent_id, "My note");
+
+      const note = await alphaClient.contactNote(beta.agent_id);
+
+      expect(note.content).toBe("My note");
+    });
+
+    it("returns null content when no note exists", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const note = await alphaClient.contactNote(beta.agent_id);
+
+      expect(note.content).toBeNull();
+    });
+
+    it("updates an existing note", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.setContactNote(beta.agent_id, "First version");
+
+      const updated = await alphaClient.setContactNote(beta.agent_id, "Updated version");
+
+      expect(updated.content).toBe("Updated version");
+      const fetched = await alphaClient.contactNote(beta.agent_id);
+      expect(fetched.content).toBe("Updated version");
+    });
+
+    it("deletes a note", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.setContactNote(beta.agent_id, "To delete");
+
+      await expect(alphaClient.deleteContactNote(beta.agent_id)).resolves.toMatchObject({ ok: true });
+
+      const note = await alphaClient.contactNote(beta.agent_id);
+      expect(note.content).toBeNull();
+    });
+
+    it("deleting a non-existent note returns 404", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(alphaClient.deleteContactNote(beta.agent_id)).rejects.toMatchObject({
+        status: 404,
+        message: "No note found",
+      });
+    });
+
+    it("rejects note content over 5000 characters", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(
+        alphaClient.setContactNote(beta.agent_id, "x".repeat(5001))
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("notes are private — other agent cannot see them", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.setContactNote(beta.agent_id, "Alpha's private note");
+
+      // Beta's note about alpha is separate and starts as null
+      const betaNote = await betaClient.contactNote(alpha.agent_id);
+      expect(betaNote.content).toBeNull();
+    });
+  });
+
+  // ========== Contact Tags ==========
+
+  describe("contact tags", () => {
+    it("adds a tag to a contact", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const result = await alphaClient.addContactTag(beta.agent_id, "partner");
+
+      expect(result.tag).toBe("partner");
+      expect(result.id).toEqual(expect.any(String));
+    });
+
+    it("normalizes tags to lowercase", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.addContactTag(beta.agent_id, "UPPERCASE");
+
+      const tags = await alphaClient.contactTags(beta.agent_id);
+      expect(tags.tags).toContain("uppercase");
+    });
+
+    it("returns already_tagged for duplicate tag", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.addContactTag(beta.agent_id, "dupe");
+
+      const result = await alphaClient.addContactTag(beta.agent_id, "dupe");
+
+      expect(result.ok).toBe(true);
+      expect(result.already_tagged).toBe(true);
+    });
+
+    it("lists tags for a contact", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.addContactTag(beta.agent_id, "team");
+      await alphaClient.addContactTag(beta.agent_id, "partner");
+
+      const tags = await alphaClient.contactTags(beta.agent_id);
+
+      expect(tags.tags).toHaveLength(2);
+      expect(tags.tags.sort()).toEqual(["partner", "team"]);
+    });
+
+    it("removes a tag from a contact", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.addContactTag(beta.agent_id, "remove-me");
+
+      await expect(alphaClient.removeContactTag(beta.agent_id, "remove-me")).resolves.toMatchObject({ ok: true });
+
+      const tags = await alphaClient.contactTags(beta.agent_id);
+      expect(tags.tags).toHaveLength(0);
+    });
+
+    it("removing a non-existent tag returns 404", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(
+        alphaClient.removeContactTag(beta.agent_id, "nope")
+      ).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("rejects whitespace-only tags", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(
+        alphaClient.addContactTag(beta.agent_id, "   ")
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("finds contacts by tag", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tagger" });
+      const beta = await anon.register({ name: "tagged-1" });
+      const gamma = await anon.register({ name: "tagged-2" });
+      const client = createClient(alpha.secret);
+      await client.pair({ code: beta.pairing_code });
+      await client.pair({ code: gamma.pairing_code });
+      await client.addContactTag(beta.agent_id, "vip");
+      await client.addContactTag(gamma.agent_id, "vip");
+
+      const result = await client.contactsByTag("vip");
+
+      expect(result.contacts).toHaveLength(2);
+      expect(result.contacts.map((c: { agent_id: string }) => c.agent_id).sort()).toEqual(
+        [beta.agent_id, gamma.agent_id].sort()
+      );
+    });
+
+    it("lists all tags with counts", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tag-counter" });
+      const beta = await anon.register({ name: "tc-1" });
+      const gamma = await anon.register({ name: "tc-2" });
+      const client = createClient(alpha.secret);
+      await client.pair({ code: beta.pairing_code });
+      await client.pair({ code: gamma.pairing_code });
+      await client.addContactTag(beta.agent_id, "team");
+      await client.addContactTag(gamma.agent_id, "team");
+      await client.addContactTag(beta.agent_id, "vip");
+
+      const all = await client.allContactTags();
+
+      expect(all.tags).toHaveLength(2);
+      const teamTag = all.tags.find((t: { tag: string }) => t.tag === "team");
+      const vipTag = all.tags.find((t: { tag: string }) => t.tag === "vip");
+      expect(teamTag?.count).toBe(2);
+      expect(vipTag?.count).toBe(1);
+    });
+
+    it("tags are private per agent", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.addContactTag(beta.agent_id, "alpha-tag");
+
+      // Beta should have no tags on alpha
+      const betaTags = await betaClient.contactTags(alpha.agent_id);
+      expect(betaTags.tags).toHaveLength(0);
+    });
+  });
+
+  // ========== Notification Preferences ==========
+
+  describe("notification preferences", () => {
+    it("returns defaults when no preferences set", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const prefs = await alphaClient.notificationPrefs(beta.agent_id);
+
+      expect(prefs.muted).toBe(false);
+      expect(prefs.urgency_filter).toBe("all");
+    });
+
+    it("sets muted preference", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const result = await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true });
+
+      expect(result.muted).toBe(true);
+      expect(result.urgency_filter).toBe("all");
+    });
+
+    it("sets urgency_filter to sync_only", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const result = await alphaClient.setNotificationPrefs(beta.agent_id, { urgency_filter: "sync_only" });
+
+      expect(result.urgency_filter).toBe("sync_only");
+    });
+
+    it("updates existing preferences", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.setNotificationPrefs(beta.agent_id, { muted: false, urgency_filter: "all" });
+
+      const updated = await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true, urgency_filter: "sync_only" });
+
+      expect(updated.muted).toBe(true);
+      expect(updated.urgency_filter).toBe("sync_only");
+
+      // Verify persistence
+      const fetched = await alphaClient.notificationPrefs(beta.agent_id);
+      expect(fetched.muted).toBe(true);
+      expect(fetched.urgency_filter).toBe("sync_only");
+    });
+
+    it("rejects invalid urgency_filter", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(
+        alphaClient.setNotificationPrefs(beta.agent_id, { urgency_filter: "invalid" })
+      ).rejects.toMatchObject({ status: 400 });
+    });
+  });
+
+  // ========== Agent Profile Management ==========
+
+  describe("agent profile management", () => {
+    it("updates role and projects via PATCH /me", async () => {
+      const alpha = await createClient().register({ name: "profile-agent" });
+      const client = createClient(alpha.secret);
+
+      const updated = await client.updateMe({
+        role: "developer agent",
+        projects: ["trunk", "superkey"],
+      });
+
+      expect(updated.role).toBe("developer agent");
+      expect(updated.projects).toEqual(["trunk", "superkey"]);
+
+      // Verify persistence
+      const me = await client.me();
+      expect(me.role).toBe("developer agent");
+      expect(me.projects).toEqual(["trunk", "superkey"]);
+    });
+
+    it("updates metadata via PATCH /me", async () => {
+      const alpha = await createClient().register({ name: "meta-agent" });
+      const client = createClient(alpha.secret);
+
+      const updated = await client.updateMe({
+        metadata: { capabilities: ["code", "test"], version: 2 },
+      });
+
+      expect(updated.metadata).toMatchObject({
+        capabilities: ["code", "test"],
+        version: 2,
+      });
+    });
+
+    it("rejects role over 200 characters", async () => {
+      const alpha = await createClient().register({ name: "long-role" });
+      const client = createClient(alpha.secret);
+
+      await expect(
+        client.updateMe({ role: "x".repeat(201) })
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects projects array over 50 entries", async () => {
+      const alpha = await createClient().register({ name: "many-projects" });
+      const client = createClient(alpha.secret);
+
+      await expect(
+        client.updateMe({ projects: Array.from({ length: 51 }, (_, i) => `proj-${i}`) })
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects metadata over 10KB", async () => {
+      const alpha = await createClient().register({ name: "big-meta" });
+      const client = createClient(alpha.secret);
+
+      await expect(
+        client.updateMe({ metadata: { data: "x".repeat(11000) } })
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects empty name", async () => {
+      const alpha = await createClient().register({ name: "empty-name" });
+      const client = createClient(alpha.secret);
+
+      await expect(
+        client.updateMe({ name: "" })
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects name over 100 characters", async () => {
+      const alpha = await createClient().register({ name: "long-name" });
+      const client = createClient(alpha.secret);
+
+      await expect(
+        client.updateMe({ name: "x".repeat(101) })
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("sets and clears status text", async () => {
+      const alpha = await createClient().register({ name: "status-agent" });
+      const client = createClient(alpha.secret);
+
+      const set = await client.setStatus("Working on tests");
+      expect(set.ok).toBe(true);
+      expect(set.status_text).toBe("Working on tests");
+
+      const cleared = await client.setStatus(null);
+      expect(cleared.ok).toBe(true);
+      expect(cleared.status_text).toBeNull();
+    });
+
+    it("rejects status text over 500 characters", async () => {
+      const alpha = await createClient().register({ name: "long-status" });
+      const client = createClient(alpha.secret);
+
+      await expect(
+        client.setStatus("x".repeat(501))
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("presence shows workspace members with online/away/offline status", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "presence-a" });
+      const beta = await anon.register({ name: "presence-b" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const ws = await alphaClient.createWorkspace({ name: "presence-ws" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      // Set alpha's lastSeenAt to now (simulating recent activity)
+      const alphaAgent = testState.agents.find((a) => a.id === alpha.agent_id);
+      if (alphaAgent) alphaAgent.lastSeenAt = new Date();
+
+      const presence = await alphaClient.presence();
+
+      expect(presence.workspace_id).toBe(ws.id);
+      expect(presence.members).toHaveLength(2);
+      expect(presence.members.find((m: { agent_id: string }) => m.agent_id === alpha.agent_id)?.status).toBe("online");
+    });
+
+    it("presence returns error when not in a workspace", async () => {
+      const alpha = await createClient().register({ name: "no-ws" });
+      const client = createClient(alpha.secret);
+
+      await expect(client.presence()).rejects.toMatchObject({
+        status: 400,
+        message: "Not in a workspace",
+      });
+    });
+
+    it("gets another agent's public profile when they are a contact", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const response = await app.request(`/agents/${beta.agent_id}`, {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.agent_id).toBe(beta.agent_id);
+      expect(body.name).toBe("beta");
+    });
+
+    it("rejects profile lookup for non-contacts", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "lookup-a" });
+      const beta = await anon.register({ name: "lookup-b" });
+
+      const response = await app.request(`/agents/${beta.agent_id}`, {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+
+      expect(response.status).toBe(403);
+    });
+  });
 });
 
 async function registerPair(): Promise<{
