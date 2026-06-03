@@ -6395,6 +6395,24 @@ describe("Hono API behavior", () => {
     expect(analytics.period_days).toBe(1);
   });
 
+  it("analytics defaults to 7 days for invalid days parameter", async () => {
+    const { alphaClient } = await registerPair();
+
+    // NaN days should default to 7
+    const analytics = await alphaClient.analytics({ days: NaN } as any);
+    expect(analytics.period_days).toBe(7);
+  });
+
+  it("analytics clamps days to 1-30 range", async () => {
+    const { alphaClient } = await registerPair();
+
+    const low = await alphaClient.analytics({ days: 0 });
+    expect(low.period_days).toBe(1);
+
+    const high = await alphaClient.analytics({ days: 100 });
+    expect(high.period_days).toBe(30);
+  });
+
   // ── Agent Status Messages ──
   it("can set and clear a custom status text", async () => {
     const { alphaClient } = await registerPair();

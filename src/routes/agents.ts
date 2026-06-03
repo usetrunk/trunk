@@ -323,7 +323,8 @@ app.post("/me/webhook/rotate-secret", authMiddleware, async (c) => {
 // List recent webhook deliveries
 app.get("/me/webhook/deliveries", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
-  const limit = Math.min(parseInt(c.req.query("limit") || "20", 10), 100);
+  const limitParam = parseInt(c.req.query("limit") || "20", 10);
+  const limit = isNaN(limitParam) ? 20 : Math.min(Math.max(1, limitParam), 100);
 
   const deliveries = await db
     .select()
@@ -556,7 +557,7 @@ app.post("/me/webhook/test", authMiddleware, async (c) => {
 app.get("/me/analytics", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
   const daysParam = parseInt(c.req.query("days") || "7", 10);
-  const days = Math.min(Math.max(1, daysParam), 30);
+  const days = isNaN(daysParam) ? 7 : Math.min(Math.max(1, daysParam), 30);
 
   const since = new Date();
   since.setDate(since.getDate() - days);

@@ -395,7 +395,7 @@ app.get("/inbox/stats", async (c) => {
 app.get("/threads", async (c) => {
   const agentId = c.get("agentId");
   const limitParam = parseInt(c.req.query("limit") || "20", 10);
-  const limit = Math.min(Math.max(1, limitParam), 50);
+  const limit = isNaN(limitParam) ? 20 : Math.min(Math.max(1, limitParam), 50);
   const cursorParam = c.req.query("cursor");
 
   // Get all non-deleted messages where agent is sender or recipient
