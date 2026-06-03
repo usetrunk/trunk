@@ -26,12 +26,15 @@ app.get("/", async (c) => {
   const conditions = [eq(auditEvents.actorAgent, agentId)];
 
   if (query.action) {
+    if (query.action.length > 100) return c.json({ error: "action filter too long", code: "INVALID_INPUT" }, 400);
     conditions.push(eq(auditEvents.action, query.action));
   }
   if (query.target_type) {
+    if (query.target_type.length > 100) return c.json({ error: "target_type filter too long", code: "INVALID_INPUT" }, 400);
     conditions.push(eq(auditEvents.targetType, query.target_type));
   }
   if (query.target_id) {
+    if (query.target_id.length > 100) return c.json({ error: "target_id filter too long", code: "INVALID_INPUT" }, 400);
     conditions.push(eq(auditEvents.targetId, query.target_id));
   }
   if (query.after) {

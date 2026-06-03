@@ -459,6 +459,13 @@ app.put("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
 // Get note about a contact
 app.get("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${myId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const targetId = c.req.param("agentId");
 
   const [note] = await db
@@ -496,6 +503,13 @@ app.delete("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
 // Get notification preferences for a contact
 app.get("/:id/notifications", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const contactId = c.req.param("id");
 
   const [pref] = await db

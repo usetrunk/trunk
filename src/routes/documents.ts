@@ -594,13 +594,14 @@ app.get("/:contactId/:docId", requireValidUUIDs("contactId", "docId"), async (c)
 
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
+  const scope = contactScope(agentId, contactId);
   const [doc] = await db
     .select()
     .from(sharedDocuments)
     .where(eq(sharedDocuments.id, docId))
     .limit(1);
 
-  if (!doc) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+  if (!doc || doc.scope !== scope) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   return c.json({
     id: doc.id,
@@ -632,13 +633,14 @@ app.put("/:contactId/:docId", requireValidUUIDs("contactId", "docId"), async (c)
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   if (body.name && body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
+  const scope = contactScope(agentId, contactId);
   const [existing] = await db
     .select()
     .from(sharedDocuments)
     .where(eq(sharedDocuments.id, docId))
     .limit(1);
 
-  if (!existing) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+  if (!existing || existing.scope !== scope) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   const newVersion = existing.version + 1;
 
@@ -684,6 +686,10 @@ app.get("/:contactId/:docId/versions", requireValidUUIDs("contactId", "docId"), 
 
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
+  const scope = contactScope(agentId, contactId);
+  const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
+  if (!doc || doc.scope !== scope) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
+
   const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
   const conditions = [eq(sharedDocumentVersions.documentId, docId)];
   if (cursor) {
@@ -724,6 +730,10 @@ app.get("/:contactId/:docId/versions/:version", requireValidUUIDs("contactId", "
   if (isNaN(version) || version < 1) return c.json({ error: "Invalid version", code: "INVALID_INPUT" }, 400);
 
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
+
+  const scope = contactScope(agentId, contactId);
+  const [docCheck] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
+  if (!docCheck || docCheck.scope !== scope) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
   const [v] = await db
     .select()

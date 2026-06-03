@@ -6210,6 +6210,26 @@ describe("Hono API behavior", () => {
     expect(betaResult.events).toEqual([]);
   });
 
+  it("auditLog rejects overlong filter parameters", async () => {
+    const { alpha, alphaClient } = await registerPair();
+    const longValue = "a".repeat(101);
+
+    const res1 = await app.request(`/audit-events?action=${longValue}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res1.status).toBe(400);
+
+    const res2 = await app.request(`/audit-events?target_type=${longValue}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res2.status).toBe(400);
+
+    const res3 = await app.request(`/audit-events?target_id=${longValue}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res3.status).toBe(400);
+  });
+
   it("auditLog requires authentication", async () => {
     const unauthenticated = createClient("bad-secret");
     await expect(unauthenticated.auditLog()).rejects.toMatchObject({ status: 401 });
@@ -8898,6 +8918,97 @@ describe("Hono API behavior", () => {
     await expect(
       alphaClient.documentVersion(beta.agent_id, doc.id, 99)
     ).rejects.toMatchObject({ status: 404 });
+  });
+
+  // ---- Cross-scope document access bypass regression tests ----
+
+  it("blocks reading a document through a different contact scope", async () => {
+    // Alpha creates a doc with Beta, then Gamma (different contact) tries to read it
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const gamma = await createClient().register({ name: "gamma" });
+    const gammaClient = createClient(gamma.secret);
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    // Alpha creates doc in Alpha<->Beta scope
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "secret.md",
+      body: "beta-only content",
+    });
+
+    // Alpha tries to read that doc through the Gamma contact scope — should 404
+    await expect(
+      alphaClient.getDocument(gamma.agent_id, doc.id)
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("blocks updating a document through a different contact scope", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const gamma = await createClient().register({ name: "gamma" });
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "locked.md",
+      body: "original",
+    });
+
+    // Try to update via wrong contact scope
+    await expect(
+      alphaClient.updateDocument(gamma.agent_id, doc.id, { body: "hijacked" })
+    ).rejects.toMatchObject({ status: 404 });
+
+    // Verify original content unchanged
+    const fetched = await alphaClient.getDocument(beta.agent_id, doc.id);
+    expect(fetched.body).toBe("original");
+  });
+
+  it("blocks version history access through a different contact scope", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const gamma = await createClient().register({ name: "gamma" });
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "history.md",
+      body: "v1",
+    });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "v2" });
+
+    // Version list via wrong scope should 404
+    await expect(
+      alphaClient.documentVersions(gamma.agent_id, doc.id)
+    ).rejects.toMatchObject({ status: 404 });
+
+    // Specific version via wrong scope should also 404
+    await expect(
+      alphaClient.documentVersion(gamma.agent_id, doc.id, 1)
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("blocks deleting a document through a different contact scope", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const gamma = await createClient().register({ name: "gamma" });
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "nodelete.md",
+      body: "protected",
+    });
+
+    // Delete via wrong scope should fail
+    await expect(
+      alphaClient.deleteDocument(gamma.agent_id, doc.id)
+    ).rejects.toMatchObject({ status: 404 });
+
+    // Still accessible via correct scope
+    const fetched = await alphaClient.getDocument(beta.agent_id, doc.id);
+    expect(fetched.body).toBe("protected");
   });
 
   // ---- Shared Documents (room-scoped) ----
