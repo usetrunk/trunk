@@ -4,7 +4,7 @@ import { tasks, agents } from "../db/schema.js";
 import { eq, and, desc, lt, or, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
-import { contactScope, verifyRoomAccess } from "../lib/context.js";
+import { contactScope, verifyRoomAccess, resolveScopeAccess } from "../lib/context.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -238,18 +238,7 @@ app.patch("/:scopeId/:taskId", async (c) => {
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");
 
-  // Verify access and resolve scope — could be a contact ID, room ID, or workspace ID
-  let scope: string | undefined;
-  const hasContactAccess = await canMessage(agentId, scopeId);
-  if (hasContactAccess) scope = contactScope(agentId, scopeId);
-  if (!scope) {
-    const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
-    if (hasRoomAccess) scope = `room:${scopeId}`;
-  }
-  if (!scope) {
-    const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
-    if (hasWsAccess) scope = `workspace:${scopeId}`;
-  }
+  const scope = await resolveScopeAccess(agentId, scopeId);
   if (!scope) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
 
   const body = await c.req.json<{
@@ -382,17 +371,7 @@ app.delete("/:scopeId/:taskId", async (c) => {
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");
 
-  let deleteScope: string | undefined;
-  const hasContactAccess = await canMessage(agentId, scopeId);
-  if (hasContactAccess) deleteScope = contactScope(agentId, scopeId);
-  if (!deleteScope) {
-    const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
-    if (hasRoomAccess) deleteScope = `room:${scopeId}`;
-  }
-  if (!deleteScope) {
-    const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
-    if (hasWsAccess) deleteScope = `workspace:${scopeId}`;
-  }
+  const deleteScope = await resolveScopeAccess(agentId, scopeId);
   if (!deleteScope) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
 
   const [deleted] = await db

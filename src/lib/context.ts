@@ -1,9 +1,31 @@
 import { and, eq, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { contacts, sharedFacts, roomMembers } from "../db/schema.js";
+import { canMessage, verifyWorkspaceAccess } from "./workspace.js";
 
 export function contactScope(a: string, b: string): string {
   return `contact:${[a, b].sort().join("-")}`;
+}
+
+/**
+ * Resolve a scopeId to a fully-qualified scope string by trying
+ * contact, room, and workspace access in order.
+ * Returns the scope string or undefined if the agent has no access.
+ */
+export async function resolveScopeAccess(
+  agentId: string,
+  scopeId: string
+): Promise<string | undefined> {
+  const hasContactAccess = await canMessage(agentId, scopeId);
+  if (hasContactAccess) return contactScope(agentId, scopeId);
+
+  const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
+  if (hasRoomAccess) return `room:${scopeId}`;
+
+  const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
+  if (hasWsAccess) return `workspace:${scopeId}`;
+
+  return undefined;
 }
 
 export function roomScope(roomId: string): string {
