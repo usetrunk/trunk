@@ -238,11 +238,19 @@ app.patch("/:scopeId/:taskId", async (c) => {
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");
 
-  // Verify access — could be a contact ID, room ID, or workspace ID
+  // Verify access and resolve scope — could be a contact ID, room ID, or workspace ID
+  let scope: string | undefined;
   const hasContactAccess = await canMessage(agentId, scopeId);
-  const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
-  const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
-  if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
+  if (hasContactAccess) scope = contactScope(agentId, scopeId);
+  if (!scope) {
+    const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
+    if (hasRoomAccess) scope = `room:${scopeId}`;
+  }
+  if (!scope) {
+    const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
+    if (hasWsAccess) scope = `workspace:${scopeId}`;
+  }
+  if (!scope) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
 
   const body = await c.req.json<{
     title?: string;
@@ -278,7 +286,7 @@ app.patch("/:scopeId/:taskId", async (c) => {
   const [updated] = await db
     .update(tasks)
     .set(updates)
-    .where(eq(tasks.id, taskId))
+    .where(and(eq(tasks.id, taskId), eq(tasks.scope, scope)))
     .returning();
 
   if (!updated) return c.json({ error: "Task not found", code: "TASK_NOT_FOUND" }, 404);
@@ -374,14 +382,22 @@ app.delete("/:scopeId/:taskId", async (c) => {
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");
 
+  let deleteScope: string | undefined;
   const hasContactAccess = await canMessage(agentId, scopeId);
-  const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
-  const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
-  if (!hasContactAccess && !hasRoomAccess && !hasWsAccess) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
+  if (hasContactAccess) deleteScope = contactScope(agentId, scopeId);
+  if (!deleteScope) {
+    const hasRoomAccess = await verifyRoomAccess(agentId, scopeId);
+    if (hasRoomAccess) deleteScope = `room:${scopeId}`;
+  }
+  if (!deleteScope) {
+    const hasWsAccess = await verifyWorkspaceAccess(agentId, scopeId);
+    if (hasWsAccess) deleteScope = `workspace:${scopeId}`;
+  }
+  if (!deleteScope) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
 
   const [deleted] = await db
     .delete(tasks)
-    .where(eq(tasks.id, taskId))
+    .where(and(eq(tasks.id, taskId), eq(tasks.scope, deleteScope)))
     .returning();
 
   if (!deleted) return c.json({ error: "Task not found", code: "TASK_NOT_FOUND" }, 404);

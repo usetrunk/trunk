@@ -1428,6 +1428,243 @@ describe("Hono API behavior", () => {
     expect(updateRes.status).toBe(403);
   });
 
+  it("cannot update a workspace task using a contact scope (scope-bypass)", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "scope-bypass-1" });
+    const beta = await anon.register({ name: "scope-bypass-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    // Pair as contacts AND workspace members
+    await alphaClient.pair({ code: beta.pairing_code });
+    const ws = await alphaClient.createWorkspace({ name: "BypassTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Create a workspace-scoped task
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Workspace-only task" }),
+    });
+    expect(createRes.status).toBe(201);
+    const task = await createRes.json();
+
+    // Try to update workspace task using contact scope — should fail (scope mismatch)
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(updateRes.status).toBe(404);
+  });
+
+  it("cannot delete a workspace task using a contact scope (scope-bypass)", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "scope-del-1" });
+    const beta = await anon.register({ name: "scope-del-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const ws = await alphaClient.createWorkspace({ name: "DelBypassTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Create a workspace-scoped task
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Guarded ws task" }),
+    });
+    const task = await createRes.json();
+
+    // Try to delete workspace task using contact scope — should fail
+    const deleteRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(deleteRes.status).toBe(404);
+
+    // Verify task still exists via workspace scope
+    const listRes = await app.request(`/tasks/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const body = await listRes.json();
+    expect(body.tasks.some((t: { id: string }) => t.id === task.id)).toBe(true);
+  });
+
+  it("room member can delete a room-scoped task", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Delete Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, { title: "Deletable room task" });
+    const task = await taskRes.json();
+
+    const deleteRes = await app.request(`/tasks/${room.id}/${task.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${beta.secret}` },
+    });
+    expect(deleteRes.status).toBe(200);
+    const result = await deleteRes.json();
+    expect(result.ok).toBe(true);
+  });
+
+  it("workspace member can delete a workspace-scoped task", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-del-1" });
+    const beta = await anon.register({ name: "ws-del-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "DeleteTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Ws task to delete" }),
+    });
+    const task = await createRes.json();
+
+    const deleteRes = await app.request(`/tasks/${ws.id}/${task.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${beta.secret}` },
+    });
+    expect(deleteRes.status).toBe(200);
+    const result = await deleteRes.json();
+    expect(result.ok).toBe(true);
+  });
+
+  // --- Gantt endpoint tests ---
+
+  it("returns gantt data with dependency info and grouping", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "gantt-1" });
+    const beta = await anon.register({ name: "gantt-2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "GanttTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Create tasks: dep (done), blocked (depends on dep), ungrouped
+    const depRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Setup DB", group: "backend", owner: alpha.agent_id, sequence: 1 }),
+    });
+    const dep = await depRes.json();
+
+    await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Build API", group: "backend", depends_on: [dep.id], status: "blocked", owner: beta.agent_id, sequence: 2 }),
+    });
+
+    await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Write docs" }),
+    });
+
+    // Mark dep as done
+    await app.request(`/tasks/${ws.id}/${dep.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "done" }),
+    });
+
+    const ganttRes = await app.request(`/tasks/gantt/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(ganttRes.status).toBe(200);
+    const gantt = await ganttRes.json();
+
+    // Summary
+    expect(gantt.summary.total).toBe(3);
+    expect(gantt.summary.done).toBe(1);
+
+    // All tasks present
+    expect(gantt.tasks).toHaveLength(3);
+
+    // Owner names resolved
+    const setupTask = gantt.tasks.find((t: { title: string }) => t.title === "Setup DB");
+    expect(setupTask.owner_name).toBe("gantt-1");
+
+    const apiTask = gantt.tasks.find((t: { title: string }) => t.title === "Build API");
+    expect(apiTask.owner_name).toBe("gantt-2");
+    expect(apiTask.deps_met).toBe(true); // dep is done
+    expect(apiTask.blocked_by).toEqual([]);
+
+    // Grouping
+    expect(gantt.groups.backend).toHaveLength(2);
+    expect(gantt.ungrouped).toHaveLength(1);
+    expect(gantt.ungrouped[0].title).toBe("Write docs");
+  });
+
+  it("gantt shows blocked_by when dependency not done", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "gantt-block-1" });
+    const alphaClient = createClient(alpha.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "GanttBlockTeam" });
+
+    const depRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Undone dep" }),
+    });
+    const dep = await depRes.json();
+
+    await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Waiting task", depends_on: [dep.id] }),
+    });
+
+    const ganttRes = await app.request(`/tasks/gantt/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const gantt = await ganttRes.json();
+
+    const waiting = gantt.tasks.find((t: { title: string }) => t.title === "Waiting task");
+    expect(waiting.deps_met).toBe(false);
+    expect(waiting.blocked_by).toEqual([dep.id]);
+  });
+
+  it("gantt rejects non-workspace-member", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "gantt-auth-1" });
+    const outsider = await anon.register({ name: "gantt-outsider" });
+    const alphaClient = createClient(alpha.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "GanttPrivate" });
+
+    const ganttRes = await app.request(`/tasks/gantt/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${outsider.secret}` },
+    });
+    expect(ganttRes.status).toBe(403);
+  });
+
+  it("gantt returns empty structure for workspace with no tasks", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "gantt-empty" });
+    const alphaClient = createClient(alpha.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "EmptyGantt" });
+
+    const ganttRes = await app.request(`/tasks/gantt/workspace/${ws.id}`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(ganttRes.status).toBe(200);
+    const gantt = await ganttRes.json();
+    expect(gantt.tasks).toEqual([]);
+    expect(gantt.groups).toEqual({});
+    expect(gantt.ungrouped).toEqual([]);
+    expect(gantt.summary).toEqual({ total: 0, done: 0, in_progress: 0, blocked: 0, open: 0 });
+  });
+
   // --- SDK room method tests ---
 
   it("SDK createRoom + joinRoom + listRooms round-trip", async () => {
