@@ -659,7 +659,11 @@ app.delete("/:id/tags/:tag", requireValidUUIDs("id"), async (c) => {
   }
 
   const contactId = c.req.param("id");
-  const tag = c.req.param("tag").toLowerCase();
+  const rawTag = c.req.param("tag");
+  if (!rawTag || rawTag.length > 50) {
+    return c.json({ error: "Tag must be 1-50 characters", code: "INVALID_INPUT" }, 400);
+  }
+  const tag = rawTag.toLowerCase();
 
   const deleted = await db
     .delete(contactTags)

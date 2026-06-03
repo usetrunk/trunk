@@ -1195,26 +1195,29 @@ app.patch("/:id", requireValidUUIDs("id"), async (c) => {
     return c.json({ error: "Edit window expired (15 minutes)", code: "EDIT_WINDOW_EXPIRED" }, 403);
   }
 
-  // Determine version number for this edit
-  const existingEdits = await db
-    .select()
-    .from(messageEdits)
-    .where(eq(messageEdits.messageId, messageId));
-  const version = existingEdits.length + 1;
+  // Use a transaction to atomically compute version, store edit history, and update message
+  const { updated, version } = await db.transaction(async (tx) => {
+    const existingEdits = await tx
+      .select()
+      .from(messageEdits)
+      .where(eq(messageEdits.messageId, messageId));
+    const ver = existingEdits.length + 1;
 
-  // Store previous payload in edit history
-  await db.insert(messageEdits).values({
-    messageId,
-    version,
-    previousPayload: msg.payload as Record<string, unknown>,
-    editedBy: agentId,
+    await tx.insert(messageEdits).values({
+      messageId,
+      version: ver,
+      previousPayload: msg.payload as Record<string, unknown>,
+      editedBy: agentId,
+    });
+
+    const [upd] = await tx
+      .update(messages)
+      .set({ payload: body.payload, editedAt: new Date() })
+      .where(eq(messages.id, messageId))
+      .returning();
+
+    return { updated: upd, version: ver };
   });
-
-  const [updated] = await db
-    .update(messages)
-    .set({ payload: body.payload, editedAt: new Date() })
-    .where(eq(messages.id, messageId))
-    .returning();
 
   await audit(agentId, "message.edit", "message", messageId, { version });
 

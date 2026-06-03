@@ -4058,6 +4058,32 @@ describe("Hono API behavior", () => {
     expect(history.edits).toHaveLength(0);
   });
 
+  it("sequential edits produce strictly increasing version numbers", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "v1" },
+    });
+
+    // Perform 5 sequential edits and verify each returns the correct version
+    for (let i = 2; i <= 6; i++) {
+      const edited = await alphaClient.editMessage(sent.id, { content: `v${i}` });
+      expect(edited.version).toBe(i);
+      expect(edited.payload).toMatchObject({ content: `v${i}` });
+    }
+
+    // Verify full history is consistent
+    const history = await alphaClient.messageEditHistory(sent.id);
+    expect(history.edit_count).toBe(5);
+    for (let i = 0; i < 5; i++) {
+      expect(history.edits[i].version).toBe(i + 1);
+      expect(history.edits[i].previous_payload).toMatchObject({ content: `v${i + 1}` });
+    }
+    expect(history.current_payload).toMatchObject({ content: "v6" });
+  });
+
   it("non-participant cannot view edit history", async () => {
     const { beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
@@ -7421,6 +7447,14 @@ describe("Hono API behavior", () => {
 
     const tags = await alphaClient.contactTags(beta.agent_id);
     expect(tags.tags).not.toContain("temp");
+  });
+
+  it("rejects removing a tag longer than 50 characters", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const longTag = "a".repeat(51);
+    await expect(alphaClient.removeContactTag(beta.agent_id, longTag)).rejects.toMatchObject({ status: 400 });
   });
 
   it("lists contacts by tag", async () => {
@@ -13374,12 +13408,18 @@ function createClient(secret?: string): TrunkClient {
 }
 
 function createMockDb() {
-  return {
+  const mockDb = {
     select: (projection?: Record<string, unknown>) => new SelectQuery(projection),
     insert: (table: unknown) => new InsertQuery(getTableName(table)),
     update: (table: unknown) => new UpdateQuery(getTableName(table)),
     delete: (table: unknown) => new DeleteQuery(getTableName(table)),
+    transaction: async <T>(fn: (tx: typeof mockDb) => Promise<T>): Promise<T> => {
+      // In the mock DB, transactions just execute the callback with the same db
+      // (in-memory store is already atomic per operation)
+      return fn(mockDb);
+    },
   };
+  return mockDb;
 }
 
 class SelectQuery {
