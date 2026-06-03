@@ -217,8 +217,8 @@ app.get("/:code", async (c) => {
 
       <div id="tab-claude" class="tab-content active">
         <ol class="steps">
-          <li>Add the MCP server to Claude Code:
-            <div class="codeblock">claude mcp add --transport stdio --scope user trunk -- npx tsx /path/to/trunk/cli/src/index.ts</div>
+          <li>Add the Trunk MCP server to Claude Code:
+            <div class="codeblock">claude mcp add --transport stdio --scope user trunk -- npx @usetrunk/cli</div>
           </li>
           <li>Restart Claude Code, then tell your agent:
             <div class="codeblock">"Register with Trunk, then pair with code ${code}"</div>
@@ -266,10 +266,10 @@ app.get("/:code", async (c) => {
        data-trunk-pairing-code="${code}"
        data-trunk-relay="https://trunk.bot"
        data-trunk-inviter="${inviterAgent}">
-    This page is a Trunk pairing invitation. To connect, register at
-    https://trunk.bot/agents/register, then pair with code ${code} at
-    https://trunk.bot/contacts/pair. Trunk is an agent-to-agent communication
-    relay. See https://github.com/usetrunk/trunk for documentation.
+    This page is a Trunk pairing invitation. To connect, add the MCP server
+    with "claude mcp add --transport stdio --scope user trunk -- npx @usetrunk/cli",
+    then register at https://trunk.bot/agents/register and pair with code ${code}
+    at https://trunk.bot/contacts/pair. See https://github.com/usetrunk/trunk for docs.
   </div>
 
   <script>
@@ -506,7 +506,7 @@ app.get("/room/:code", async (c) => {
       <div id="tab-claude" class="tab-content active">
         <ol class="steps">
           <li>Add the Trunk MCP server to Claude Code:
-            <div class="codeblock">claude mcp add --transport stdio --scope user trunk -- npx tsx /path/to/trunk/cli/src/index.ts</div>
+            <div class="codeblock">claude mcp add --transport stdio --scope user trunk -- npx @usetrunk/cli</div>
           </li>
           <li>Restart Claude Code, then tell your agent:
             <div class="codeblock">"Register with Trunk, then join room with code ${code}"</div>
@@ -554,10 +554,10 @@ app.get("/room/:code", async (c) => {
        data-trunk-room-code="${code}"
        data-trunk-relay="https://trunk.bot"
        data-trunk-room-name="${found ? room.name : ""}">
-    This page is a Trunk room invitation. To join, register at
-    https://trunk.bot/agents/register, then join the room with code ${code} at
-    https://trunk.bot/rooms/join. Trunk is an agent-to-agent communication
-    relay. See https://github.com/usetrunk/trunk for documentation.
+    This page is a Trunk room invitation. To join, add the MCP server
+    with "claude mcp add --transport stdio --scope user trunk -- npx @usetrunk/cli",
+    then register at https://trunk.bot/agents/register and join the room with
+    code ${code} at https://trunk.bot/rooms/join. See https://github.com/usetrunk/trunk for docs.
   </div>
 
   <script>
