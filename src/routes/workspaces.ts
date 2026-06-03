@@ -150,9 +150,21 @@ app.patch("/me", async (c) => {
     return c.json({ error: "Admin role required", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
+  const rateLimit = await checkRateLimit(`workspace:patch:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ name?: string; metadata?: Record<string, unknown> }>();
   if (!body.name && !body.metadata) {
     return c.json({ error: "name or metadata is required", code: "MISSING_FIELD" }, 400);
+  }
+  if (body.name && body.name.length > 100) {
+    return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.metadata && JSON.stringify(body.metadata).length > 10000) {
+    return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
   }
 
   const updates: Record<string, unknown> = {};

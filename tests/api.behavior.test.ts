@@ -8901,6 +8901,132 @@ describe("Hono API behavior", () => {
       client.uploadAttachment({ filename: "a".repeat(256), data: btoa("a") })
     ).rejects.toMatchObject({ status: 400 });
   });
+
+  // --- Workspace PATCH validation ---
+
+  it("rejects workspace update with name exceeding 100 characters", async () => {
+    const alpha = await createClient().register({ name: "ws-patch-val" });
+    const client = createClient(alpha.secret);
+    await client.createWorkspace({ name: "My WS" });
+
+    const res = await app.request("/workspaces/me", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "x".repeat(101) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
+
+  it("rejects workspace update with metadata exceeding 10KB", async () => {
+    const alpha = await createClient().register({ name: "ws-meta-val" });
+    const client = createClient(alpha.secret);
+    await client.createWorkspace({ name: "My WS" });
+
+    const res = await app.request("/workspaces/me", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ metadata: { big: "x".repeat(11000) } }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("10KB");
+  });
+
+  it("workspace PATCH /me is rate limited", async () => {
+    const alpha = await createClient().register({ name: "ws-rl" });
+    const client = createClient(alpha.secret);
+    await client.createWorkspace({ name: "Rate WS" });
+
+    // Send 21 requests to exceed the 20/min limit
+    const results: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request("/workspaces/me", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ name: `WS-${i}` }),
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- Room creation validation ---
+
+  it("room creation is rate limited", async () => {
+    const alpha = await createClient().register({ name: "room-rl" });
+
+    const results: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const res = await createRoomRaw(alpha.secret, { name: `Room-${i}` });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rejects room creation with metadata exceeding 10KB", async () => {
+    const alpha = await createClient().register({ name: "room-meta-val" });
+
+    const res = await createRoomRaw(alpha.secret, {
+      name: "Good Room",
+      metadata: { big: "x".repeat(11000) },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("10KB");
+  });
+
+  it("rejects room update with metadata exceeding 10KB", async () => {
+    const alpha = await createClient().register({ name: "room-up-meta" });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Good Room" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ metadata: { big: "x".repeat(11000) } }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("10KB");
+  });
+
+  // --- Agent PATCH /me rate limit ---
+
+  it("agent PATCH /me is rate limited", async () => {
+    const alpha = await createClient().register({ name: "agent-rl" });
+
+    const results: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request("/agents/me", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ name: `Agent-${i}` }),
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 async function registerPair(): Promise<{

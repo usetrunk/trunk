@@ -80,6 +80,13 @@ app.get("/me", authMiddleware, async (c) => {
 // Update current agent (name, webhook_url, owner, role, projects, metadata)
 app.patch("/me", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`agent:patch:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{
     name?: string;
     webhook_url?: string;

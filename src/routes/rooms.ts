@@ -14,10 +14,20 @@ app.use("/*", authMiddleware);
 // Create a room
 app.post("/", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`rooms:create:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ name: string; metadata?: Record<string, unknown> }>();
 
   if (!body.name) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
   if (body.name.length > 100) return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  if (body.metadata && JSON.stringify(body.metadata).length > 10000) {
+    return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
+  }
 
   const pairingCode = generatePairingCode();
 
@@ -152,6 +162,9 @@ app.patch("/:roomId", async (c) => {
   }
   if (body.name && body.name.length > 100) {
     return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.metadata && JSON.stringify(body.metadata).length > 10000) {
+    return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
   }
 
   // Verify creator/admin role
