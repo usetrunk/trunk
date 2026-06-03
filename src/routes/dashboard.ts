@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { html } from "hono/html";
+import { html, raw } from "hono/html";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, roomMembers, rooms, tasks, workspaceContacts, workspaces } from "../db/schema.js";
@@ -832,7 +832,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
                     <span style="font-size:0.82rem;font-weight:700;color:var(--accent-2);text-transform:uppercase;letter-spacing:0.04em;">Dependency graph</span>
                   </div>
                   <div style="padding:1rem;overflow-x:auto;">
-                    <pre class="mermaid">${mermaidDef}</pre>
+                    <pre class="mermaid">${raw(mermaidDef)}</pre>
                   </div>
                 </div>
               ` : ""}
