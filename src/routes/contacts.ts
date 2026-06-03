@@ -269,6 +269,13 @@ app.get("/blocked", async (c) => {
 // Update contact alias
 app.patch("/:agentId", async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const targetId = c.req.param("agentId");
   const body = await c.req.json<{ alias: string | null }>();
 
@@ -311,6 +318,13 @@ app.patch("/:agentId", async (c) => {
 // Unpair
 app.delete("/:agentId", async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const targetId = c.req.param("agentId");
 
   await db
@@ -329,6 +343,13 @@ app.delete("/:agentId", async (c) => {
 // Block an agent
 app.post("/:agentId/block", async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const targetId = c.req.param("agentId");
   if (myId === targetId) return c.json({ error: "Cannot block yourself", code: "SELF_ACTION" }, 400);
 
@@ -359,6 +380,13 @@ app.post("/:agentId/block", async (c) => {
 // Unblock an agent
 app.delete("/:agentId/block", async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const targetId = c.req.param("agentId");
 
   const deleted = await db
@@ -373,6 +401,13 @@ app.delete("/:agentId/block", async (c) => {
 // Add or update a private note about a contact
 app.put("/:agentId/notes", async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const targetId = c.req.param("agentId");
   const body = await c.req.json<{ content: string }>();
   if (!body.content || typeof body.content !== "string") {
@@ -424,6 +459,13 @@ app.get("/:agentId/notes", async (c) => {
 // Delete note about a contact
 app.delete("/:agentId/notes", async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const targetId = c.req.param("agentId");
 
   const deleted = await db
@@ -465,6 +507,13 @@ app.get("/:id/notifications", async (c) => {
 // Set notification preferences for a contact
 app.put("/:id/notifications", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const contactId = c.req.param("id");
   const body = await c.req.json<{
     muted?: boolean;
@@ -525,6 +574,13 @@ app.put("/:id/notifications", async (c) => {
 // Add a tag to a contact
 app.post("/:id/tags", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const contactId = c.req.param("id");
   const body = await c.req.json<{ tag: string }>();
 
@@ -561,6 +617,13 @@ app.post("/:id/tags", async (c) => {
 // Remove a tag from a contact
 app.delete("/:id/tags/:tag", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`contacts:write:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const contactId = c.req.param("id");
   const tag = c.req.param("tag").toLowerCase();
 

@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { agents, contacts, messages, roomMembers, rooms, tasks, workspaceContacts, workspaces } from "../db/schema.js";
 import { and, eq, or, desc, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -57,6 +58,12 @@ app.get("/", async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
   const secret = c.req.query("secret") || "";
+
+  const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.text("Too many requests. Please try again later.", 429);
+  }
 
   // Get contacts
   const contactRows = await db
@@ -295,6 +302,12 @@ app.get("/thread/:threadId", async (c) => {
   const secret = c.req.query("secret") || "";
   const threadId = c.req.param("threadId");
 
+  const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.text("Too many requests. Please try again later.", 429);
+  }
+
   const threadMessages = await db
     .select()
     .from(messages)
@@ -365,6 +378,12 @@ app.get("/inbox", async (c) => {
   const secret = c.req.query("secret") || "";
   const statusFilter = c.req.query("status") || "pending";
 
+  const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.text("Too many requests. Please try again later.", 429);
+  }
+
   const inboxMessages = await db
     .select()
     .from(messages)
@@ -432,6 +451,12 @@ app.get("/gantt", async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
   const secret = c.req.query("secret") || "";
+
+  const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.text("Too many requests. Please try again later.", 429);
+  }
 
   // Find workspaces this agent belongs to
   const wsMemberships = await db

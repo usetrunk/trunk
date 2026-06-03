@@ -9027,6 +9027,122 @@ describe("Hono API behavior", () => {
     }
     expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
   });
+
+  // --- Hardening: audit route rate limiting ---
+
+  it("audit events endpoint is rate limited at 30/min", async () => {
+    const alpha = await createClient().register({ name: "audit-rl" });
+    const results: number[] = [];
+    for (let i = 0; i < 31; i++) {
+      const res = await app.request("/audit-events", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- Hardening: billing route rate limiting ---
+
+  it("billing status is rate limited at 30/min", async () => {
+    const alpha = await createClient().register({ name: "billing-rl" });
+    // Create workspace so billing status works
+    const wsRes = await app.request("/workspaces", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "BillingWS" }),
+    });
+    expect(wsRes.status).toBe(201);
+
+    const results: number[] = [];
+    for (let i = 0; i < 31; i++) {
+      const res = await app.request("/billing/status", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("billing checkout is rate limited at 5/min", async () => {
+    const alpha = await createClient().register({ name: "checkout-rl" });
+    const wsRes = await app.request("/workspaces", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "CheckoutWS" }),
+    });
+    expect(wsRes.status).toBe(201);
+
+    const results: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const res = await app.request("/billing/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({}),
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- Hardening: dashboard rate limiting ---
+
+  it("dashboard is rate limited at 30/min", async () => {
+    const alpha = await createClient().register({ name: "dash-rl" });
+    const results: number[] = [];
+    for (let i = 0; i < 31; i++) {
+      const res = await app.request(`/dashboard?secret=${alpha.secret}`, {
+        method: "GET",
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- Hardening: contacts write rate limiting ---
+
+  it("contacts write operations share a 30/min rate limit", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const results: number[] = [];
+    // Exhaust with PATCH alias updates (30 calls)
+    for (let i = 0; i < 30; i++) {
+      const res = await app.request(`/contacts/${beta.agent_id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ alias: `alias-${i}` }),
+      });
+      results.push(res.status);
+    }
+
+    // 31st call should be rate limited — try a different write endpoint
+    const blocked = await app.request(`/contacts/${beta.agent_id}/block`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({}),
+    });
+    expect(blocked.status).toBe(429);
+    const body = await blocked.json();
+    expect(body).toMatchObject({ error: "Rate limit exceeded", code: "RATE_LIMITED" });
+  });
 });
 
 async function registerPair(): Promise<{

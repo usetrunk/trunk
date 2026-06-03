@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { agents, subscriptions, workspaces } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -40,6 +41,12 @@ async function ensureSubscription(workspaceId: string) {
 app.get("/status", async (c) => {
   const agentId = c.get("agentId");
 
+  const rateLimit = await checkRateLimit(`billing:status:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
     return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
@@ -59,6 +66,13 @@ app.get("/status", async (c) => {
 // Create a Stripe Checkout session to upgrade to team tier
 app.post("/checkout", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`billing:checkout:${agentId}`, 5, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ success_url?: string; cancel_url?: string }>().catch((): { success_url?: string; cancel_url?: string } => ({}));
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
@@ -106,6 +120,12 @@ app.post("/checkout", async (c) => {
 app.post("/portal", async (c) => {
   const agentId = c.get("agentId");
 
+  const rateLimit = await checkRateLimit(`billing:portal:${agentId}`, 10, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
     return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
@@ -128,6 +148,13 @@ app.post("/portal", async (c) => {
 // --- Stripe webhook (no auth — verified via Stripe signature) ---
 
 app.post("/webhook", async (c) => {
+  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const rateLimit = await checkRateLimit(`billing:webhook:${ip}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const sig = c.req.header("stripe-signature");
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 

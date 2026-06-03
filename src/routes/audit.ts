@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { auditEvents } from "../db/schema.js";
 import { eq, and, desc, lt, gte, lte } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -13,6 +14,12 @@ app.use("/*", authMiddleware);
 // GET /audit-events — query audit log for the authenticated agent
 app.get("/", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`audit:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const query = c.req.query();
   const pagination = parsePaginationQuery(query);
 
