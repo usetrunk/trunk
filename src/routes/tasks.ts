@@ -55,7 +55,7 @@ app.post("/", async (c) => {
 
   const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   const body = await c.req.json<{
     contact_id?: string;
@@ -298,7 +298,7 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
 
   const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   const scope = await resolveScopeAccess(agentId, scopeId);
   if (!scope) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
@@ -462,7 +462,7 @@ app.delete("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c
 
   const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   const deleteScope = await resolveScopeAccess(agentId, scopeId);
   if (!deleteScope) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);

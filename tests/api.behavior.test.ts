@@ -11837,6 +11837,393 @@ describe("Hono API behavior", () => {
     });
     expect(blocked.status).toBe(429);
   });
+
+  // --- Room edge case tests ---
+
+  it("admin cannot kick the room creator", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-creator" });
+    const beta = await anon.register({ name: "room-admin" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    // Alpha creates room (becomes creator), beta joins
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Creator Protection" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Promote beta to admin
+    await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ role: "admin" }),
+    });
+
+    // Admin (beta) tries to kick creator (alpha) — should fail
+    const kickRes = await app.request(`/rooms/${room.id}/kick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${beta.secret}` },
+      body: JSON.stringify({ agent_id: alpha.agent_id }),
+    });
+    expect(kickRes.status).toBe(403);
+    const body = await kickRes.json();
+    expect(body.code).toBe("INSUFFICIENT_ROLE");
+  });
+
+  it("admin cannot kick another admin in a room", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-creator" });
+    const beta = await anon.register({ name: "admin-1" });
+    const gamma = await anon.register({ name: "admin-2" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Admin vs Admin" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+    await joinRoomRaw(gamma.secret, room.pairing_code);
+
+    // Promote both to admin
+    await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    await app.request(`/rooms/${room.id}/members/${gamma.agent_id}/role`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ role: "admin" }),
+    });
+
+    // Admin beta tries to kick admin gamma — should fail
+    const kickRes = await app.request(`/rooms/${room.id}/kick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${beta.secret}` },
+      body: JSON.stringify({ agent_id: gamma.agent_id }),
+    });
+    expect(kickRes.status).toBe(403);
+    const body = await kickRes.json();
+    expect(body.code).toBe("INSUFFICIENT_ROLE");
+  });
+
+  it("non-creator cannot delete a room", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-creator" });
+    const beta = await anon.register({ name: "room-admin" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Delete Protected" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Promote beta to admin
+    await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ role: "admin" }),
+    });
+
+    // Admin (not creator) tries to delete — should fail
+    const delRes = await app.request(`/rooms/${room.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(delRes.status).toBe(403);
+    const body = await delRes.json();
+    expect(body.code).toBe("INSUFFICIENT_ROLE");
+  });
+
+  it("room double-join returns idempotent response", async () => {
+    const alpha = await createClient().register({ name: "double-joiner" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Rejoin Room" });
+    const room = await roomRes.json();
+
+    // Create a second agent and join twice
+    const beta = await createClient().register({ name: "beta-joiner" });
+    const join1 = await joinRoomRaw(beta.secret, room.pairing_code);
+    expect(join1.status).toBe(200);
+    const join1Body = await join1.json();
+    expect(join1Body.joined).toBe(true);
+
+    // Second join with same code — should be idempotent
+    const join2 = await joinRoomRaw(beta.secret, room.pairing_code);
+    expect(join2.status).toBe(200);
+    const join2Body = await join2.json();
+    expect(join2Body.joined).toBe(true);
+    expect(join2Body.already_member).toBe(true);
+    expect(join2Body.room_id).toBe(room.id);
+  });
+
+  it("kicked member cannot access room resources", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-owner" });
+    const beta = await anon.register({ name: "kicked-member" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Kick Access" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Beta can access members
+    const beforeKick = await app.request(`/rooms/${room.id}/members`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(beforeKick.status).toBe(200);
+
+    // Kick beta
+    await app.request(`/rooms/${room.id}/kick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ agent_id: beta.agent_id }),
+    });
+
+    // Beta can no longer access members
+    const afterKick = await app.request(`/rooms/${room.id}/members`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(afterKick.status).toBe(403);
+  });
+
+  it("room leave removes membership and prevents further access", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-owner" });
+    const beta = await anon.register({ name: "room-leaver" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Leave Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Beta leaves
+    const leaveRes = await app.request(`/rooms/${room.id}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(leaveRes.status).toBe(200);
+    const leaveBody = await leaveRes.json();
+    expect(leaveBody.ok).toBe(true);
+
+    // Beta can no longer access room
+    const membersRes = await app.request(`/rooms/${room.id}/members`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(membersRes.status).toBe(403);
+  });
+
+  // --- Workspace edge case tests ---
+
+  it("workspace double-join returns 409 ALREADY_MEMBER", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-creator" });
+    const beta = await anon.register({ name: "ws-double-joiner" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "DoubleJoin WS" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Second join — should return 409 since already in a workspace
+    const res = await app.request("/workspaces/join", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${beta.secret}` },
+      body: JSON.stringify({ code: ws.pairing_code }),
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("ALREADY_MEMBER");
+  });
+
+  it("kicked workspace member cannot access workspace resources", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin" });
+    const beta = await anon.register({ name: "ws-kicked" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Kick Access WS" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Beta can see workspace
+    const before = await betaClient.myWorkspace();
+    expect(before.workspace.name).toBe("Kick Access WS");
+
+    // Kick beta
+    await alphaClient.kickWorkspaceMember(beta.agent_id);
+
+    // Beta can no longer access workspace
+    await expect(betaClient.myWorkspace()).rejects.toMatchObject({ status: 404 });
+  });
+
+  // --- Rate limit retry_after_seconds consistency tests ---
+
+  it("rate limited responses always include retry_after_seconds", async () => {
+    const alpha = await createClient().register({ name: "rl-consistency" });
+
+    // Exhaust the task create rate limit (30/min)
+    for (let i = 0; i < 30; i++) {
+      await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ title: `task-${i}`, contact_id: "00000000-0000-0000-0000-000000000001" }),
+      });
+    }
+
+    const blockedRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "over-limit", contact_id: "00000000-0000-0000-0000-000000000001" }),
+    });
+    expect(blockedRes.status).toBe(429);
+    const body = await blockedRes.json();
+    expect(body.code).toBe("RATE_LIMITED");
+    expect(body.retry_after_seconds).toEqual(expect.any(Number));
+    expect(body.retry_after_seconds).toBeGreaterThan(0);
+  });
+
+  it("context fact write rate limit includes retry_after_seconds", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+
+    // Exhaust the facts write rate limit (30/min)
+    for (let i = 0; i < 30; i++) {
+      await app.request(`/context/${beta.agent_id}/facts/key${i}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ value: `val-${i}` }),
+      });
+    }
+
+    const blockedRes = await app.request(`/context/${beta.agent_id}/facts/over-limit`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ value: "blocked" }),
+    });
+    expect(blockedRes.status).toBe(429);
+    const body = await blockedRes.json();
+    expect(body.code).toBe("RATE_LIMITED");
+    expect(body.retry_after_seconds).toEqual(expect.any(Number));
+    expect(body.retry_after_seconds).toBeGreaterThan(0);
+  });
+
+  // --- Task edge case tests ---
+
+  it("task title exceeding 500 chars is rejected", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const longTitle = "x".repeat(501);
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: longTitle, contact_id: beta.agent_id }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("task depends_on exceeding 50 entries is rejected", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const tooManyDeps = Array.from({ length: 51 }, (_, i) =>
+      `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`
+    );
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "dep-test", contact_id: beta.agent_id, depends_on: tooManyDeps }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("task depends_on with invalid UUID is rejected", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "bad-dep", contact_id: beta.agent_id, depends_on: ["not-a-uuid"] }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("task update with invalid status is rejected", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create a task first
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "status-test", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    // Try updating with invalid status
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "invalid-status" }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("task update with invalid priority is rejected", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "priority-test", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ priority: "super-high" }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("non-contact cannot create a task scoped to another agent", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "task-creator" });
+    const beta = await anon.register({ name: "task-stranger" });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "sneaky task", contact_id: beta.agent_id }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("NOT_MEMBER");
+  });
+
+  it("non-member cannot access room tasks", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-owner" });
+    const beta = await anon.register({ name: "room-outsider" });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Task Room" });
+    const room = await roomRes.json();
+
+    // Create a room task
+    await createRoomTaskRaw(alpha.secret, room.id, { title: "secret task" });
+
+    // Beta (not a member) tries to list room tasks
+    const listRes = await app.request(`/tasks/room/${room.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(listRes.status).toBe(403);
+  });
 });
 
 async function registerPair(): Promise<{

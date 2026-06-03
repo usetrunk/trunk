@@ -69,7 +69,7 @@ app.put("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMemb
 
   const rateLimit = await checkRateLimit(`facts:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   const body = await c.req.json<{ value: unknown }>();
 
@@ -112,7 +112,7 @@ app.delete("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomM
 
   const rateLimit = await checkRateLimit(`facts:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
 
@@ -163,7 +163,7 @@ app.put("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), 
 
   const rateLimit = await checkRateLimit(`facts:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   const body = await c.req.json<{ value: unknown }>();
 
@@ -199,7 +199,7 @@ app.delete("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"
 
   const rateLimit = await checkRateLimit(`facts:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
 
@@ -266,7 +266,7 @@ app.put("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
 
   const rateLimit = await checkRateLimit(`facts:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   const body = await c.req.json<{ value: unknown }>();
 
@@ -310,7 +310,7 @@ app.delete("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) =
 
   const rateLimit = await checkRateLimit(`facts:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
-  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
 
   if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
