@@ -1175,7 +1175,7 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_react",
-    "Add an emoji reaction to a message. Both sender and recipient can react. Idempotent — reacting with the same emoji again returns the existing reaction.",
+    "Add an emoji reaction to a message. Lightweight feedback without sending a full reply. Idempotent — reacting with the same emoji again returns the existing reaction.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to react to"),

@@ -37,17 +37,23 @@ app.get("/", async (c) => {
     if (query.target_id.length > 100) return c.json({ error: "target_id filter too long", code: "INVALID_INPUT" }, 400);
     conditions.push(eq(auditEvents.targetId, query.target_id));
   }
+  let afterDate: Date | undefined;
   if (query.after) {
-    const after = new Date(query.after);
-    if (!isNaN(after.getTime())) {
-      conditions.push(gte(auditEvents.createdAt, after));
+    afterDate = new Date(query.after);
+    if (isNaN(afterDate.getTime())) {
+      return c.json({ error: "after must be a valid ISO 8601 date", code: "INVALID_INPUT" }, 400);
     }
+    conditions.push(gte(auditEvents.createdAt, afterDate));
   }
   if (query.before) {
-    const before = new Date(query.before);
-    if (!isNaN(before.getTime())) {
-      conditions.push(lte(auditEvents.createdAt, before));
+    const beforeDate = new Date(query.before);
+    if (isNaN(beforeDate.getTime())) {
+      return c.json({ error: "before must be a valid ISO 8601 date", code: "INVALID_INPUT" }, 400);
     }
+    if (afterDate && beforeDate <= afterDate) {
+      return c.json({ error: "before must be after the after date", code: "INVALID_INPUT" }, 400);
+    }
+    conditions.push(lte(auditEvents.createdAt, beforeDate));
   }
 
   if (pagination.cursor) {

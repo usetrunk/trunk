@@ -6858,6 +6858,69 @@ describe("Hono API behavior", () => {
     expect(res3.status).toBe(400);
   });
 
+  it("auditLog rejects invalid after date", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request(`/audit-events?after=not-a-date`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; code: string };
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("after");
+  });
+
+  it("auditLog rejects invalid before date", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request(`/audit-events?before=garbage`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; code: string };
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("before");
+  });
+
+  it("auditLog rejects before date that is not after the after date", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request(
+      `/audit-events?after=2025-06-01T00:00:00Z&before=2025-05-01T00:00:00Z`,
+      { headers: { Authorization: `Bearer ${alpha.secret}` } },
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; code: string };
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("before must be after");
+  });
+
+  it("auditLog filters by valid date range", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "date range test" },
+    });
+
+    // Use a wide range that includes now
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const result = await alphaClient.auditLog({ after: past, before: future });
+    expect(result.events.length).toBeGreaterThan(0);
+  });
+
+  it("auditLog with narrow past range returns no events", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Range entirely in the past — no events should match
+    const result = await alphaClient.auditLog({
+      after: "2020-01-01T00:00:00Z",
+      before: "2020-01-02T00:00:00Z",
+    });
+    expect(result.events).toEqual([]);
+  });
+
   it("auditLog requires authentication", async () => {
     const unauthenticated = createClient("bad-secret");
     await expect(unauthenticated.auditLog()).rejects.toMatchObject({ status: 401 });

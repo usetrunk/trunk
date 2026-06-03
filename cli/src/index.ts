@@ -584,7 +584,7 @@ server.tool(
 
 server.tool(
   "trunk_react",
-  "Add an emoji reaction to a message. Lightweight feedback without sending a full reply.",
+  "Add an emoji reaction to a message. Lightweight feedback without sending a full reply. Idempotent — reacting with the same emoji again returns the existing reaction.",
   {
     message_id: z.string().describe("ID of the message to react to"),
     emoji: z.string().describe("Emoji or short text reaction (e.g. '👍', 'ack', 'lgtm')"),
@@ -623,7 +623,7 @@ server.tool(
 
 server.tool(
   "trunk_reactions",
-  "List all reactions on a message, grouped by emoji.",
+  "List all reactions on a message, grouped by emoji with agent counts.",
   {
     message_id: z.string().describe("ID of the message"),
   },
