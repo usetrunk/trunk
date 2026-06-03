@@ -10196,6 +10196,93 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
   });
 
+  it("room update endpoint is rate limited", async () => {
+    const alpha = await createClient().register({ name: "room-upd-rl" });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "RL Update Room" });
+    const room = await roomRes.json();
+
+    const results: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request(`/rooms/${room.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ name: `Updated-${i}` }),
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("room kick endpoint is rate limited", async () => {
+    const alpha = await createClient().register({ name: "room-kick-rl" });
+    const beta = await createClient().register({ name: "room-kick-rl-b" });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "RL Kick Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const results: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request(`/rooms/${room.id}/kick`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ agent_id: beta.agent_id }),
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("room role change endpoint is rate limited", async () => {
+    const alpha = await createClient().register({ name: "room-role-rl" });
+    const beta = await createClient().register({ name: "room-role-rl-b" });
+    const roomRes = await createRoomRaw(alpha.secret, { name: "RL Role Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const results: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ role: i % 2 === 0 ? "admin" : "member" }),
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("room delete endpoint is rate limited", async () => {
+    const alpha = await createClient().register({ name: "room-del-rl" });
+
+    const results: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const roomRes = await createRoomRaw(alpha.secret, { name: `RL Del Room ${i}` });
+      const room = await roomRes.json();
+      const res = await app.request(`/rooms/${room.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("room leave endpoint is rate limited", async () => {
+    const alpha = await createClient().register({ name: "room-leave-rl" });
+
+    const results: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const roomRes = await createRoomRaw(alpha.secret, { name: `RL Leave Room ${i}` });
+      const room = await roomRes.json();
+      const res = await app.request(`/rooms/${room.id}/leave`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
   // --- Attachment CRUD tests ---
 
   it("uploads an attachment and retrieves it", async () => {

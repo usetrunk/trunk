@@ -170,7 +170,8 @@ app.get("/", async (c) => {
 
   const results = await db.select().from(attachments)
     .where(eq(attachments.agentId, agentId))
-    .orderBy(desc(attachments.createdAt));
+    .orderBy(desc(attachments.createdAt))
+    .limit(200);
 
   return c.json({
     attachments: results.map((a) => ({

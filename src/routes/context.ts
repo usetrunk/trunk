@@ -30,7 +30,8 @@ app.get("/room/:roomId/facts", requireRoomMember(), async (c) => {
   const facts = await db
     .select()
     .from(sharedFacts)
-    .where(eq(sharedFacts.scope, scope));
+    .where(eq(sharedFacts.scope, scope))
+    .limit(1000);
 
   return c.json({
     facts: facts.map((f) => ({
@@ -135,7 +136,7 @@ app.get("/workspace/:workspaceId/facts", requireWorkspaceMember(), async (c) => 
   const workspaceId = c.req.param("workspaceId");
 
   const scope = workspaceScope(workspaceId);
-  const facts = await db.select().from(sharedFacts).where(eq(sharedFacts.scope, scope));
+  const facts = await db.select().from(sharedFacts).where(eq(sharedFacts.scope, scope)).limit(1000);
 
   return c.json({
     facts: facts.map((f) => ({ key: f.key, value: f.value, version: f.version, updated_by: f.updatedBy, updated_at: f.updatedAt })),
@@ -225,7 +226,8 @@ app.get("/:contactId/facts", async (c) => {
   const facts = await db
     .select()
     .from(sharedFacts)
-    .where(eq(sharedFacts.scope, scope));
+    .where(eq(sharedFacts.scope, scope))
+    .limit(1000);
 
   return c.json({
     facts: facts.map((f) => ({

@@ -438,14 +438,15 @@ app.get("/threads", async (c) => {
   const limit = isNaN(limitParam) ? 20 : Math.min(Math.max(1, limitParam), 50);
   const cursorParam = c.req.query("cursor");
 
-  // Get all non-deleted messages where agent is sender or recipient
+  // Get recent messages where agent is sender or recipient (capped to prevent memory exhaustion)
   const rows = await db
     .select()
     .from(messages)
     .where(
       or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
     )
-    .orderBy(desc(messages.createdAt));
+    .orderBy(desc(messages.createdAt))
+    .limit(5000);
 
   const visible = rows.filter((r) => r.status !== "deleted" && r.threadId);
 
@@ -660,7 +661,7 @@ app.get("/searches", async (c) => {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
-  const rows = await db.select().from(savedSearches).where(eq(savedSearches.agentId, agentId));
+  const rows = await db.select().from(savedSearches).where(eq(savedSearches.agentId, agentId)).limit(200);
   return c.json({
     searches: rows.map((r) => ({
       id: r.id,

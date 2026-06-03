@@ -259,7 +259,8 @@ app.get("/blocked", async (c) => {
   const rows = await db
     .select()
     .from(blockedContacts)
-    .where(eq(blockedContacts.agentId, myId));
+    .where(eq(blockedContacts.agentId, myId))
+    .limit(500);
 
   const agentIds = rows.map((r) => r.blockedAgentId);
   const agentRows = agentIds.length > 0

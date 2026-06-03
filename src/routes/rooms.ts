@@ -71,13 +71,13 @@ app.post("/join", async (c) => {
   if (!room) return c.json({ error: "Invalid room code", code: "ROOM_NOT_FOUND" }, 404);
 
   // Check if already a member
-  const existing = await db
+  const [existing] = await db
     .select()
     .from(roomMembers)
-    .where(eq(roomMembers.roomId, room.id))
-    .limit(100);
+    .where(and(eq(roomMembers.roomId, room.id), eq(roomMembers.agentId, agentId)))
+    .limit(1);
 
-  if (existing.some((m) => m.agentId === agentId)) {
+  if (existing) {
     return c.json({ joined: true, already_member: true, room_id: room.id, name: room.name });
   }
 
@@ -103,7 +103,8 @@ app.get("/", async (c) => {
   const memberships = await db
     .select()
     .from(roomMembers)
-    .where(eq(roomMembers.agentId, agentId));
+    .where(eq(roomMembers.agentId, agentId))
+    .limit(100);
 
   if (memberships.length === 0) return c.json({ rooms: [] });
 
@@ -139,25 +140,32 @@ app.get("/:roomId/members", async (c) => {
 
   const roomId = c.req.param("roomId");
 
-  // Verify membership
-  const myMembership = await db
+  // Verify caller is a member
+  const [myMembership] = await db
     .select()
     .from(roomMembers)
-    .where(eq(roomMembers.roomId, roomId))
-    .limit(100);
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
 
-  if (!myMembership.some((m) => m.agentId === agentId)) {
+  if (!myMembership) {
     return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   }
 
-  const memberIds = myMembership.map((m) => m.agentId);
+  // Fetch all members separately (with limit)
+  const allMembers = await db
+    .select()
+    .from(roomMembers)
+    .where(eq(roomMembers.roomId, roomId))
+    .limit(500);
+
+  const memberIds = allMembers.map((m) => m.agentId);
   const memberAgents = await db
     .select({ id: agents.id, name: agents.name, owner: agents.owner })
     .from(agents)
     .where(or(...memberIds.map((id) => eq(agents.id, id))));
 
   const result = memberAgents.map((a) => {
-    const m = myMembership.find((m) => m.agentId === a.id);
+    const m = allMembers.find((m) => m.agentId === a.id);
     return { ...a, role: m?.role, joined_at: m?.joinedAt };
   });
 
@@ -168,6 +176,13 @@ app.get("/:roomId/members", async (c) => {
 app.patch("/:roomId", async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
+
+  const rateLimit = await checkRateLimit(`rooms:write:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ name?: string; metadata?: Record<string, unknown> }>();
 
   if (!body.name && !body.metadata) {
@@ -215,25 +230,37 @@ app.patch("/:roomId", async (c) => {
 app.post("/:roomId/kick", async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
+
+  const rateLimit = await checkRateLimit(`rooms:write:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ agent_id: string }>();
 
   if (!body.agent_id) return c.json({ error: "agent_id is required", code: "MISSING_FIELD" }, 400);
   if (body.agent_id === agentId) return c.json({ error: "Cannot kick yourself", code: "SELF_ACTION" }, 400);
 
   // Verify caller is creator/admin
-  const callerMembership = await db
+  const [caller] = await db
     .select()
     .from(roomMembers)
-    .where(eq(roomMembers.roomId, roomId))
-    .limit(100);
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
 
-  const caller = callerMembership.find((m) => m.agentId === agentId);
   if (!caller) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
   if (caller.role !== "creator" && caller.role !== "admin") {
     return c.json({ error: "Only creators and admins can kick members", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
-  const target = callerMembership.find((m) => m.agentId === body.agent_id);
+  // Look up target membership specifically
+  const [target] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, body.agent_id)))
+    .limit(1);
+
   if (!target) return c.json({ error: "Target is not a member", code: "NOT_FOUND" }, 404);
 
   // Admins cannot kick creators or other admins
@@ -253,6 +280,13 @@ app.put("/:roomId/members/:agentId/role", async (c) => {
   const callerId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const targetId = c.req.param("agentId");
+
+  const rateLimit = await checkRateLimit(`rooms:write:${callerId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ role: string }>();
 
   if (!body.role || !["admin", "member"].includes(body.role)) {
@@ -297,6 +331,12 @@ app.delete("/:roomId", async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 
+  const rateLimit = await checkRateLimit(`rooms:write:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   // Verify caller is creator
   const [membership] = await db
     .select()
@@ -320,6 +360,12 @@ app.delete("/:roomId", async (c) => {
 app.post("/:roomId/leave", async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
+
+  const rateLimit = await checkRateLimit(`rooms:write:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
 
   // Verify membership
   const [membership] = await db
