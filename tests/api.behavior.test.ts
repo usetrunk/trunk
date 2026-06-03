@@ -2869,6 +2869,137 @@ describe("Hono API behavior", () => {
     expect(res.status).toBe(400);
   });
 
+  // --- Hardening: cross-workspace authorization for kick and role change ---
+
+  it("admin from workspace X cannot kick a member of workspace Y", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-x-admin" });
+    const beta = await anon.register({ name: "ws-y-admin" });
+    const gamma = await anon.register({ name: "ws-y-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    // Create two separate workspaces
+    await alphaClient.createWorkspace({ name: "Workspace X" });
+    const wsY = await betaClient.createWorkspace({ name: "Workspace Y" });
+    await gammaClient.joinWorkspace({ code: wsY.pairing_code });
+
+    // Alpha (admin of X) tries to kick gamma (member of Y)
+    await expect(alphaClient.kickWorkspaceMember(gamma.agent_id)).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Verify gamma is still in workspace Y
+    const members = await betaClient.myWorkspace();
+    expect(members.members.map((m: { agent_id: string }) => m.agent_id)).toContain(gamma.agent_id);
+  });
+
+  it("admin from workspace X cannot change roles in workspace Y", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "role-x-admin" });
+    const beta = await anon.register({ name: "role-y-admin" });
+    const gamma = await anon.register({ name: "role-y-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.createWorkspace({ name: "Role WS X" });
+    const wsY = await betaClient.createWorkspace({ name: "Role WS Y" });
+    await gammaClient.joinWorkspace({ code: wsY.pairing_code });
+
+    // Alpha (admin of X) tries to promote gamma (member of Y) — should fail
+    const res = await app.request(`/workspaces/members/${gamma.agent_id}/role`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("agent not in any workspace cannot kick or change roles", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "no-ws-agent" });
+    const beta = await anon.register({ name: "ws-target-admin" });
+    const gamma = await anon.register({ name: "ws-target-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    const ws = await betaClient.createWorkspace({ name: "Has Workspace" });
+    await gammaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Alpha (no workspace) tries to kick gamma
+    await expect(alphaClient.kickWorkspaceMember(gamma.agent_id)).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Alpha (no workspace) tries to change gamma's role
+    const res = await app.request(`/workspaces/members/${gamma.agent_id}/role`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("non-admin member cannot change roles", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-role-admin" });
+    const beta = await anon.register({ name: "ws-role-member" });
+    const gamma = await anon.register({ name: "ws-role-target" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Role Test WS" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+    await gammaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Beta (member) tries to promote gamma — should fail
+    const res = await app.request(`/workspaces/members/${gamma.agent_id}/role`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("INSUFFICIENT_ROLE");
+  });
+
+  it("cannot demote the last admin in a workspace", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-last-admin" });
+    const beta = await anon.register({ name: "ws-last-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Last Admin WS" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Alpha (only admin) tries to demote themselves — should fail
+    const res = await app.request(`/workspaces/members/${alpha.agent_id}/role`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "member" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("LAST_ADMIN");
+  });
+
   it("rejects workspace join with oversized code", async () => {
     const alpha = await createClient().register({ name: "ws-join-long" });
 
