@@ -419,7 +419,7 @@ app.delete("/", async (c) => {
     const contactRows = await tx
       .delete(workspaceContacts)
       .where(eq(workspaceContacts.workspaceId, workspaceId))
-      .returning({ id: workspaceContacts.id });
+      .returning({ agentId: workspaceContacts.agentId });
 
     // Delete workspace-scoped tasks, facts, and documents
     const taskRows = await tx.delete(tasks).where(eq(tasks.scope, scope)).returning({ id: tasks.id });
