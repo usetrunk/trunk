@@ -20382,6 +20382,84 @@ describe("Hono API behavior", () => {
       expect(portalRes.status).toBe(401);
     });
   });
+
+  // --- Hardening: blank/type validation gaps ---
+
+  it("rejects whitespace-only message type on send", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await expect(
+      alphaClient.send({ to: beta.agent_id, type: "   ", payload: { content: "test" } })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects empty message type on send", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await expect(
+      alphaClient.send({ to: beta.agent_id, type: "", payload: { content: "test" } })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects whitespace-only task title on create", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await expect(
+      alphaClient.createTask({ contact_id: beta.agent_id, title: "   " })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects whitespace-only task title on update", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const task = await alphaClient.createTask({ contact_id: beta.agent_id, title: "valid title" });
+    await expect(
+      alphaClient.updateTask(task.id, { title: "   " }, { contact_id: beta.agent_id })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects empty string task title on update", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const task = await alphaClient.createTask({ contact_id: beta.agent_id, title: "valid title" });
+    await expect(
+      alphaClient.updateTask(task.id, { title: "" }, { contact_id: beta.agent_id })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects non-string alias on contact update", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const res = await app.request(`/contacts/${beta.agent_id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ alias: 12345 }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("rejects array alias on contact update", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const res = await app.request(`/contacts/${beta.agent_id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ alias: ["not", "a", "string"] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("template PATCH rejects empty string name", async () => {
+    const anon = createClient();
+    const reg = await anon.register({ name: "tpl-blank-patch" });
+    const client = createClient(reg.secret);
+    const tpl = await client.createTemplate({ name: "original", type: "test", payload: { content: "hi" } });
+    await expect(
+      client.updateTemplate(tpl.id, { name: "" })
+    ).rejects.toMatchObject({ status: 400 });
+  });
 });
 
 async function registerPair(): Promise<{

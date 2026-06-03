@@ -115,7 +115,7 @@ app.post("/", async (c) => {
     metadata?: Record<string, unknown>;
   }>();
 
-  if (!body.title) return c.json({ error: "title is required", code: "MISSING_FIELD" }, 400);
+  if (!body.title || !body.title.trim()) return c.json({ error: "title is required and must not be blank", code: "MISSING_FIELD" }, 400);
   if (body.title.length > 500) return c.json({ error: "title must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (body.description && body.description.length > 5000) return c.json({ error: "description must be 5000 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (body.group && body.group.length > 200) return c.json({ error: "group must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
@@ -407,6 +407,9 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
   }
   if (body.priority !== undefined && !isValidPriority(body.priority)) {
     return c.json({ error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+  if (body.title !== undefined && !String(body.title).trim()) {
+    return c.json({ error: "title must not be blank", code: "INVALID_FIELD" }, 400);
   }
   if (body.title !== undefined && body.title.length > 500) {
     return c.json({ error: "title must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);

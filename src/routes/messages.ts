@@ -47,6 +47,9 @@ app.post("/", async (c) => {
   if (body.to.length > 200) {
     return c.json({ error: "to must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
+  if (!body.type.trim()) {
+    return c.json({ error: "type must not be blank", code: "INVALID_FIELD" }, 400);
+  }
   if (body.type.length > 50) {
     return c.json({ error: "type must be 50 characters or fewer", code: "INVALID_FIELD" }, 400);
   }

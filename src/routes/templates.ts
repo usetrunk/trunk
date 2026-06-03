@@ -198,10 +198,10 @@ app.patch("/:id", requireValidUUIDs("id"), async (c) => {
   if (body.type !== undefined && body.type !== null && !String(body.type).trim()) {
     return c.json({ error: "type must not be blank", code: "INVALID_FIELD" }, 400);
   }
-  if (body.name && body.name.length > 200) {
+  if (body.name !== undefined && body.name !== null && body.name.length > 200) {
     return c.json({ error: "name must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
-  if (body.type && body.type.length > 100) {
+  if (body.type !== undefined && body.type !== null && body.type.length > 100) {
     return c.json({ error: "type must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
   if (body.description && body.description.length > 500) {
