@@ -18905,6 +18905,290 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // --- Attachments ---
+
+  describe("attachments", () => {
+    const testBase64 = btoa("Hello, World!"); // valid base64
+
+    it("uploads a standalone attachment", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-alpha" });
+      const client = createClient(alpha.secret);
+
+      const attachment = await client.uploadAttachment({
+        filename: "test.txt",
+        data: testBase64,
+        content_type: "text/plain",
+      });
+
+      expect(attachment.id).toEqual(expect.any(String));
+      expect(attachment.filename).toBe("test.txt");
+      expect(attachment.content_type).toBe("text/plain");
+      expect(attachment.size_bytes).toBeGreaterThan(0);
+    });
+
+    it("uploads attachment with default content_type", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-default" });
+      const client = createClient(alpha.secret);
+
+      const attachment = await client.uploadAttachment({
+        filename: "binary.bin",
+        data: testBase64,
+      });
+
+      expect(attachment.content_type).toBe("application/octet-stream");
+    });
+
+    it("downloads an uploaded attachment with data", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-get" });
+      const client = createClient(alpha.secret);
+
+      const uploaded = await client.uploadAttachment({
+        filename: "doc.txt",
+        data: testBase64,
+      });
+
+      const downloaded = await client.getAttachment(uploaded.id);
+
+      expect(downloaded.data).toBe(testBase64);
+      expect(downloaded.filename).toBe("doc.txt");
+    });
+
+    it("lists my attachments", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-list" });
+      const client = createClient(alpha.secret);
+      await client.uploadAttachment({ filename: "a.txt", data: testBase64 });
+      await client.uploadAttachment({ filename: "b.txt", data: testBase64 });
+
+      const list = await client.listAttachments();
+
+      expect(list.attachments.length).toBe(2);
+    });
+
+    it("deletes own attachment", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-del" });
+      const client = createClient(alpha.secret);
+      const uploaded = await client.uploadAttachment({ filename: "temp.txt", data: testBase64 });
+
+      const result = await client.deleteAttachment(uploaded.id);
+      expect(result.ok).toBe(true);
+
+      await expect(client.getAttachment(uploaded.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("cannot delete another agent's attachment", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-own-a" });
+      const beta = await anon.register({ name: "attach-own-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const uploaded = await clientA.uploadAttachment({ filename: "mine.txt", data: testBase64 });
+
+      await expect(clientB.deleteAttachment(uploaded.id)).rejects.toMatchObject({ status: 403 });
+    });
+
+    it("cannot access another agent's standalone attachment", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-priv-a" });
+      const beta = await anon.register({ name: "attach-priv-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const uploaded = await clientA.uploadAttachment({ filename: "private.txt", data: testBase64 });
+
+      await expect(clientB.getAttachment(uploaded.id)).rejects.toMatchObject({ status: 403 });
+    });
+
+    it("uploads attachment linked to a message", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "See attached" },
+      });
+
+      const attachment = await alphaClient.uploadAttachment({
+        filename: "report.pdf",
+        data: testBase64,
+        message_id: sent.id,
+      });
+
+      expect(attachment.message_id).toBe(sent.id);
+    });
+
+    it("lists attachments for a message", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "Files" },
+      });
+      await alphaClient.uploadAttachment({ filename: "a.txt", data: testBase64, message_id: sent.id });
+      await alphaClient.uploadAttachment({ filename: "b.txt", data: testBase64, message_id: sent.id });
+
+      // Sender can list
+      const senderList = await alphaClient.messageAttachments(sent.id);
+      expect(senderList.attachments.length).toBe(2);
+
+      // Recipient can list
+      const recipientList = await betaClient.messageAttachments(sent.id);
+      expect(recipientList.attachments.length).toBe(2);
+    });
+
+    it("rejects attachment with missing filename", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-noname" });
+      const res = await app.request("/attachments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ data: testBase64 }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects attachment with missing data", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-nodata" });
+      const res = await app.request("/attachments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ filename: "test.txt" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 404 for non-existent attachment", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "attach-404" });
+      const client = createClient(alpha.secret);
+      const fakeId = "00000000-0000-4000-a000-000000000066";
+
+      await expect(client.getAttachment(fakeId)).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  // --- Message Templates ---
+
+  describe("message templates", () => {
+    it("creates a template", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-alpha" });
+      const client = createClient(alpha.secret);
+
+      const tpl = await client.createTemplate({
+        name: "standup",
+        type: "update",
+        payload: { content: "Daily standup report" },
+        description: "Template for daily standups",
+      });
+
+      expect(tpl.id).toEqual(expect.any(String));
+      expect(tpl.name).toBe("standup");
+      expect(tpl.type).toBe("update");
+    });
+
+    it("gets a template", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-get" });
+      const client = createClient(alpha.secret);
+      const created = await client.createTemplate({
+        name: "greeting",
+        type: "question",
+        payload: { content: "Hello, how are you?" },
+      });
+
+      const tpl = await client.getTemplate(created.id);
+
+      expect(tpl.name).toBe("greeting");
+      expect(tpl.payload).toEqual({ content: "Hello, how are you?" });
+    });
+
+    it("updates a template", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-upd" });
+      const client = createClient(alpha.secret);
+      const created = await client.createTemplate({
+        name: "old-name",
+        type: "update",
+        payload: { content: "old" },
+      });
+
+      const updated = await client.updateTemplate(created.id, {
+        name: "new-name",
+        payload: { content: "updated" },
+      });
+
+      expect(updated.name).toBe("new-name");
+      expect(updated.payload).toEqual({ content: "updated" });
+    });
+
+    it("deletes a template", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-del" });
+      const client = createClient(alpha.secret);
+      const created = await client.createTemplate({
+        name: "temp",
+        type: "ack",
+        payload: { content: "ok" },
+      });
+
+      const result = await client.deleteTemplate(created.id);
+      expect(result.ok).toBe(true);
+
+      await expect(client.getTemplate(created.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("returns 404 for non-existent template", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-404" });
+      const client = createClient(alpha.secret);
+      const fakeId = "00000000-0000-4000-a000-000000000055";
+
+      await expect(client.getTemplate(fakeId)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("cannot access another agent's templates", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-priv-a" });
+      const beta = await anon.register({ name: "tpl-priv-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const created = await clientA.createTemplate({
+        name: "secret-tpl",
+        type: "update",
+        payload: { content: "private" },
+      });
+
+      // Templates are scoped by agent_id — other agents see 404 (not visible)
+      await expect(clientB.getTemplate(created.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("cannot delete another agent's template", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tpl-del-a" });
+      const beta = await anon.register({ name: "tpl-del-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const created = await clientA.createTemplate({
+        name: "mine",
+        type: "update",
+        payload: { content: "x" },
+      });
+
+      // Templates are scoped by agent_id — other agents see 404 (not visible)
+      await expect(clientB.deleteTemplate(created.id)).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
   describe("workspace-scoped facts", () => {
     async function setupWorkspace() {
       const anon = createClient();
