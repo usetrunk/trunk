@@ -16,6 +16,7 @@ import billingRoutes from "./routes/billing.js";
 import auditRoutes from "./routes/audit.js";
 import templatesRoutes from "./routes/templates.js";
 import attachmentsRoutes from "./routes/attachments.js";
+import slackRoutes from "./routes/slack.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 import { db } from "./db/index.js";
 import { agents } from "./db/schema.js";
@@ -73,6 +74,7 @@ app.route("/billing", billingRoutes);
 app.route("/audit-events", auditRoutes);
 app.route("/templates", templatesRoutes);
 app.route("/attachments", attachmentsRoutes);
+app.route("/slack", slackRoutes);
 
 export default app;
 
