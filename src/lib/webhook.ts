@@ -2,19 +2,7 @@ import { db } from "../db/index.js";
 import { agents, messages, webhookDeliveries } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { audit } from "./audit.js";
-
-async function hmacSign(secret: string, body: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-  return `sha256=${Array.from(new Uint8Array(signature)).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
+import { signTrunkWebhook } from "./verify-webhook.js";
 
 // Notify the push worker (Cloudflare DO) for real-time delivery
 export async function notifyPushWorker(agentId: string, message: typeof messages.$inferSelect) {
@@ -57,7 +45,7 @@ export async function deliverWebhook(
   };
 
   if (recipient.webhookSecret) {
-    headers["X-Trunk-Signature"] = await hmacSign(recipient.webhookSecret, body);
+    headers["X-Trunk-Signature"] = await signTrunkWebhook(body, recipient.webhookSecret);
   }
 
   const delays = [0, 5000, 30000, 180000]; // immediate, 5s, 30s, 3min

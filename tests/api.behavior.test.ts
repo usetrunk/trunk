@@ -3853,6 +3853,45 @@ describe("Hono API behavior", () => {
     await expect(verifyWebhookSignature("secret", body, "sha256=bad")).resolves.toBe(false);
   });
 
+  it("rejects webhook signature with missing or null signature", async () => {
+    const body = '{"event":"test"}';
+    await expect(verifyWebhookSignature("secret", body, "")).resolves.toBe(false);
+    await expect(verifyWebhookSignature("secret", body, null as any)).resolves.toBe(false);
+    await expect(verifyWebhookSignature("secret", body, undefined as any)).resolves.toBe(false);
+  });
+
+  it("rejects webhook signature without sha256= prefix", async () => {
+    const body = '{"event":"test"}';
+    const sig = await signWebhookPayload("secret", body);
+    const rawHex = sig.slice(7); // strip "sha256="
+    await expect(verifyWebhookSignature("secret", body, rawHex)).resolves.toBe(false);
+  });
+
+  it("rejects webhook signature with wrong secret", async () => {
+    const body = '{"event":"test"}';
+    const sig = await signWebhookPayload("correct-secret", body);
+    await expect(verifyWebhookSignature("wrong-secret", body, sig)).resolves.toBe(false);
+  });
+
+  it("rejects webhook signature with tampered body", async () => {
+    const body = '{"event":"message.received","id":"msg_1"}';
+    const sig = await signWebhookPayload("secret", body);
+    const tampered = '{"event":"message.received","id":"msg_2"}';
+    await expect(verifyWebhookSignature("secret", tampered, sig)).resolves.toBe(false);
+  });
+
+  it("verifies webhook signature with empty body", async () => {
+    const sig = await signWebhookPayload("secret", "");
+    await expect(verifyWebhookSignature("secret", "", sig)).resolves.toBe(true);
+  });
+
+  it("produces deterministic webhook signatures", async () => {
+    const body = '{"event":"test"}';
+    const sig1 = await signWebhookPayload("secret", body);
+    const sig2 = await signWebhookPayload("secret", body);
+    expect(sig1).toBe(sig2);
+  });
+
   it("me returns role, projects, and metadata when set via updateMe", async () => {
     const registered = await createClient().register({ name: "alpha", owner: "Andrei" });
     const client = createClient(registered.secret);
