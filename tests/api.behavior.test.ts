@@ -18331,6 +18331,509 @@ describe("Hono API behavior", () => {
     });
     expect(deleteRes.status).toBe(403);
   });
+
+  // --- Shared Documents ---
+
+  describe("contact-scoped documents", () => {
+    it("creates a document between paired contacts", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const doc = await alphaClient.createDocument(beta.agent_id, {
+        name: "design-notes",
+        body: "# Architecture\n\nShared design doc.",
+      });
+
+      expect(doc.id).toEqual(expect.any(String));
+      expect(doc.name).toBe("design-notes");
+      expect(doc.content_type).toBe("text/markdown");
+      expect(doc.version).toBe(1);
+      expect(doc.last_edited_by).toBe(alpha.agent_id);
+      expect(doc.created_at).toEqual(expect.any(String));
+    });
+
+    it("creates a document with custom content_type", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const doc = await alphaClient.createDocument(beta.agent_id, {
+        name: "config",
+        body: '{"key": "value"}',
+        content_type: "application/json",
+      });
+
+      expect(doc.content_type).toBe("application/json");
+    });
+
+    it("lists documents for a contact pair", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.createDocument(beta.agent_id, { name: "doc1", body: "body1" });
+      await alphaClient.createDocument(beta.agent_id, { name: "doc2", body: "body2" });
+
+      const list = await alphaClient.listDocuments(beta.agent_id);
+
+      expect(list.documents.length).toBe(2);
+      expect(list.documents.map((d: { name: string }) => d.name).sort()).toEqual(["doc1", "doc2"]);
+    });
+
+    it("gets a specific document with body", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "readme", body: "Hello world" });
+
+      const doc = await alphaClient.getDocument(beta.agent_id, created.id);
+
+      expect(doc.body).toBe("Hello world");
+      expect(doc.name).toBe("readme");
+      expect(doc.version).toBe(1);
+    });
+
+    it("updates a document creating a new version", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "evolving", body: "v1" });
+
+      const updated = await alphaClient.updateDocument(beta.agent_id, created.id, { body: "v2 content" });
+
+      expect(updated.version).toBe(2);
+      expect(updated.last_edited_by).toBe(alpha.agent_id);
+      const fetched = await alphaClient.getDocument(beta.agent_id, created.id);
+      expect(fetched.body).toBe("v2 content");
+    });
+
+    it("updates a document name along with body", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "old-name", body: "content" });
+
+      const updated = await alphaClient.updateDocument(beta.agent_id, created.id, { body: "new content", name: "new-name" });
+
+      expect(updated.name).toBe("new-name");
+      expect(updated.version).toBe(2);
+    });
+
+    it("lists version history", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "versioned", body: "v1" });
+      await alphaClient.updateDocument(beta.agent_id, created.id, { body: "v2" });
+      await alphaClient.updateDocument(beta.agent_id, created.id, { body: "v3" });
+
+      const versions = await alphaClient.documentVersions(beta.agent_id, created.id);
+
+      expect(versions.versions.length).toBe(3);
+      expect(versions.versions.map((v: { version: number }) => v.version).sort()).toEqual([1, 2, 3]);
+    });
+
+    it("retrieves a specific version body", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "multi", body: "original" });
+      await alphaClient.updateDocument(beta.agent_id, created.id, { body: "revision" });
+
+      const v1 = await alphaClient.documentVersion(beta.agent_id, created.id, 1);
+      const v2 = await alphaClient.documentVersion(beta.agent_id, created.id, 2);
+
+      expect(v1.body).toBe("original");
+      expect(v2.body).toBe("revision");
+    });
+
+    it("deletes a document and all versions", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "ephemeral", body: "gone soon" });
+      await alphaClient.updateDocument(beta.agent_id, created.id, { body: "still here" });
+
+      const result = await alphaClient.deleteDocument(beta.agent_id, created.id);
+      expect(result.ok).toBe(true);
+
+      await expect(alphaClient.getDocument(beta.agent_id, created.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("rejects document creation for non-contacts", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-alpha" });
+      const beta = await anon.register({ name: "doc-beta" });
+      const alphaClient = createClient(alpha.secret);
+
+      await expect(alphaClient.createDocument(beta.agent_id, { name: "x", body: "y" }))
+        .rejects.toMatchObject({ status: 403 });
+    });
+
+    it("rejects document creation with missing name", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const res = await app.request(`/documents/${beta.agent_id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alphaClient["secret"]}` },
+        body: JSON.stringify({ body: "no name" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects document creation with missing body", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const res = await app.request(`/documents/${beta.agent_id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alphaClient["secret"]}` },
+        body: JSON.stringify({ name: "no-body" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects document name exceeding 255 characters", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const res = await app.request(`/documents/${beta.agent_id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${alphaClient["secret"]}` },
+        body: JSON.stringify({ name: "x".repeat(256), body: "content" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 404 for getting non-existent document", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const fakeDocId = "00000000-0000-4000-a000-000000000099";
+
+      await expect(alphaClient.getDocument(beta.agent_id, fakeDocId)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("returns 404 for updating non-existent document", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const fakeDocId = "00000000-0000-4000-a000-000000000099";
+
+      await expect(alphaClient.updateDocument(beta.agent_id, fakeDocId, { body: "x" })).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("returns 404 for deleting non-existent document", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const fakeDocId = "00000000-0000-4000-a000-000000000099";
+
+      await expect(alphaClient.deleteDocument(beta.agent_id, fakeDocId)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("returns 404 for version of non-existent document", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const fakeDocId = "00000000-0000-4000-a000-000000000099";
+
+      await expect(alphaClient.documentVersions(beta.agent_id, fakeDocId)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("returns 404 for non-existent version number", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "one-version", body: "only v1" });
+
+      await expect(alphaClient.documentVersion(beta.agent_id, created.id, 99)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("returns 400 for invalid version number", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "ver-test", body: "body" });
+
+      const res = await app.request(`/documents/${beta.agent_id}/${created.id}/versions/0`, {
+        headers: { Authorization: `Bearer ${alphaClient["secret"]}` },
+      });
+      expect(res.status).toBe(400);
+
+      const res2 = await app.request(`/documents/${beta.agent_id}/${created.id}/versions/-1`, {
+        headers: { Authorization: `Bearer ${alphaClient["secret"]}` },
+      });
+      expect(res2.status).toBe(400);
+    });
+
+    it("contact B can also read and update the shared document", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const created = await alphaClient.createDocument(beta.agent_id, { name: "shared", body: "by alpha" });
+
+      // Beta reads document scoped to alpha contact
+      const doc = await betaClient.getDocument(alpha.agent_id, created.id);
+      expect(doc.body).toBe("by alpha");
+
+      // Beta updates it
+      const updated = await betaClient.updateDocument(alpha.agent_id, created.id, { body: "by beta" });
+      expect(updated.version).toBe(2);
+      expect(updated.last_edited_by).toBe(beta.agent_id);
+    });
+
+    it("documents are scoped — one pair cannot see another pair's docs", async () => {
+      const anon = createClient();
+      const a1 = await anon.register({ name: "pair1-a" });
+      const b1 = await anon.register({ name: "pair1-b" });
+      const a2 = await anon.register({ name: "pair2-a" });
+      const c1 = createClient(a1.secret);
+      const c2 = createClient(a2.secret);
+      await c1.pair({ code: b1.pairing_code });
+      await c2.pair({ code: b1.pairing_code });
+
+      await c1.createDocument(b1.agent_id, { name: "private-doc", body: "only for pair1" });
+
+      // pair2 sees their own empty doc list (different scope)
+      const list = await c2.listDocuments(b1.agent_id);
+      expect(list.documents.length).toBe(0);
+    });
+  });
+
+  describe("room-scoped documents", () => {
+    async function setupRoom() {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-doc-alpha" });
+      const beta = await anon.register({ name: "room-doc-beta" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const room = await alphaClient.createRoom({ name: "DocRoom" });
+      await betaClient.joinRoom({ code: room.pairing_code });
+      return { alpha, beta, alphaClient, betaClient, room };
+    }
+
+    it("creates a room document", async () => {
+      const { alpha, alphaClient, room } = await setupRoom();
+
+      const doc = await alphaClient.createRoomDocument(room.id, { name: "sprint-plan", body: "# Sprint 1" });
+
+      expect(doc.id).toEqual(expect.any(String));
+      expect(doc.name).toBe("sprint-plan");
+      expect(doc.content_type).toBe("text/markdown");
+      expect(doc.version).toBe(1);
+      expect(doc.last_edited_by).toBe(alpha.agent_id);
+    });
+
+    it("lists room documents", async () => {
+      const { alphaClient, room } = await setupRoom();
+      await alphaClient.createRoomDocument(room.id, { name: "doc-a", body: "a" });
+      await alphaClient.createRoomDocument(room.id, { name: "doc-b", body: "b" });
+
+      const list = await alphaClient.listRoomDocuments(room.id);
+
+      expect(list.documents.length).toBe(2);
+    });
+
+    it("gets a room document with body", async () => {
+      const { alphaClient, room } = await setupRoom();
+      const created = await alphaClient.createRoomDocument(room.id, { name: "full", body: "Full body content" });
+
+      const doc = await alphaClient.getRoomDocument(room.id, created.id);
+
+      expect(doc.body).toBe("Full body content");
+      expect(doc.name).toBe("full");
+    });
+
+    it("updates a room document creating a new version", async () => {
+      const { alphaClient, room } = await setupRoom();
+      const created = await alphaClient.createRoomDocument(room.id, { name: "evolving", body: "v1" });
+
+      const updated = await alphaClient.updateRoomDocument(room.id, created.id, { body: "v2" });
+
+      expect(updated.version).toBe(2);
+    });
+
+    it("room member can update another member's document", async () => {
+      const { beta, alphaClient, betaClient, room } = await setupRoom();
+      const created = await alphaClient.createRoomDocument(room.id, { name: "collab", body: "alpha wrote this" });
+
+      const updated = await betaClient.updateRoomDocument(room.id, created.id, { body: "beta edited" });
+
+      expect(updated.version).toBe(2);
+      expect(updated.last_edited_by).toBe(beta.agent_id);
+    });
+
+    it("lists version history for room document", async () => {
+      const { alphaClient, room } = await setupRoom();
+      const created = await alphaClient.createRoomDocument(room.id, { name: "versioned", body: "v1" });
+      await alphaClient.updateRoomDocument(room.id, created.id, { body: "v2" });
+
+      const versions = await alphaClient.roomDocumentVersions(room.id, created.id);
+
+      expect(versions.versions.length).toBe(2);
+    });
+
+    it("retrieves a specific version of a room document", async () => {
+      const { alphaClient, room } = await setupRoom();
+      const created = await alphaClient.createRoomDocument(room.id, { name: "snap", body: "original" });
+      await alphaClient.updateRoomDocument(room.id, created.id, { body: "changed" });
+
+      const v1 = await alphaClient.roomDocumentVersion(room.id, created.id, 1);
+      expect(v1.body).toBe("original");
+
+      const v2 = await alphaClient.roomDocumentVersion(room.id, created.id, 2);
+      expect(v2.body).toBe("changed");
+    });
+
+    it("deletes a room document and all versions", async () => {
+      const { alphaClient, room } = await setupRoom();
+      const created = await alphaClient.createRoomDocument(room.id, { name: "temp", body: "delete me" });
+
+      const result = await alphaClient.deleteRoomDocument(room.id, created.id);
+      expect(result.ok).toBe(true);
+
+      await expect(alphaClient.getRoomDocument(room.id, created.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("non-member cannot access room documents", async () => {
+      const anon = createClient();
+      const outsider = await anon.register({ name: "outsider" });
+      const outsiderClient = createClient(outsider.secret);
+      const { alphaClient, room } = await setupRoom();
+      await alphaClient.createRoomDocument(room.id, { name: "secret", body: "room only" });
+
+      await expect(outsiderClient.listRoomDocuments(room.id)).rejects.toMatchObject({ status: 403 });
+    });
+
+    it("returns 404 for document from wrong room", async () => {
+      const { alphaClient, room } = await setupRoom();
+      const created = await alphaClient.createRoomDocument(room.id, { name: "scoped", body: "room1 only" });
+
+      // Create a second room
+      const room2 = await alphaClient.createRoom({ name: "OtherRoom" });
+
+      // Try to access document via wrong room
+      await expect(alphaClient.getRoomDocument(room2.id, created.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("returns 404 for non-existent room document", async () => {
+      const { alphaClient, room } = await setupRoom();
+      const fakeDocId = "00000000-0000-4000-a000-000000000088";
+
+      await expect(alphaClient.getRoomDocument(room.id, fakeDocId)).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  describe("workspace-scoped documents", () => {
+    async function setupWorkspace() {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-doc-alpha" });
+      const beta = await anon.register({ name: "ws-doc-beta" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const ws = await alphaClient.createWorkspace({ name: "DocWorkspace" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+      return { alpha, beta, alphaClient, betaClient, ws };
+    }
+
+    it("creates a workspace document", async () => {
+      const { alpha, alphaClient, ws } = await setupWorkspace();
+
+      const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "team-doc", body: "# Team Wiki" });
+
+      expect(doc.id).toEqual(expect.any(String));
+      expect(doc.name).toBe("team-doc");
+      expect(doc.version).toBe(1);
+      expect(doc.last_edited_by).toBe(alpha.agent_id);
+    });
+
+    it("lists workspace documents", async () => {
+      const { alphaClient, ws } = await setupWorkspace();
+      await alphaClient.createWorkspaceDocument(ws.id, { name: "doc1", body: "a" });
+      await alphaClient.createWorkspaceDocument(ws.id, { name: "doc2", body: "b" });
+
+      const list = await alphaClient.listWorkspaceDocuments(ws.id);
+
+      expect(list.documents.length).toBe(2);
+    });
+
+    it("gets a workspace document with body", async () => {
+      const { alphaClient, ws } = await setupWorkspace();
+      const created = await alphaClient.createWorkspaceDocument(ws.id, { name: "full", body: "Workspace content" });
+
+      const doc = await alphaClient.getWorkspaceDocument(ws.id, created.id);
+
+      expect(doc.body).toBe("Workspace content");
+    });
+
+    it("updates a workspace document creating new version", async () => {
+      const { alphaClient, ws } = await setupWorkspace();
+      const created = await alphaClient.createWorkspaceDocument(ws.id, { name: "evolving", body: "v1" });
+
+      const updated = await alphaClient.updateWorkspaceDocument(ws.id, created.id, { body: "v2" });
+
+      expect(updated.version).toBe(2);
+    });
+
+    it("workspace member can update another member's document", async () => {
+      const { beta, alphaClient, betaClient, ws } = await setupWorkspace();
+      const created = await alphaClient.createWorkspaceDocument(ws.id, { name: "team-edit", body: "alpha" });
+
+      const updated = await betaClient.updateWorkspaceDocument(ws.id, created.id, { body: "beta edited" });
+
+      expect(updated.last_edited_by).toBe(beta.agent_id);
+      expect(updated.version).toBe(2);
+    });
+
+    it("lists version history for workspace document", async () => {
+      const { alphaClient, ws } = await setupWorkspace();
+      const created = await alphaClient.createWorkspaceDocument(ws.id, { name: "versioned", body: "v1" });
+      await alphaClient.updateWorkspaceDocument(ws.id, created.id, { body: "v2" });
+      await alphaClient.updateWorkspaceDocument(ws.id, created.id, { body: "v3" });
+
+      const versions = await alphaClient.workspaceDocumentVersions(ws.id, created.id);
+
+      expect(versions.versions.length).toBe(3);
+    });
+
+    it("retrieves a specific version of a workspace document", async () => {
+      const { alphaClient, ws } = await setupWorkspace();
+      const created = await alphaClient.createWorkspaceDocument(ws.id, { name: "snap", body: "original" });
+      await alphaClient.updateWorkspaceDocument(ws.id, created.id, { body: "changed" });
+
+      const v1 = await alphaClient.workspaceDocumentVersion(ws.id, created.id, 1);
+      expect(v1.body).toBe("original");
+
+      const v2 = await alphaClient.workspaceDocumentVersion(ws.id, created.id, 2);
+      expect(v2.body).toBe("changed");
+    });
+
+    it("deletes a workspace document and all versions", async () => {
+      const { alphaClient, ws } = await setupWorkspace();
+      const created = await alphaClient.createWorkspaceDocument(ws.id, { name: "temp", body: "delete me" });
+
+      const result = await alphaClient.deleteWorkspaceDocument(ws.id, created.id);
+      expect(result.ok).toBe(true);
+
+      await expect(alphaClient.getWorkspaceDocument(ws.id, created.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("non-member cannot access workspace documents", async () => {
+      const anon = createClient();
+      const outsider = await anon.register({ name: "ws-outsider" });
+      const outsiderClient = createClient(outsider.secret);
+      const { alphaClient, ws } = await setupWorkspace();
+      await alphaClient.createWorkspaceDocument(ws.id, { name: "private", body: "ws only" });
+
+      await expect(outsiderClient.listWorkspaceDocuments(ws.id)).rejects.toMatchObject({ status: 403 });
+    });
+
+    it("returns 404 for document from wrong workspace", async () => {
+      const { alphaClient, ws } = await setupWorkspace();
+      const created = await alphaClient.createWorkspaceDocument(ws.id, { name: "scoped", body: "ws1" });
+
+      // Create a separate agent in a different workspace
+      const anon = createClient();
+      const gamma = await anon.register({ name: "ws-doc-gamma" });
+      const gammaClient = createClient(gamma.secret);
+      const ws2 = await gammaClient.createWorkspace({ name: "OtherWS" });
+
+      await expect(gammaClient.getWorkspaceDocument(ws2.id, created.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("returns 404 for non-existent workspace document", async () => {
+      const { alphaClient, ws } = await setupWorkspace();
+      const fakeDocId = "00000000-0000-4000-a000-000000000077";
+
+      await expect(alphaClient.getWorkspaceDocument(ws.id, fakeDocId)).rejects.toMatchObject({ status: 404 });
+    });
+  });
 });
 
 async function registerPair(): Promise<{
