@@ -6417,6 +6417,108 @@ describe("Hono API behavior", () => {
     expect(body).toContain("Mission control");
     expect(body).toContain("No tasks yet");
   });
+
+  it("completing a dependency auto-unblocks a blocked downstream task", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create the dependency task
+    const depRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Dep task" });
+    const dep = await depRes.json();
+
+    // Create a task and set it to blocked with depends_on
+    const taskRes = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Blocked task",
+      depends_on: [dep.id],
+    });
+    const task = await taskRes.json();
+    await updateTaskRaw(alpha.secret, beta.agent_id, task.id, { status: "blocked" });
+
+    // Mark the dependency as done — should auto-unblock
+    await updateTaskRaw(alpha.secret, beta.agent_id, dep.id, { status: "done" });
+
+    // Check that the blocked task was auto-unblocked
+    const tasksRes = await listTasksRaw(alpha.secret, beta.agent_id);
+    const allTasks = await tasksRes.json();
+    const unblocked = allTasks.tasks.find((t: { id: string }) => t.id === task.id);
+    expect(unblocked.status).toBe("open");
+  });
+
+  it("partially completing dependencies keeps task blocked", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const dep1Res = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Dep 1" });
+    const dep1 = await dep1Res.json();
+    const dep2Res = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Dep 2" });
+    const dep2 = await dep2Res.json();
+
+    // Create task, then set blocked with both deps
+    const taskRes = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Multi-dep task",
+      depends_on: [dep1.id, dep2.id],
+    });
+    const task = await taskRes.json();
+    await updateTaskRaw(alpha.secret, beta.agent_id, task.id, { status: "blocked" });
+
+    // Only complete dep1
+    await updateTaskRaw(alpha.secret, beta.agent_id, dep1.id, { status: "done" });
+
+    // Task should still be blocked
+    const tasksRes = await listTasksRaw(alpha.secret, beta.agent_id);
+    const allTasks = await tasksRes.json();
+    const stillBlocked = allTasks.tasks.find((t: { id: string }) => t.id === task.id);
+    expect(stillBlocked.status).toBe("blocked");
+  });
+
+  it("completing all dependencies unblocks a multi-dep task", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const dep1Res = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Dep A" });
+    const dep1 = await dep1Res.json();
+    const dep2Res = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Dep B" });
+    const dep2 = await dep2Res.json();
+
+    const taskRes = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Waiting on both",
+      depends_on: [dep1.id, dep2.id],
+    });
+    const task = await taskRes.json();
+    await updateTaskRaw(alpha.secret, beta.agent_id, task.id, { status: "blocked" });
+
+    // Complete both deps
+    await updateTaskRaw(alpha.secret, beta.agent_id, dep1.id, { status: "done" });
+    await updateTaskRaw(alpha.secret, beta.agent_id, dep2.id, { status: "done" });
+
+    const tasksRes = await listTasksRaw(alpha.secret, beta.agent_id);
+    const allTasks = await tasksRes.json();
+    const unblocked = allTasks.tasks.find((t: { id: string }) => t.id === task.id);
+    expect(unblocked.status).toBe("open");
+  });
+
+  it("auto-unblock does not affect non-blocked tasks with same dependency", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const depRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Shared dep" });
+    const dep = await depRes.json();
+
+    // Create a task, set it to in-progress with the dep
+    const taskRes = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "In progress task",
+      depends_on: [dep.id],
+    });
+    const task = await taskRes.json();
+    await updateTaskRaw(alpha.secret, beta.agent_id, task.id, { status: "in-progress" });
+
+    await updateTaskRaw(alpha.secret, beta.agent_id, dep.id, { status: "done" });
+
+    const tasksRes = await listTasksRaw(alpha.secret, beta.agent_id);
+    const allTasks = await tasksRes.json();
+    const unchanged = allTasks.tasks.find((t: { id: string }) => t.id === task.id);
+    expect(unchanged.status).toBe("in-progress");
+  });
 });
 
 async function registerPair(): Promise<{
