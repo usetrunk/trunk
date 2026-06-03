@@ -8020,6 +8020,422 @@ describe("Hono API behavior", () => {
     expect(stats.by_type.question).toBe(2);
     expect(stats.by_type.update).toBe(1);
   });
+
+  // ---- Shared Documents (contact-scoped) ----
+
+  it("creates a contact-scoped document and retrieves it", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "design.md",
+      body: "# Design Doc\nArchitecture overview",
+      content_type: "text/markdown",
+    });
+
+    expect(doc.id).toEqual(expect.any(String));
+    expect(doc.name).toBe("design.md");
+    expect(doc.content_type).toBe("text/markdown");
+    expect(doc.version).toBe(1);
+    expect(doc.last_edited_by).toBe(alpha.agent_id);
+
+    const fetched = await alphaClient.getDocument(beta.agent_id, doc.id);
+    expect(fetched.body).toBe("# Design Doc\nArchitecture overview");
+    expect(fetched.version).toBe(1);
+  });
+
+  it("lists contact-scoped documents", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.createDocument(beta.agent_id, { name: "doc1.md", body: "first" });
+    await alphaClient.createDocument(beta.agent_id, { name: "doc2.md", body: "second" });
+
+    const list = await alphaClient.listDocuments(beta.agent_id);
+    expect(list.documents.length).toBe(2);
+    expect(list.documents.map((d: { name: string }) => d.name).sort()).toEqual(["doc1.md", "doc2.md"]);
+  });
+
+  it("updates a contact-scoped document and increments version", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "spec.md", body: "v1 content" });
+    expect(doc.version).toBe(1);
+
+    const updated = await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "v2 content" });
+    expect(updated.version).toBe(2);
+    expect(updated.last_edited_by).toBe(alpha.agent_id);
+
+    const fetched = await alphaClient.getDocument(beta.agent_id, doc.id);
+    expect(fetched.body).toBe("v2 content");
+  });
+
+  it("updates a document name alongside body", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "old-name.md", body: "content" });
+    const updated = await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "new content", name: "new-name.md" });
+
+    expect(updated.name).toBe("new-name.md");
+    expect(updated.version).toBe(2);
+  });
+
+  it("retrieves version history for a contact-scoped document", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "log.md", body: "initial" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "updated once" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "updated twice" });
+
+    const history = await alphaClient.documentVersions(beta.agent_id, doc.id);
+    expect(history.versions.length).toBe(3);
+    expect(history.versions[0].version).toBe(3);
+    expect(history.versions[2].version).toBe(1);
+    expect(history.versions[0].edited_by).toBe(alpha.agent_id);
+  });
+
+  it("retrieves a specific document version", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "versioned.md", body: "v1" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "v2" });
+
+    const v1 = await alphaClient.documentVersion(beta.agent_id, doc.id, 1);
+    expect(v1.body).toBe("v1");
+    expect(v1.version).toBe(1);
+
+    const v2 = await alphaClient.documentVersion(beta.agent_id, doc.id, 2);
+    expect(v2.body).toBe("v2");
+    expect(v2.version).toBe(2);
+  });
+
+  it("deletes a contact-scoped document and its versions", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "temp.md", body: "ephemeral" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "v2" });
+
+    const result = await alphaClient.deleteDocument(beta.agent_id, doc.id);
+    expect(result.ok).toBe(true);
+
+    await expect(alphaClient.getDocument(beta.agent_id, doc.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects document creation for non-contacts", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+
+    await expect(
+      alphaClient.createDocument(beta.agent_id, { name: "sneaky.md", body: "unauthorized" })
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects document creation with missing required fields", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(
+      alphaClient.createDocument(beta.agent_id, { name: "", body: "content" })
+    ).rejects.toMatchObject({ status: 400 });
+
+    await expect(
+      alphaClient.createDocument(beta.agent_id, { name: "doc.md", body: "" })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects document name exceeding max length", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const longName = "a".repeat(256);
+    await expect(
+      alphaClient.createDocument(beta.agent_id, { name: longName, body: "content" })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("both paired agents can access the same contact-scoped document", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, {
+      name: "shared.md",
+      body: "created by alpha",
+    });
+
+    // Beta should be able to read documents in the shared scope
+    const betaDocs = await betaClient.listDocuments(alpha.agent_id);
+    expect(betaDocs.documents.length).toBe(1);
+    expect(betaDocs.documents[0].name).toBe("shared.md");
+  });
+
+  it("returns 404 for non-existent document", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await expect(
+      alphaClient.getDocument(beta.agent_id, "00000000-0000-0000-0000-000000000000")
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("returns 404 for non-existent document version", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "v.md", body: "only v1" });
+
+    await expect(
+      alphaClient.documentVersion(beta.agent_id, doc.id, 99)
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  // ---- Shared Documents (room-scoped) ----
+
+  it("creates and retrieves a room-scoped document", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Doc Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const doc = await alphaClient.createRoomDocument(room.id, {
+      name: "room-spec.md",
+      body: "Room design doc",
+    });
+
+    expect(doc.id).toEqual(expect.any(String));
+    expect(doc.name).toBe("room-spec.md");
+    expect(doc.version).toBe(1);
+
+    const fetched = await alphaClient.getRoomDocument(room.id, doc.id);
+    expect(fetched.body).toBe("Room design doc");
+  });
+
+  it("lists room-scoped documents", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "List Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    await alphaClient.createRoomDocument(room.id, { name: "r1.md", body: "first" });
+    await alphaClient.createRoomDocument(room.id, { name: "r2.md", body: "second" });
+
+    const list = await alphaClient.listRoomDocuments(room.id);
+    expect(list.documents.length).toBe(2);
+  });
+
+  it("updates a room-scoped document with versioning", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Edit Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "collab.md", body: "v1" });
+
+    // Beta updates the document
+    const updated = await betaClient.updateRoomDocument(room.id, doc.id, { body: "v2 by beta" });
+    expect(updated.version).toBe(2);
+    expect(updated.last_edited_by).toBe(beta.agent_id);
+
+    const history = await alphaClient.roomDocumentVersions(room.id, doc.id);
+    expect(history.versions.length).toBe(2);
+  });
+
+  it("retrieves a specific room document version", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Version Room" });
+    const room = await roomRes.json();
+
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "rv.md", body: "initial" });
+    await alphaClient.updateRoomDocument(room.id, doc.id, { body: "revised" });
+
+    const v1 = await alphaClient.roomDocumentVersion(room.id, doc.id, 1);
+    expect(v1.body).toBe("initial");
+
+    const v2 = await alphaClient.roomDocumentVersion(room.id, doc.id, 2);
+    expect(v2.body).toBe("revised");
+  });
+
+  it("deletes a room-scoped document", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Delete Room" });
+    const room = await roomRes.json();
+
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "doomed.md", body: "bye" });
+    const result = await alphaClient.deleteRoomDocument(room.id, doc.id);
+    expect(result.ok).toBe(true);
+
+    await expect(alphaClient.getRoomDocument(room.id, doc.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects room document access for non-members", async () => {
+    const { alpha, alphaClient } = await registerPair();
+    const outsider = await createClient().register({ name: "outsider" });
+    const outsiderClient = createClient(outsider.secret);
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Private Doc Room" });
+    const room = await roomRes.json();
+
+    await expect(
+      outsiderClient.createRoomDocument(room.id, { name: "sneak.md", body: "nope" })
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("returns 404 for room document in wrong room", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const room1Res = await createRoomRaw(alpha.secret, { name: "Room A" });
+    const room1 = await room1Res.json();
+    const room2Res = await createRoomRaw(alpha.secret, { name: "Room B" });
+    const room2 = await room2Res.json();
+
+    const doc = await alphaClient.createRoomDocument(room1.id, { name: "scoped.md", body: "room1 only" });
+
+    await expect(alphaClient.getRoomDocument(room2.id, doc.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  // ---- Shared Documents (workspace-scoped) ----
+
+  it("creates and retrieves a workspace-scoped document", async () => {
+    const { alpha, alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Doc WS" });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, {
+      name: "ws-spec.md",
+      body: "Workspace design doc",
+      content_type: "text/markdown",
+    });
+
+    expect(doc.id).toEqual(expect.any(String));
+    expect(doc.name).toBe("ws-spec.md");
+    expect(doc.version).toBe(1);
+    expect(doc.last_edited_by).toBe(alpha.agent_id);
+
+    const fetched = await alphaClient.getWorkspaceDocument(ws.id, doc.id);
+    expect(fetched.body).toBe("Workspace design doc");
+  });
+
+  it("lists workspace-scoped documents", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "List WS" });
+
+    await alphaClient.createWorkspaceDocument(ws.id, { name: "w1.md", body: "first" });
+    await alphaClient.createWorkspaceDocument(ws.id, { name: "w2.md", body: "second" });
+
+    const list = await alphaClient.listWorkspaceDocuments(ws.id);
+    expect(list.documents.length).toBe(2);
+  });
+
+  it("updates a workspace-scoped document with versioning", async () => {
+    const { alpha, alphaClient, betaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Collab WS" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "ws-collab.md", body: "v1" });
+
+    const updated = await betaClient.updateWorkspaceDocument(ws.id, doc.id, { body: "v2 by beta" });
+    expect(updated.version).toBe(2);
+
+    const history = await alphaClient.workspaceDocumentVersions(ws.id, doc.id);
+    expect(history.versions.length).toBe(2);
+  });
+
+  it("retrieves a specific workspace document version", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Version WS" });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "wv.md", body: "original" });
+    await alphaClient.updateWorkspaceDocument(ws.id, doc.id, { body: "modified" });
+
+    const v1 = await alphaClient.workspaceDocumentVersion(ws.id, doc.id, 1);
+    expect(v1.body).toBe("original");
+
+    const v2 = await alphaClient.workspaceDocumentVersion(ws.id, doc.id, 2);
+    expect(v2.body).toBe("modified");
+  });
+
+  it("deletes a workspace-scoped document", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Delete WS" });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "temp.md", body: "gone" });
+    const result = await alphaClient.deleteWorkspaceDocument(ws.id, doc.id);
+    expect(result.ok).toBe(true);
+
+    await expect(alphaClient.getWorkspaceDocument(ws.id, doc.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects workspace document access for non-members", async () => {
+    const { alphaClient } = await registerPair();
+    const outsider = await createClient().register({ name: "outsider" });
+    const outsiderClient = createClient(outsider.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Private WS" });
+
+    await expect(
+      outsiderClient.createWorkspaceDocument(ws.id, { name: "sneak.md", body: "nope" })
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("returns 404 for workspace document in wrong workspace", async () => {
+    const { alphaClient, betaClient } = await registerPair();
+
+    const ws1 = await alphaClient.createWorkspace({ name: "WS A" });
+    await alphaClient.leaveWorkspace();
+    const ws2 = await alphaClient.createWorkspace({ name: "WS B" });
+
+    const doc = await alphaClient.createWorkspaceDocument(ws2.id, { name: "scoped.md", body: "ws2 only" });
+
+    await betaClient.joinWorkspace({ code: ws1.pairing_code });
+    await expect(betaClient.getWorkspaceDocument(ws1.id, doc.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rejects document update with missing body", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "test.md", body: "content" });
+
+    await expect(
+      alphaClient.updateDocument(beta.agent_id, doc.id, { body: "" })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("creates audit events for document operations", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "audited.md", body: "tracked" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "updated" });
+    await alphaClient.deleteDocument(beta.agent_id, doc.id);
+
+    const auditData = await alphaClient.auditLog({ target_type: "shared_document" });
+
+    const docEvents = auditData.events.filter((e) => e.target_type === "shared_document");
+    expect(docEvents.length).toBe(3);
+    expect(docEvents.map((e) => e.action).sort()).toEqual([
+      "document.created",
+      "document.deleted",
+      "document.updated",
+    ]);
+  });
 });
 
 async function registerPair(): Promise<{
