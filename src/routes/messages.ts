@@ -386,12 +386,12 @@ app.get("/inbox", async (c) => {
 app.get("/inbox/stats", async (c) => {
   const agentId = c.get("agentId");
 
-  // Fetch only lightweight projections (status + type), capped to prevent memory exhaustion
+  // Fetch lightweight projections, capped to prevent memory exhaustion
   const rows = await db
     .select({ status: messages.status, type: messages.type })
     .from(messages)
     .where(eq(messages.toAgent, agentId))
-    .limit(50000);
+    .limit(10000);
 
   const unread = rows.filter((row) => row.status === "pending" || row.status === "delivered");
   const byType: Record<string, number> = {};
@@ -756,7 +756,8 @@ app.get("/labels/all", async (c) => {
   const rows = await db
     .select()
     .from(messageLabels)
-    .where(eq(messageLabels.agentId, agentId));
+    .where(eq(messageLabels.agentId, agentId))
+    .limit(5000);
 
   const labelCounts: Record<string, number> = {};
   for (const r of rows) {

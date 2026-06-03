@@ -10073,6 +10073,39 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
   });
 
+  it("contacts list endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const secret = alpha.secret;
+    const res = await app.request("/contacts", {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("blocked contacts endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const secret = alpha.secret;
+    const res = await app.request("/contacts/blocked", {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("contact tags/all endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const secret = alpha.secret;
+    const res = await app.request("/contacts/tags/all", {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
   // --- Attachment CRUD tests ---
 
   it("uploads an attachment and retrieves it", async () => {

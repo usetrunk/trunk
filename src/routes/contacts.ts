@@ -126,6 +126,12 @@ app.post("/pair", async (c) => {
 app.get("/", async (c) => {
   const agentId = c.get("agentId");
 
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   // Direct contacts
   const rows = await db
     .select()
@@ -243,6 +249,12 @@ app.get("/", async (c) => {
 // List blocked agents
 app.get("/blocked", async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${myId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
 
   const rows = await db
     .select()
@@ -686,12 +698,18 @@ app.get("/by-tag/:tag", async (c) => {
 app.get("/tags/all", async (c) => {
   const agentId = c.get("agentId");
 
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const rows = await db
     .select()
     .from(contactTags)
-    .where(eq(contactTags.agentId, agentId));
+    .where(eq(contactTags.agentId, agentId))
+    .limit(5000);
 
-  // Aggregate unique tags with counts
   const tagCounts: Record<string, number> = {};
   for (const row of rows) {
     tagCounts[row.tag] = (tagCounts[row.tag] ?? 0) + 1;
