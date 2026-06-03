@@ -47,6 +47,9 @@ app.get("/room/:roomId/facts", requireValidUUIDs("roomId"), requireRoomMember(),
 
 app.get("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   const roomId = c.req.param("roomId");
   const key = c.req.param("key");
 
@@ -243,6 +246,9 @@ app.get("/:contactId/facts", requireValidUUIDs("contactId"), async (c) => {
 
 app.get("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   const contactId = c.req.param("contactId");
   const key = c.req.param("key");
 

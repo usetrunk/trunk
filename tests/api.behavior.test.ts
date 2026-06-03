@@ -12663,6 +12663,106 @@ describe("Hono API behavior", () => {
     const body = await res.json();
     expect(body.code).toBe("NOT_MEMBER");
   });
+
+  // --- Rate limit coverage for previously unprotected read routes ---
+
+  it("GET /attachments/:id includes rate limit headers", async () => {
+    const alpha = await createClient().register({ name: "rl-attach-dl" });
+    const fakeId = "00000000-0000-0000-0000-000000000099";
+    const res = await app.request(`/attachments/${fakeId}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    // Route is protected even if attachment doesn't exist
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+  });
+
+  it("GET /agents/me/webhook includes rate limit headers", async () => {
+    const alpha = await createClient().register({ name: "rl-webhook-get" });
+    const res = await app.request("/agents/me/webhook", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+  });
+
+  it("GET /contacts/:id/tags includes rate limit headers", async () => {
+    const { alpha, beta } = await registerPair();
+    const res = await app.request(`/contacts/${beta.agent_id}/tags`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+  });
+
+  it("GET /context/room/:roomId/facts/:key includes rate limit headers", async () => {
+    const alpha = await createClient().register({ name: "rl-ctx-room-fact" });
+    const roomRes = await app.request("/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "RL test room" }),
+    });
+    const room = await roomRes.json();
+    const res = await app.request(`/context/room/${room.id}/facts/test-key`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+  });
+
+  it("GET /context/:contactId/facts/:key includes rate limit headers", async () => {
+    const { alpha, beta } = await registerPair();
+    const res = await app.request(`/context/${beta.agent_id}/facts/test-key`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+  });
+
+  it("GET /messages/thread/:threadId includes rate limit headers", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({ to: beta.agent_id, type: "text", payload: { content: "thread-rl" } });
+    const res = await app.request(`/messages/thread/${sent.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+  });
+
+  it("GET /documents/room/:roomId/:docId includes rate limit headers", async () => {
+    const alpha = await createClient().register({ name: "rl-doc-room" });
+    const roomRes = await app.request("/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Doc RL room" }),
+    });
+    const room = await roomRes.json();
+    const docRes = await app.request(`/documents/room/${room.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "test-doc", body: "content" }),
+    });
+    const doc = await docRes.json();
+    const res = await app.request(`/documents/room/${room.id}/${doc.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+  });
+
+  it("GET /documents/:contactId/:docId includes rate limit headers", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const docRes = await app.request(`/documents/${beta.agent_id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "test-doc", body: "content" }),
+    });
+    const doc = await docRes.json();
+    const res = await app.request(`/documents/${beta.agent_id}/${doc.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+  });
 });
 
 async function registerPair(): Promise<{
