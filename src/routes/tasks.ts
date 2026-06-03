@@ -15,6 +15,33 @@ const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
 const VALID_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 const MAX_DEPENDS_ON = 50;
 
+/** Detect cycles in the task dependency graph using DFS. Returns true if adding deps to taskId would create a cycle. */
+function hasCycle(taskId: string, deps: string[], scopeTasks: { id: string; dependsOn: unknown }[]): boolean {
+  const graph = new Map<string, string[]>();
+  for (const t of scopeTasks) {
+    graph.set(t.id, ((t.dependsOn as string[]) || []).slice());
+  }
+  // Apply the proposed edges
+  graph.set(taskId, deps);
+
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+
+  function dfs(node: string): boolean {
+    if (inStack.has(node)) return true; // cycle
+    if (visited.has(node)) return false;
+    visited.add(node);
+    inStack.add(node);
+    for (const dep of graph.get(node) || []) {
+      if (dfs(dep)) return true;
+    }
+    inStack.delete(node);
+    return false;
+  }
+
+  return dfs(taskId);
+}
+
 const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
 
 function isValidStatus(s: string): boolean {
@@ -399,6 +426,20 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
     for (const dep of body.depends_on) {
       if (!isValidUUID(dep)) {
         return c.json({ error: `Invalid UUID in depends_on: ${dep}`, code: "INVALID_INPUT" }, 400);
+      }
+    }
+    if (body.depends_on.includes(taskId)) {
+      return c.json({ error: "A task cannot depend on itself", code: "CYCLE_DETECTED" }, 400);
+    }
+    // Check for dependency cycles within the scope
+    if (body.depends_on.length > 0) {
+      const scopeTasks = await db
+        .select({ id: tasks.id, dependsOn: tasks.dependsOn })
+        .from(tasks)
+        .where(eq(tasks.scope, scope))
+        .limit(500);
+      if (hasCycle(taskId, body.depends_on, scopeTasks)) {
+        return c.json({ error: "Dependency cycle detected", code: "CYCLE_DETECTED" }, 400);
       }
     }
   }

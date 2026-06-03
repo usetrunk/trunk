@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { rooms, roomMembers, agents, messages } from "../db/schema.js";
+import { rooms, roomMembers, agents, messages, tasks, sharedFacts, sharedDocuments } from "../db/schema.js";
 import { and, eq, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
@@ -363,12 +363,24 @@ app.delete("/:roomId", requireValidUUIDs("roomId"), async (c) => {
     return c.json({ error: "Only the creator can delete a room", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
-  // Delete messages, members, then the room
-  await db.delete(messages).where(eq(messages.toRoom, roomId));
-  await db.delete(roomMembers).where(eq(roomMembers.roomId, roomId));
+  // Cascade delete all room-scoped data and track counts
+  const scope = `room:${roomId}`;
+  const deletedMessages = await db.delete(messages).where(eq(messages.toRoom, roomId)).returning({ id: messages.id });
+  const deletedMembers = await db.delete(roomMembers).where(eq(roomMembers.roomId, roomId)).returning({ agentId: roomMembers.agentId });
+  const deletedTasks = await db.delete(tasks).where(eq(tasks.scope, scope)).returning({ id: tasks.id });
+  const deletedFacts = await db.delete(sharedFacts).where(eq(sharedFacts.scope, scope)).returning({ key: sharedFacts.key });
+  const deletedDocs = await db.delete(sharedDocuments).where(eq(sharedDocuments.scope, scope)).returning({ id: sharedDocuments.id });
   await db.delete(rooms).where(eq(rooms.id, roomId));
 
-  await audit(agentId, "room.deleted", "room", roomId, {});
+  await audit(agentId, "room.deleted", "room", roomId, {
+    cascade: {
+      messages: deletedMessages.length,
+      members: deletedMembers.length,
+      tasks: deletedTasks.length,
+      facts: deletedFacts.length,
+      documents: deletedDocs.length,
+    },
+  });
 
   return c.json({ ok: true, deleted: roomId });
 });

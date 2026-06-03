@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, workspaces, workspaceContacts } from "../db/schema.js";
+import { agents, workspaces, workspaceContacts, tasks, sharedFacts, sharedDocuments } from "../db/schema.js";
 import { and, eq } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
@@ -404,24 +404,41 @@ app.delete("/", async (c) => {
 
   const workspaceId = agent.workspaceId;
 
-  // Atomic deletion: remove members, contacts, and workspace in one transaction
-  await db.transaction(async (tx) => {
-    // Remove all members from workspace
-    await tx
+  const scope = `workspace:${workspaceId}`;
+
+  // Atomic deletion: remove members, contacts, scoped data, and workspace in one transaction
+  const cascade = await db.transaction(async (tx) => {
+    // Count members being removed
+    const memberRows = await tx
       .update(agents)
       .set({ workspaceId: null, workspaceRole: null })
-      .where(eq(agents.workspaceId, workspaceId));
+      .where(eq(agents.workspaceId, workspaceId))
+      .returning({ id: agents.id });
 
     // Delete workspace contacts
-    await tx
+    const contactRows = await tx
       .delete(workspaceContacts)
-      .where(eq(workspaceContacts.workspaceId, workspaceId));
+      .where(eq(workspaceContacts.workspaceId, workspaceId))
+      .returning({ id: workspaceContacts.id });
+
+    // Delete workspace-scoped tasks, facts, and documents
+    const taskRows = await tx.delete(tasks).where(eq(tasks.scope, scope)).returning({ id: tasks.id });
+    const factRows = await tx.delete(sharedFacts).where(eq(sharedFacts.scope, scope)).returning({ key: sharedFacts.key });
+    const docRows = await tx.delete(sharedDocuments).where(eq(sharedDocuments.scope, scope)).returning({ id: sharedDocuments.id });
 
     // Delete workspace
     await tx.delete(workspaces).where(eq(workspaces.id, workspaceId));
+
+    return {
+      members: memberRows.length,
+      contacts: contactRows.length,
+      tasks: taskRows.length,
+      facts: factRows.length,
+      documents: docRows.length,
+    };
   });
 
-  await audit(agentId, "workspace.delete", "workspace", workspaceId);
+  await audit(agentId, "workspace.delete", "workspace", workspaceId, { cascade });
 
   return c.json({ ok: true, deleted: workspaceId });
 });

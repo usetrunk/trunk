@@ -997,10 +997,14 @@ describe("Hono API behavior", () => {
     expect(task.start_date).toBeNull();
     expect(task.group).toBeNull();
 
+    // Create a second task to use as a valid (non-self) dependency
+    const depRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Dependency task" });
+    const depTask = await depRes.json();
+
     const updateRes = await updateTaskRaw(beta.secret, alpha.agent_id, task.id, {
       start_date: "2026-07-01",
       group: "payments",
-      depends_on: [task.id],
+      depends_on: [depTask.id],
       sequence: 3,
       estimate: 16,
     });
@@ -1008,7 +1012,7 @@ describe("Hono API behavior", () => {
     const updated = await updateRes.json();
     expect(updated.start_date).toBe("2026-07-01");
     expect(updated.group).toBe("payments");
-    expect(updated.depends_on).toEqual([task.id]);
+    expect(updated.depends_on).toEqual([depTask.id]);
     expect(updated.sequence).toBe(3);
     expect(updated.estimate).toBe(16);
   });
@@ -3033,6 +3037,40 @@ describe("Hono API behavior", () => {
     // Both agents should no longer be in workspace
     await expect(alphaClient.myWorkspace()).rejects.toMatchObject({ status: 404 });
     await expect(betaClient.myWorkspace()).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("workspace delete audit includes cascade counts", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "cascade-ws-admin" });
+    const beta = await anon.register({ name: "cascade-ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "CascadeTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Create a workspace-scoped task
+    await app.request("/tasks", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_id: ws.id, title: "Ws cascade task" }),
+    });
+
+    testState["audit_events"].length = 0;
+
+    const result = await alphaClient.deleteWorkspace();
+    expect(result.ok).toBe(true);
+
+    const deleteEvent = testState["audit_events"].find(
+      (e) => e.action === "workspace.delete"
+    );
+    expect(deleteEvent).toBeDefined();
+    expect(deleteEvent!.metadata.cascade).toBeDefined();
+    expect(deleteEvent!.metadata.cascade.members).toBeGreaterThanOrEqual(2);
+    expect(deleteEvent!.metadata.cascade.tasks).toBeGreaterThanOrEqual(1);
+    expect(typeof deleteEvent!.metadata.cascade.contacts).toBe("number");
+    expect(typeof deleteEvent!.metadata.cascade.facts).toBe("number");
+    expect(typeof deleteEvent!.metadata.cascade.documents).toBe("number");
   });
 
   it("non-admin cannot delete workspace", async () => {
@@ -14465,12 +14503,70 @@ describe("Hono API behavior", () => {
     // Create a task first
     const task = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task A" });
 
-    // Try to update it to depend on itself
-    const updated = await alphaClient.updateTask(beta.agent_id, task.id, {
+    // Try to update it to depend on itself — should be rejected
+    const updateRes = await updateTaskRaw(alpha.secret, beta.agent_id, task.id, {
       depends_on: [task.id],
     });
-    // Currently the API allows this (no circular detection) — verify it stores
-    expect(updated.depends_on).toEqual([task.id]);
+    expect(updateRes.status).toBe(400);
+    const err = await updateRes.json();
+    expect(err.code).toBe("CYCLE_DETECTED");
+  });
+
+  it("rejects circular dependency chain (A→B→A)", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "cycle-a" });
+    const beta = await anon.register({ name: "cycle-b" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const taskA = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task A" });
+    const taskB = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task B", depends_on: [taskA.id] });
+
+    // Now try to make A depend on B — creating A→B→A cycle
+    const updateRes = await updateTaskRaw(alpha.secret, beta.agent_id, taskA.id, {
+      depends_on: [taskB.id],
+    });
+    expect(updateRes.status).toBe(400);
+    const err = await updateRes.json();
+    expect(err.code).toBe("CYCLE_DETECTED");
+  });
+
+  it("rejects longer dependency cycle (A→B→C→A)", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "longcycle-a" });
+    const beta = await anon.register({ name: "longcycle-b" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const taskA = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task A" });
+    const taskB = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task B", depends_on: [taskA.id] });
+    const taskC = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task C", depends_on: [taskB.id] });
+
+    // Try to make A depend on C — creating A→C→B→A cycle
+    const updateRes = await updateTaskRaw(alpha.secret, beta.agent_id, taskA.id, {
+      depends_on: [taskC.id],
+    });
+    expect(updateRes.status).toBe(400);
+    const err = await updateRes.json();
+    expect(err.code).toBe("CYCLE_DETECTED");
+  });
+
+  it("allows valid non-cyclic dependency updates", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "nocycle-a" });
+    const beta = await anon.register({ name: "nocycle-b" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const taskA = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task A" });
+    const taskB = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task B" });
+    const taskC = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Task C" });
+
+    // A→B and C→B are both valid (no cycle)
+    const resA = await updateTaskRaw(alpha.secret, beta.agent_id, taskA.id, { depends_on: [taskB.id] });
+    expect(resA.status).toBe(200);
+    const resC = await updateTaskRaw(alpha.secret, beta.agent_id, taskC.id, { depends_on: [taskB.id] });
+    expect(resC.status).toBe(200);
   });
 
   it("allows depends_on with empty array to clear dependencies", async () => {
@@ -15702,6 +15798,46 @@ describe("Hono API behavior", () => {
       );
       expect(deleteEvent).toBeDefined();
       expect(deleteEvent!.actorAgent).toBe(alpha.agent_id);
+    });
+
+    it("includes cascade counts in room delete audit event", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "cascade-room-creator" });
+      const beta = await anon.register({ name: "cascade-room-joiner" });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Cascade Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      const alphaClient = createClient(alpha.secret);
+
+      // Send a message into the room via SDK
+      await alphaClient.send({ to: `room:${room.id}`, type: "update", payload: { content: "test" } });
+
+      // Create a task in the room scope
+      await app.request("/tasks", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ room_id: room.id, title: "Room task" }),
+      });
+
+      testState["audit_events"].length = 0;
+
+      await app.request(`/rooms/${room.id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+
+      const deleteEvent = testState["audit_events"].find(
+        (e) => e.action === "room.deleted"
+      );
+      expect(deleteEvent).toBeDefined();
+      expect(deleteEvent!.metadata.cascade).toBeDefined();
+      expect(deleteEvent!.metadata.cascade.messages).toBeGreaterThanOrEqual(1);
+      expect(deleteEvent!.metadata.cascade.members).toBeGreaterThanOrEqual(2);
+      expect(deleteEvent!.metadata.cascade.tasks).toBeGreaterThanOrEqual(1);
+      expect(typeof deleteEvent!.metadata.cascade.facts).toBe("number");
+      expect(typeof deleteEvent!.metadata.cascade.documents).toBe("number");
     });
 
     it("logs audit event on room leave", async () => {
