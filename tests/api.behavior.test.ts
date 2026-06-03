@@ -6349,6 +6349,74 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("x-ratelimit-limit")).toBe("30");
     expect(res.headers.get("x-ratelimit-remaining")).toBeTruthy();
   });
+
+  it("dashboard shows login form when no secret is provided", async () => {
+    const res = await app.request("/dashboard");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Sign in");
+    expect(body).toContain('<input type="password"');
+    expect(body).toContain('<form method="GET"');
+  });
+
+  it("dashboard rejects invalid secret with 401", async () => {
+    const res = await app.request("/dashboard?secret=invalid-secret-value");
+    expect(res.status).toBe(401);
+  });
+
+  it("dashboard authenticates via Authorization header", async () => {
+    const registered = await createClient().register({ name: "header-auth-agent" });
+    const res = await app.request("/dashboard", {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("header-auth-agent");
+    expect(body).toContain("Observer");
+  });
+
+  it("dashboard thread view requires auth and renders thread page", async () => {
+    const registered = await createClient().register({ name: "thread-viewer" });
+    const res = await app.request(`/dashboard/thread/fake-thread-id?secret=${registered.secret}`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Thread");
+    expect(body).toContain("0 messages");
+  });
+
+  it("dashboard thread view rejects without auth", async () => {
+    const res = await app.request("/dashboard/thread/fake-thread-id");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Sign in");
+  });
+
+  it("dashboard inbox view requires auth and renders inbox page", async () => {
+    const registered = await createClient().register({ name: "inbox-viewer" });
+    const res = await app.request(`/dashboard/inbox?secret=${registered.secret}`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Inbox");
+  });
+
+  it("dashboard inbox view shows status filter tabs", async () => {
+    const registered = await createClient().register({ name: "filter-viewer" });
+    const res = await app.request(`/dashboard/inbox?secret=${registered.secret}&status=read`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Inbox (read)");
+    expect(body).toContain("pending");
+    expect(body).toContain("replied");
+  });
+
+  it("dashboard gantt view renders mission control with no tasks", async () => {
+    const registered = await createClient().register({ name: "gantt-agent" });
+    const res = await app.request(`/dashboard/gantt?secret=${registered.secret}`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Mission control");
+    expect(body).toContain("No tasks yet");
+  });
 });
 
 async function registerPair(): Promise<{
