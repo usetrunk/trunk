@@ -15,7 +15,9 @@ app.get("/:code", async (c) => {
     return c.text("Too many requests. Please try again later.", 429);
   }
 
-  const code = c.req.param("code").toUpperCase();
+  const rawCode = c.req.param("code");
+  if (rawCode.length > 20) return c.text("Invalid code", 400);
+  const code = rawCode.toUpperCase();
 
   // Look up who owns this pairing code
   const [agent] = await db

@@ -2831,6 +2831,88 @@ describe("Hono API behavior", () => {
     });
   });
 
+  it("rejects workspace kick with invalid UUID agent_id", async () => {
+    const alpha = await createClient().register({ name: "ws-kick-uuid" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.createWorkspace({ name: "KickUUIDTeam" });
+
+    const res = await app.request("/workspaces/kick", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${alpha.secret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ agent_id: "not-a-valid-uuid" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects workspace kick with non-string agent_id", async () => {
+    const alpha = await createClient().register({ name: "ws-kick-type" });
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.createWorkspace({ name: "KickTypeTeam" });
+
+    const res = await app.request("/workspaces/kick", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${alpha.secret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ agent_id: 12345 }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects workspace join with oversized code", async () => {
+    const alpha = await createClient().register({ name: "ws-join-long" });
+
+    const res = await app.request("/workspaces/join", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${alpha.secret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ code: "A".repeat(100) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects contact pairing with oversized code", async () => {
+    const alpha = await createClient().register({ name: "pair-long" });
+
+    const res = await app.request("/contacts/pair", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${alpha.secret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ code: "X".repeat(50) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects room join with oversized code", async () => {
+    const alpha = await createClient().register({ name: "room-join-long" });
+
+    const res = await app.request("/rooms/join", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${alpha.secret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ code: "Z".repeat(30) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string };
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
   it("admin can change a member's role", async () => {
     const anon = createClient();
     const alpha = await anon.register({ name: "ws-admin" });
@@ -7587,6 +7669,11 @@ describe("Hono API behavior", () => {
     const res = await app.request(`/connect/${registered.pairing_code}`);
     const body = await res.text();
     expect(body).toContain("solo-agent's agent wants to connect");
+  });
+
+  it("connect page rejects oversized code in URL", async () => {
+    const res = await app.request(`/connect/${"A".repeat(50)}`);
+    expect(res.status).toBe(400);
   });
 
   it("connect page includes rate limit headers", async () => {

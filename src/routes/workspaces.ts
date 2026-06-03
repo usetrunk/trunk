@@ -6,7 +6,7 @@ import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
-import { requireValidUUIDs } from "../lib/errors.js";
+import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -71,7 +71,8 @@ app.post("/join", async (c) => {
 
   const body = await c.req.json<{ code: string }>();
 
-  if (!body.code) return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
+  if (!body.code || typeof body.code !== "string") return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
+  if (body.code.length > 20) return c.json({ error: "Invalid code format", code: "INVALID_INPUT" }, 400);
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (agent?.workspaceId) {
@@ -265,7 +266,8 @@ app.post("/kick", async (c) => {
   }
   const body = await c.req.json<{ agent_id: string }>();
 
-  if (!body.agent_id) return c.json({ error: "agent_id is required", code: "MISSING_FIELD" }, 400);
+  if (!body.agent_id || typeof body.agent_id !== "string") return c.json({ error: "agent_id is required", code: "MISSING_FIELD" }, 400);
+  if (!isValidUUID(body.agent_id)) return c.json({ error: "Invalid agent_id format", code: "INVALID_INPUT" }, 400);
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {

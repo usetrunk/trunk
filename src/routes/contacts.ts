@@ -24,8 +24,11 @@ app.post("/pair", async (c) => {
 
   const body = await c.req.json<{ code: string; alias?: string }>();
 
-  if (!body.code) {
+  if (!body.code || typeof body.code !== "string") {
     return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
+  }
+  if (body.code.length > 20) {
+    return c.json({ error: "Invalid code format", code: "INVALID_INPUT" }, 400);
   }
 
   const code = body.code.toUpperCase();
