@@ -93,6 +93,10 @@ export async function deliverWebhook(
         return true;
       }
 
+      if (res.status === 429) {
+        // Rate limited — continue retrying with backoff
+        continue;
+      }
       if (res.status >= 400 && res.status < 500) {
         // Client error — don't retry
         break;

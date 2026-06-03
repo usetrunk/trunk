@@ -103,6 +103,9 @@ app.post("/", async (c) => {
   // Handle workspace addressing: "workspace:<id>"
   if (body.to.startsWith("workspace:")) {
     const workspaceId = body.to.slice("workspace:".length);
+    if (!isValidUUID(workspaceId)) {
+      return c.json({ error: "Invalid workspace ID format", code: "INVALID_INPUT" }, 400);
+    }
 
     // Verify workspace exists
     const [workspace] = await db
@@ -192,6 +195,9 @@ app.post("/", async (c) => {
   // Handle room addressing: "room:<id>"
   if (body.to.startsWith("room:")) {
     const roomId = body.to.slice("room:".length);
+    if (!isValidUUID(roomId)) {
+      return c.json({ error: "Invalid room ID format", code: "INVALID_INPUT" }, 400);
+    }
 
     // Verify room exists
     const [room] = await db

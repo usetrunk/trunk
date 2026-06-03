@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { rooms, roomMembers, agents } from "../db/schema.js";
+import { rooms, roomMembers, agents, messages } from "../db/schema.js";
 import { and, eq, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
+import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
@@ -39,6 +40,8 @@ app.post("/", async (c) => {
 
   // Creator joins as creator
   await db.insert(roomMembers).values({ roomId: room.id, agentId, role: "creator" });
+
+  await audit(agentId, "room.created", "room", room.id, { name: room.name });
 
   return c.json({
     id: room.id,
@@ -84,6 +87,8 @@ app.post("/join", async (c) => {
   }
 
   await db.insert(roomMembers).values({ roomId: room.id, agentId, role: "member" });
+
+  await audit(agentId, "room.joined", "room", room.id, { name: room.name });
 
   return c.json({
     joined: true,
@@ -219,6 +224,8 @@ app.patch("/:roomId", requireValidUUIDs("roomId"), async (c) => {
     .where(eq(rooms.id, roomId))
     .returning();
 
+  await audit(agentId, "room.updated", "room", roomId, { name: body.name, metadata_changed: !!body.metadata });
+
   return c.json({
     id: updated.id,
     name: updated.name,
@@ -275,6 +282,8 @@ app.post("/:roomId/kick", requireValidUUIDs("roomId"), async (c) => {
     .delete(roomMembers)
     .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, body.agent_id)));
 
+  await audit(agentId, "room.member_kicked", "room", roomId, { kicked_agent: body.agent_id });
+
   return c.json({ ok: true, kicked: body.agent_id, room_id: roomId });
 });
 
@@ -326,6 +335,8 @@ app.put("/:roomId/members/:agentId/role", requireValidUUIDs("roomId", "agentId")
     .set({ role: body.role })
     .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, targetId)));
 
+  await audit(callerId, "room.role_changed", "room", roomId, { target_agent: targetId, new_role: body.role });
+
   return c.json({ ok: true, agent_id: targetId, role: body.role, room_id: roomId });
 });
 
@@ -352,9 +363,12 @@ app.delete("/:roomId", requireValidUUIDs("roomId"), async (c) => {
     return c.json({ error: "Only the creator can delete a room", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
-  // Delete all members first, then the room
+  // Delete messages, members, then the room
+  await db.delete(messages).where(eq(messages.toRoom, roomId));
   await db.delete(roomMembers).where(eq(roomMembers.roomId, roomId));
   await db.delete(rooms).where(eq(rooms.id, roomId));
+
+  await audit(agentId, "room.deleted", "room", roomId, {});
 
   return c.json({ ok: true, deleted: roomId });
 });
@@ -400,6 +414,8 @@ app.post("/:roomId/leave", requireValidUUIDs("roomId"), async (c) => {
   await db
     .delete(roomMembers)
     .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)));
+
+  await audit(agentId, "room.left", "room", roomId, {});
 
   return c.json({ ok: true, room_id: roomId });
 });

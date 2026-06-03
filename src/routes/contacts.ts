@@ -703,6 +703,13 @@ app.get("/:id/tags", requireValidUUIDs("id"), async (c) => {
 // List all contacts with a specific tag
 app.get("/by-tag/:tag", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const raw = c.req.param("tag");
   if (!raw || raw.length > 50) {
     return c.json({ error: "Tag must be 1-50 characters", code: "INVALID_INPUT" }, 400);

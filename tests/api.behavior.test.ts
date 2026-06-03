@@ -2149,7 +2149,7 @@ describe("Hono API behavior", () => {
 
     try {
       await alphaClient.send({
-        to: "room:non-existent-room-id",
+        to: `room:${crypto.randomUUID()}`,
         type: "update",
         payload: { content: "Ghost room" },
       });
@@ -15389,6 +15389,342 @@ describe("Hono API behavior", () => {
       });
 
       expect(response.status).toBe(403);
+    });
+  });
+
+  // --- Hardening: UUID validation on workspace:/room: addressing ---
+
+  describe("workspace/room addressing UUID validation", () => {
+    it("rejects workspace: addressing with non-UUID id", async () => {
+      const { alpha, alphaClient } = await registerPair();
+
+      const response = await app.request("/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          to: "workspace:not-a-uuid",
+          type: "update",
+          payload: { content: "test" },
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(body.code).toBe("INVALID_INPUT");
+      expect(body.error).toContain("workspace ID");
+    });
+
+    it("rejects room: addressing with non-UUID id", async () => {
+      const { alpha } = await registerPair();
+
+      const response = await app.request("/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          to: "room:not-a-uuid",
+          type: "update",
+          payload: { content: "test" },
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(body.code).toBe("INVALID_INPUT");
+      expect(body.error).toContain("room ID");
+    });
+
+    it("rejects workspace: with SQL injection attempt", async () => {
+      const { alpha } = await registerPair();
+
+      const response = await app.request("/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          to: "workspace:' OR '1'='1",
+          type: "update",
+          payload: { content: "test" },
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).code).toBe("INVALID_INPUT");
+    });
+
+    it("accepts workspace: addressing with valid UUID", async () => {
+      const { alpha } = await registerPair();
+
+      // Valid UUID but non-existent workspace should get 404, not 400
+      const response = await app.request("/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          to: `workspace:${crypto.randomUUID()}`,
+          type: "update",
+          payload: { content: "test" },
+        }),
+      });
+
+      expect(response.status).toBe(404);
+    });
+
+    it("accepts room: addressing with valid UUID", async () => {
+      const { alpha } = await registerPair();
+
+      const response = await app.request("/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          to: `room:${crypto.randomUUID()}`,
+          type: "update",
+          payload: { content: "test" },
+        }),
+      });
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  // --- Hardening: Room audit logging ---
+
+  describe("room audit logging", () => {
+    it("logs audit event on room creation", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "audit-room-creator" });
+
+      testState["audit_events"].length = 0;
+
+      await createRoomRaw(alpha.secret, { name: "Audited Room" });
+
+      const roomCreated = testState["audit_events"].find(
+        (e) => e.action === "room.created"
+      );
+      expect(roomCreated).toBeDefined();
+      expect(roomCreated!.actorAgent).toBe(alpha.agent_id);
+      expect(roomCreated!.targetType).toBe("room");
+    });
+
+    it("logs audit event on room join", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "audit-room-owner" });
+      const beta = await anon.register({ name: "audit-room-joiner" });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Join Audit Room" });
+      const room = await roomRes.json();
+
+      testState["audit_events"].length = 0;
+
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      const joinEvent = testState["audit_events"].find(
+        (e) => e.action === "room.joined"
+      );
+      expect(joinEvent).toBeDefined();
+      expect(joinEvent!.actorAgent).toBe(beta.agent_id);
+    });
+
+    it("logs audit event on room update", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "audit-room-updater" });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Update Audit Room" });
+      const room = await roomRes.json();
+
+      testState["audit_events"].length = 0;
+
+      await app.request(`/rooms/${room.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ name: "Renamed Room" }),
+      });
+
+      const updateEvent = testState["audit_events"].find(
+        (e) => e.action === "room.updated"
+      );
+      expect(updateEvent).toBeDefined();
+      expect(updateEvent!.actorAgent).toBe(alpha.agent_id);
+    });
+
+    it("logs audit event on room kick", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "audit-kicker" });
+      const beta = await anon.register({ name: "audit-kickee" });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Kick Audit Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      testState["audit_events"].length = 0;
+
+      await app.request(`/rooms/${room.id}/kick`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ agent_id: beta.agent_id }),
+      });
+
+      const kickEvent = testState["audit_events"].find(
+        (e) => e.action === "room.member_kicked"
+      );
+      expect(kickEvent).toBeDefined();
+      expect(kickEvent!.actorAgent).toBe(alpha.agent_id);
+      expect((kickEvent!.metadata as Record<string, unknown>).kicked_agent).toBe(beta.agent_id);
+    });
+
+    it("logs audit event on room role change", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "audit-role-changer" });
+      const beta = await anon.register({ name: "audit-role-target" });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Role Audit Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      testState["audit_events"].length = 0;
+
+      await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ role: "admin" }),
+      });
+
+      const roleEvent = testState["audit_events"].find(
+        (e) => e.action === "room.role_changed"
+      );
+      expect(roleEvent).toBeDefined();
+      expect((roleEvent!.metadata as Record<string, unknown>).new_role).toBe("admin");
+    });
+
+    it("logs audit event on room delete", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "audit-room-deleter" });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Delete Audit Room" });
+      const room = await roomRes.json();
+
+      testState["audit_events"].length = 0;
+
+      await app.request(`/rooms/${room.id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+
+      const deleteEvent = testState["audit_events"].find(
+        (e) => e.action === "room.deleted"
+      );
+      expect(deleteEvent).toBeDefined();
+      expect(deleteEvent!.actorAgent).toBe(alpha.agent_id);
+    });
+
+    it("logs audit event on room leave", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "audit-leaver-creator" });
+      const beta = await anon.register({ name: "audit-leaver" });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Leave Audit Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      testState["audit_events"].length = 0;
+
+      await app.request(`/rooms/${room.id}/leave`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${beta.secret}`,
+        },
+        body: JSON.stringify({}),
+      });
+
+      const leaveEvent = testState["audit_events"].find(
+        (e) => e.action === "room.left"
+      );
+      expect(leaveEvent).toBeDefined();
+      expect(leaveEvent!.actorAgent).toBe(beta.agent_id);
+    });
+  });
+
+  // --- Hardening: Room delete cleans up orphaned messages ---
+
+  describe("room delete message cleanup", () => {
+    it("deletes room messages when room is deleted", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Create room and join
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Cleanup Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      // Send a message to the room
+      await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "update",
+        payload: { content: "This should be cleaned up" },
+      });
+
+      // Verify message exists in beta's inbox
+      const inboxBefore = await betaClient.inbox();
+      const roomMsgBefore = inboxBefore.messages.find(
+        (m: TrunkMessage) => m.toRoom === room.id
+      );
+      expect(roomMsgBefore).toBeDefined();
+
+      // Delete the room
+      await app.request(`/rooms/${room.id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+
+      // Verify room messages are gone (check raw store)
+      const remainingMessages = testState.messages.filter(
+        (m) => m.toRoom === room.id
+      );
+      expect(remainingMessages.length).toBe(0);
+    });
+  });
+
+  // --- Hardening: contacts /by-tag/:tag rate limiting ---
+
+  describe("contacts by-tag rate limiting", () => {
+    it("returns rate limit headers on /by-tag/:tag", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "tag-rl-agent" });
+
+      const response = await app.request("/contacts/by-tag/test", {
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("X-RateLimit-Limit")).toBeDefined();
+      expect(response.headers.get("X-RateLimit-Remaining")).toBeDefined();
     });
   });
 });
