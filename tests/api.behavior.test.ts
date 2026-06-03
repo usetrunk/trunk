@@ -12290,6 +12290,164 @@ describe("Hono API behavior", () => {
     });
     expect(listRes.status).toBe(403);
   });
+
+  it("task create rejects invalid due date", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "date-test", contact_id: beta.agent_id, due: "not-a-date" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("due must be a valid ISO 8601 date");
+  });
+
+  it("task create rejects invalid start_date", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "date-test", contact_id: beta.agent_id, start_date: "yesterday" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("start_date must be a valid ISO 8601 date");
+  });
+
+  it("task create accepts valid ISO 8601 dates", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({
+        title: "dated-task",
+        contact_id: beta.agent_id,
+        due: "2026-12-31",
+        start_date: "2026-06-01T09:00:00Z",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.due).toBe("2026-12-31");
+    expect(body.start_date).toBe("2026-06-01T09:00:00Z");
+  });
+
+  it("task update rejects invalid due date", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "update-date-test", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ due: "2026-13-45" }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("task update rejects invalid start_date", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "update-start-test", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ start_date: "Tuesday" }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("projects array rejects items exceeding 100 characters", async () => {
+    const anon = createClient();
+    const agent = await anon.register({ name: "projects-test" });
+    const client = createClient(agent.secret);
+
+    await expect(client.updateMe({ projects: ["x".repeat(101)] })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("projects array rejects non-string items", async () => {
+    const anon = createClient();
+    const agent = await anon.register({ name: "projects-type-test" });
+
+    const res = await app.request("/agents/me", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${agent.secret}` },
+      body: JSON.stringify({ projects: [123, null] }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("each project name must be a string");
+  });
+
+  it("non-contact cannot read contact-scoped facts", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "fact-owner" });
+    const beta = await anon.register({ name: "fact-stranger" });
+
+    // Beta is not a contact of alpha — should be rejected
+    const res = await app.request(`/context/${alpha.agent_id}/facts`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("NOT_MEMBER");
+  });
+
+  it("non-contact cannot write contact-scoped facts", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "fact-writer" });
+    const beta = await anon.register({ name: "fact-intruder" });
+
+    const res = await app.request(`/context/${alpha.agent_id}/facts/secret-key`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${beta.secret}` },
+      body: JSON.stringify({ value: "hacked" }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("NOT_MEMBER");
+  });
+
+  it("non-contact cannot delete contact-scoped facts", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "fact-del-owner" });
+    const beta = await anon.register({ name: "fact-del-intruder" });
+
+    const res = await app.request(`/context/${alpha.agent_id}/facts/some-key`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("NOT_MEMBER");
+  });
 });
 
 async function registerPair(): Promise<{

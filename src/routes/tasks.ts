@@ -15,12 +15,20 @@ const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
 const VALID_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 const MAX_DEPENDS_ON = 50;
 
+const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+
 function isValidStatus(s: string): boolean {
   return (VALID_STATUSES as readonly string[]).includes(s);
 }
 
 function isValidPriority(p: string): boolean {
   return (VALID_PRIORITIES as readonly string[]).includes(p);
+}
+
+function isValidDate(s: string): boolean {
+  if (!ISO_8601_RE.test(s)) return false;
+  const d = new Date(s);
+  return !isNaN(d.getTime());
 }
 
 const app = new Hono<AgentVariables>();
@@ -93,6 +101,12 @@ app.post("/", async (c) => {
         return c.json({ error: `Invalid UUID in depends_on: ${dep}`, code: "INVALID_INPUT" }, 400);
       }
     }
+  }
+  if (body.due !== undefined && body.due !== null && body.due !== "" && !isValidDate(body.due)) {
+    return c.json({ error: "due must be a valid ISO 8601 date", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.start_date !== undefined && body.start_date !== null && body.start_date !== "" && !isValidDate(body.start_date)) {
+    return c.json({ error: "start_date must be a valid ISO 8601 date", code: "INVALID_FIELD" }, 400);
   }
 
   let scope: string;
@@ -340,6 +354,12 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
         return c.json({ error: `Invalid UUID in depends_on: ${dep}`, code: "INVALID_INPUT" }, 400);
       }
     }
+  }
+  if (body.due !== undefined && body.due !== null && body.due !== "" && !isValidDate(body.due)) {
+    return c.json({ error: "due must be a valid ISO 8601 date", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.start_date !== undefined && body.start_date !== null && body.start_date !== "" && !isValidDate(body.start_date)) {
+    return c.json({ error: "start_date must be a valid ISO 8601 date", code: "INVALID_FIELD" }, 400);
   }
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };

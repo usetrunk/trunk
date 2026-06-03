@@ -128,8 +128,15 @@ app.patch("/me", authMiddleware, async (c) => {
   if (body.role !== undefined && typeof body.role === "string" && body.role.length > 200) {
     return c.json({ error: "role must not exceed 200 characters", code: "INVALID_FIELD" }, 400);
   }
-  if (body.projects !== undefined && Array.isArray(body.projects) && body.projects.length > 50) {
-    return c.json({ error: "projects must not exceed 50 entries", code: "INVALID_FIELD" }, 400);
+  if (body.projects !== undefined && Array.isArray(body.projects)) {
+    if (body.projects.length > 50) {
+      return c.json({ error: "projects must not exceed 50 entries", code: "INVALID_FIELD" }, 400);
+    }
+    for (const p of body.projects) {
+      if (typeof p !== "string" || p.length > 100) {
+        return c.json({ error: "each project name must be a string of 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+      }
+    }
   }
   if (body.metadata !== undefined && JSON.stringify(body.metadata).length > 10000) {
     return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
