@@ -10106,6 +10106,86 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
   });
 
+  it("inbox endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/inbox", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("inbox/stats endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/inbox/stats", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("threads endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/threads", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("sent endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/sent", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("search endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/search?q=test", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("saved searches endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/searches", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
+  it("rejects search with invalid after date", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/search?after=not-a-date", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("rejects search with invalid before date", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/search?before=xyz", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
   // --- Attachment CRUD tests ---
 
   it("uploads an attachment and retrieves it", async () => {

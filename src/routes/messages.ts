@@ -348,6 +348,13 @@ app.post("/", async (c) => {
 // Get inbox (pending/unread messages)
 app.get("/inbox", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const status = c.req.query("status");
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
@@ -386,6 +393,12 @@ app.get("/inbox", async (c) => {
 app.get("/inbox/stats", async (c) => {
   const agentId = c.get("agentId");
 
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   // Fetch lightweight projections, capped to prevent memory exhaustion
   const rows = await db
     .select({ status: messages.status, type: messages.type })
@@ -414,6 +427,13 @@ app.get("/inbox/stats", async (c) => {
 // List threads the agent participates in (as sender or recipient)
 app.get("/threads", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const limitParam = parseInt(c.req.query("limit") || "20", 10);
   const limit = isNaN(limitParam) ? 20 : Math.min(Math.max(1, limitParam), 50);
   const cursorParam = c.req.query("cursor");
@@ -510,6 +530,13 @@ app.get("/threads", async (c) => {
 // Get sent messages (outbox)
 app.get("/sent", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const toFilter = c.req.query("to");
   const typeFilter = c.req.query("type");
   const { limit, cursor } = parsePaginationQuery({
@@ -544,11 +571,26 @@ app.get("/sent", async (c) => {
 // Search messages by content, type, contact, and date range
 app.get("/search", async (c) => {
   const agentId = c.get("agentId");
-  const q = c.req.query("q")?.toLowerCase();
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  const q = c.req.query("q")?.slice(0, 500).toLowerCase();
   const type = c.req.query("type");
   const contact = c.req.query("contact");
   const after = c.req.query("after");
   const before = c.req.query("before");
+
+  // Validate date parameters
+  if (after && isNaN(new Date(after).getTime())) {
+    return c.json({ error: "Invalid 'after' date format", code: "VALIDATION_ERROR" }, 400);
+  }
+  if (before && isNaN(new Date(before).getTime())) {
+    return c.json({ error: "Invalid 'before' date format", code: "VALIDATION_ERROR" }, 400);
+  }
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
@@ -611,6 +653,13 @@ app.get("/search", async (c) => {
 // List saved searches
 app.get("/searches", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const rows = await db.select().from(savedSearches).where(eq(savedSearches.agentId, agentId));
   return c.json({
     searches: rows.map((r) => ({
