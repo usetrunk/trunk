@@ -2516,6 +2516,119 @@ describe("Hono API behavior", () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
+  it("workspace document version returns 404 for non-existent version", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "WS 404 Version" });
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "Solo WS", body: "only version" });
+
+    await expect(
+      alphaClient.workspaceDocumentVersion(ws.id, doc.id, 99)
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("non-workspace-member cannot access workspace document versions", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "Private WS Versions" });
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "Secret WS", body: "classified" });
+
+    const outsider = await createClient().register({ name: "ws-outsider" });
+    const outsiderClient = createClient(outsider.secret);
+    await expect(
+      outsiderClient.workspaceDocumentVersions(ws.id, doc.id)
+    ).rejects.toMatchObject({ status: 403 });
+
+    await expect(
+      outsiderClient.workspaceDocumentVersion(ws.id, doc.id, 1)
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("non-room-member cannot access specific room document version", async () => {
+    const { alphaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "Locked Version Room" });
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "Locked", body: "secret content" });
+
+    const outsider = await createClient().register({ name: "room-outsider" });
+    const outsiderClient = createClient(outsider.secret);
+    await expect(
+      outsiderClient.roomDocumentVersion(room.id, doc.id, 1)
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects invalid version parameter with 400", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "Version Check", body: "v1" });
+
+    // NaN version
+    await expect(
+      alphaClient.documentVersion(beta.agent_id, doc.id, NaN)
+    ).rejects.toMatchObject({ status: 400 });
+
+    // Negative version
+    await expect(
+      alphaClient.documentVersion(beta.agent_id, doc.id, -1)
+    ).rejects.toMatchObject({ status: 400 });
+
+    // Zero version
+    await expect(
+      alphaClient.documentVersion(beta.agent_id, doc.id, 0)
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects invalid room document version parameter with 400", async () => {
+    const { alphaClient } = await registerPair();
+
+    const room = await alphaClient.createRoom({ name: "Room Version Check" });
+    const doc = await alphaClient.createRoomDocument(room.id, { name: "V Check", body: "v1" });
+
+    await expect(
+      alphaClient.roomDocumentVersion(room.id, doc.id, 0)
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects invalid workspace document version parameter with 400", async () => {
+    const { alphaClient } = await registerPair();
+
+    const ws = await alphaClient.createWorkspace({ name: "WS Version Check" });
+    const doc = await alphaClient.createWorkspaceDocument(ws.id, { name: "V Check", body: "v1" });
+
+    await expect(
+      alphaClient.workspaceDocumentVersion(ws.id, doc.id, 0)
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("contact document version returns 404 for non-existent version", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "Contact Doc", body: "v1" });
+
+    await expect(
+      alphaClient.documentVersion(beta.agent_id, doc.id, 99)
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("non-contact cannot access contact document versions", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "Private Doc", body: "secret" });
+
+    const outsider = await createClient().register({ name: "doc-outsider" });
+    const outsiderClient = createClient(outsider.secret);
+    await expect(
+      outsiderClient.documentVersions(beta.agent_id, doc.id)
+    ).rejects.toMatchObject({ status: 403 });
+
+    await expect(
+      outsiderClient.documentVersion(beta.agent_id, doc.id, 1)
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
   it("SDK putWorkspaceFact and listWorkspaceFacts round-trip", async () => {
     const { alphaClient, betaClient } = await registerPair();
 

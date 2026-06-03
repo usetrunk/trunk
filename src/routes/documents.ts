@@ -211,6 +211,7 @@ app.get("/room/:roomId/:docId/versions/:version", async (c) => {
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
   const version = parseInt(c.req.param("version"));
+  if (isNaN(version) || version < 1) return c.json({ error: "Invalid version", code: "INVALID_INPUT" }, 400);
 
   if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
@@ -374,6 +375,7 @@ app.get("/workspace/:workspaceId/:docId/versions/:version", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
   const version = parseInt(c.req.param("version"));
+  if (isNaN(version) || version < 1) return c.json({ error: "Invalid version", code: "INVALID_INPUT" }, 400);
 
   if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
@@ -618,6 +620,7 @@ app.get("/:contactId/:docId/versions/:version", async (c) => {
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
   const version = parseInt(c.req.param("version"));
+  if (isNaN(version) || version < 1) return c.json({ error: "Invalid version", code: "INVALID_INPUT" }, 400);
 
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
