@@ -345,14 +345,16 @@ app.delete("/:agentId", requireValidUUIDs("agentId"), async (c) => {
 
   const targetId = c.req.param("agentId");
 
-  await db
+  const deleted = await db
     .delete(contacts)
     .where(
       or(
         and(eq(contacts.agentA, myId), eq(contacts.agentB, targetId)),
         and(eq(contacts.agentA, targetId), eq(contacts.agentB, myId))
       )
-    );
+    )
+    .returning();
+  if (deleted.length === 0) return c.json({ error: "Not a contact", code: "NOT_FOUND" }, 404);
   await audit(myId, "contact.unpair", "agent", targetId);
 
   return c.json({ ok: true });
@@ -371,7 +373,15 @@ app.post("/:agentId/block", requireValidUUIDs("agentId"), async (c) => {
   const targetId = c.req.param("agentId");
   if (myId === targetId) return c.json({ error: "Cannot block yourself", code: "SELF_ACTION" }, 400);
 
-  const body: { reason?: string } = await c.req.json<{ reason?: string }>().catch(() => ({}));
+  let body: { reason?: string } = {};
+  const contentType = c.req.header("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    try {
+      body = await c.req.json<{ reason?: string }>();
+    } catch {
+      return c.json({ error: "Invalid JSON body", code: "INVALID_BODY" }, 400);
+    }
+  }
 
   if (body.reason && body.reason.length > 500) {
     return c.json({ error: "reason must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);

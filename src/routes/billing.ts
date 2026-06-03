@@ -73,7 +73,15 @@ app.post("/checkout", async (c) => {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
-  const body = await c.req.json<{ success_url?: string; cancel_url?: string }>().catch((): { success_url?: string; cancel_url?: string } => ({}));
+  let body: { success_url?: string; cancel_url?: string } = {};
+  const contentType = c.req.header("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    try {
+      body = await c.req.json<{ success_url?: string; cancel_url?: string }>();
+    } catch {
+      return c.json({ error: "Invalid JSON body", code: "INVALID_BODY" }, 400);
+    }
+  }
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {

@@ -1015,7 +1015,15 @@ app.post("/purge-expired", async (c) => {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
-  const body: { days?: number } = await c.req.json<{ days?: number }>().catch(() => ({}));
+  let body: { days?: number } = {};
+  const contentType = c.req.header("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    try {
+      body = await c.req.json<{ days?: number }>();
+    } catch {
+      return c.json({ error: "Invalid JSON body", code: "INVALID_BODY" }, 400);
+    }
+  }
   const days = Math.max(1, Math.min(body.days ?? DEFAULT_RETENTION_DAYS, 3650));
   const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 

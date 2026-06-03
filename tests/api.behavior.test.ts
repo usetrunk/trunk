@@ -5488,6 +5488,37 @@ describe("Hono API behavior", () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
+  it("unpair returns 404 when no contact relationship exists", async () => {
+    const { alpha, betaClient } = await registerPair();
+    // Never paired — unpair should return 404
+    await expect(betaClient.unpair(alpha.agent_id)).rejects.toThrow(TrunkApiError);
+    try {
+      await betaClient.unpair(alpha.agent_id);
+    } catch (e: any) {
+      expect(e.status).toBe(404);
+      expect(e.body.code).toBe("NOT_FOUND");
+    }
+  });
+
+  it("unpair is not idempotent — second call returns 404", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // First unpair succeeds
+    await expect(alphaClient.unpair(beta.agent_id)).resolves.toEqual({ ok: true });
+
+    // Second unpair returns 404
+    await expect(alphaClient.unpair(beta.agent_id)).rejects.toThrow(TrunkApiError);
+  });
+
+  it("unpair returns 404 for a non-existent agent UUID", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "unpair-phantom" });
+    const alphaClient = createClient(alpha.secret);
+    const fakeId = "00000000-0000-4000-a000-000000000000";
+    await expect(alphaClient.unpair(fakeId)).rejects.toThrow(TrunkApiError);
+  });
+
   // --- Contact alias update tests ---
 
   it("updates contact alias after pairing", async () => {
@@ -7481,6 +7512,49 @@ describe("Hono API behavior", () => {
 
   it("returns 404 when unblocking a non-blocked agent", async () => {
     const { alpha, betaClient } = await registerPair();
+    await expect(betaClient.unblockContact(alpha.agent_id)).rejects.toThrow(TrunkApiError);
+  });
+
+  it("cannot block yourself", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "self-block" });
+    const alphaClient = createClient(alpha.secret);
+    try {
+      await alphaClient.blockContact(alpha.agent_id);
+      throw new Error("should have thrown");
+    } catch (e: any) {
+      expect(e.status).toBe(400);
+      expect(e.body.code).toBe("SELF_ACTION");
+    }
+  });
+
+  it("block reason is truncated at 500 characters", async () => {
+    const { alpha, alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const longReason = "x".repeat(501);
+    try {
+      await betaClient.blockContact(alpha.agent_id, longReason);
+      throw new Error("should have thrown");
+    } catch (e: any) {
+      expect(e.status).toBe(400);
+      expect(e.body.code).toBe("INVALID_FIELD");
+    }
+  });
+
+  it("block accepts empty body without reason", async () => {
+    const { alpha, alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const result = await betaClient.blockContact(alpha.agent_id);
+    expect(result.ok).toBe(true);
+    const blocked = await betaClient.blockedContacts();
+    expect(blocked.blocked[0].reason).toBeNull();
+  });
+
+  it("unblock is not idempotent — second unblock returns 404", async () => {
+    const { alpha, alphaClient, beta, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await betaClient.blockContact(alpha.agent_id);
+    await expect(betaClient.unblockContact(alpha.agent_id)).resolves.toEqual({ ok: true });
     await expect(betaClient.unblockContact(alpha.agent_id)).rejects.toThrow(TrunkApiError);
   });
 
@@ -17522,6 +17596,86 @@ describe("Hono API behavior", () => {
     );
     expect(versionRow).toBeDefined();
     expect(versionRow!.body).toBe("ws content");
+  });
+
+  // --- Workspace delete cascade removes all scoped resources ---
+
+  it("workspace delete cascades to tasks, facts, and documents", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-cascade-a" });
+    const beta = await anon.register({ name: "ws-cascade-b" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "CascadeTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Create scoped resources
+    await alphaClient.createWorkspaceDocument(ws.id, { name: "cascade-doc.md", body: "doc" });
+    await alphaClient.putWorkspaceFact(ws.id, "cascade-key", "cascade-value");
+    const taskRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ workspace_id: ws.id, title: "cascade task" }),
+    });
+    expect(taskRes.status).toBe(201);
+
+    // Delete workspace
+    const result = await alphaClient.deleteWorkspace();
+    expect(result.ok).toBe(true);
+
+    // Both members should no longer be in a workspace
+    await expect(alphaClient.myWorkspace()).rejects.toThrow(TrunkApiError);
+    await expect(betaClient.myWorkspace()).rejects.toThrow(TrunkApiError);
+  });
+
+  it("workspace delete by non-admin is rejected", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-del-admin" });
+    const beta = await anon.register({ name: "ws-del-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    await alphaClient.createWorkspace({ name: "AdminOnly" });
+    const ws = await alphaClient.myWorkspace();
+    await betaClient.joinWorkspace({ code: ws.workspace.pairing_code });
+
+    await expect(betaClient.deleteWorkspace()).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("agent not in workspace gets 404 on delete", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-del-none" });
+    const alphaClient = createClient(alpha.secret);
+
+    await expect(alphaClient.deleteWorkspace()).rejects.toMatchObject({ status: 404 });
+  });
+
+  // --- Room delete edge cases ---
+
+  it("room delete by non-member returns 403", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-del-creator" });
+    const beta = await anon.register({ name: "room-del-outsider" });
+    const alphaClient = createClient(alpha.secret);
+    const room = await alphaClient.createRoom({ name: "Creator Only" });
+
+    const deleteRes = await app.request(`/rooms/${room.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(deleteRes.status).toBe(403);
+  });
+
+  it("room delete for non-existent room returns 403 (not member)", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-del-ghost" });
+    const fakeRoomId = "00000000-0000-4000-a000-000000000001";
+    const deleteRes = await app.request(`/rooms/${fakeRoomId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(deleteRes.status).toBe(403);
   });
 });
 
