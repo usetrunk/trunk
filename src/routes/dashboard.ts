@@ -625,6 +625,57 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     }
   }
 
+  // Build Mermaid DAG for dependency visualization
+  const hasDeps = roomTasks.some(t => ((t.dependsOn as string[]) || []).length > 0);
+  const taskIdSet = new Set(roomTasks.map(t => t.id));
+  let mermaidDef = "";
+  if (hasDeps && roomTasks.length > 0) {
+    // Sanitize title for mermaid (escape quotes, brackets)
+    const sanitize = (s: string) => s.replace(/["\[\](){}|<>#&]/g, " ").replace(/\s+/g, " ").trim();
+    const shortId = (id: string) => `t_${id.replace(/-/g, "_")}`;
+    const statusColor: Record<string, string> = {
+      "done": ":::done",
+      "in-progress": ":::active",
+      "blocked": ":::blocked",
+      "open": ":::open",
+    };
+
+    const lines: string[] = ["flowchart LR"];
+    // Class definitions for status colors
+    lines.push("  classDef done fill:#1a2e1a,stroke:#7ee787,color:#7ee787");
+    lines.push("  classDef active fill:#2a2a10,stroke:#d5ff5f,color:#d5ff5f");
+    lines.push("  classDef blocked fill:#2e1a1a,stroke:#ff7b72,color:#ff7b72");
+    lines.push("  classDef open fill:#1a1a18,stroke:#8d8a7d,color:#8d8a7d");
+
+    // Group into subgraphs by group
+    const rendered = new Set<string>();
+    for (const [group, gTasks] of groupMap.entries()) {
+      lines.push(`  subgraph ${sanitize(group)}`);
+      for (const t of gTasks) {
+        const label = sanitize(t.title).slice(0, 40);
+        lines.push(`    ${shortId(t.id)}["${label}"]${statusColor[t.status] || ":::open"}`);
+        rendered.add(t.id);
+      }
+      lines.push("  end");
+    }
+    // Ungrouped tasks
+    for (const t of ungrouped) {
+      const label = sanitize(t.title).slice(0, 40);
+      lines.push(`  ${shortId(t.id)}["${label}"]${statusColor[t.status] || ":::open"}`);
+      rendered.add(t.id);
+    }
+    // Edges from dependencies
+    for (const t of roomTasks) {
+      const deps = (t.dependsOn as string[]) || [];
+      for (const dep of deps) {
+        if (taskIdSet.has(dep)) {
+          lines.push(`  ${shortId(dep)} --> ${shortId(t.id)}`);
+        }
+      }
+    }
+    mermaidDef = lines.join("\n");
+  }
+
   // Get all rooms + their member/task counts for sidebar
   const allMemberships = await db.select().from(roomMembers).where(eq(roomMembers.agentId, agentId));
   const allRoomIds = allMemberships.map(m => m.roomId);
@@ -645,6 +696,30 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${room.name} — Trunk</title>
   <style>${dashboardStyles()}</style>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#121210',
+        primaryColor: '#1a2a1a',
+        primaryTextColor: '#f4f0e6',
+        primaryBorderColor: '#282820',
+        lineColor: '#4a4840',
+        secondaryColor: '#1a1a2e',
+        tertiaryColor: '#2e1a1a',
+        fontFamily: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif',
+        fontSize: '13px',
+        nodeBorder: '#282820',
+        clusterBkg: '#0d0d0b',
+        clusterBorder: '#282820',
+        edgeLabelBackground: '#121210',
+      },
+      flowchart: { curve: 'basis', padding: 12 },
+    });
+  </script>
 </head>
 <body>
   <div class="app-shell">
@@ -752,6 +827,16 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
                   <div style="height:100%;width:${overallProgress}%;background:var(--good);border-radius:2px;"></div>
                 </div>
               </div>
+              ${mermaidDef ? html`
+                <div style="border:1px solid var(--line);border-radius:8px;background:rgba(18,18,15,0.92);margin-bottom:1rem;overflow:hidden;">
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:0.6rem 0.85rem;border-bottom:1px solid var(--line);background:var(--panel);">
+                    <span style="font-size:0.82rem;font-weight:700;color:var(--accent-2);text-transform:uppercase;letter-spacing:0.04em;">Dependency graph</span>
+                  </div>
+                  <div style="padding:1rem;overflow-x:auto;">
+                    <pre class="mermaid">${mermaidDef}</pre>
+                  </div>
+                </div>
+              ` : ""}
               ${Array.from(groupMap.entries()).map(([name, moduleTasks]) => {
                 const mDone = moduleTasks.filter(t => t.status === "done").length;
                 const mTotal = moduleTasks.length;
