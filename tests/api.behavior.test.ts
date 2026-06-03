@@ -9913,6 +9913,472 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
     expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
   });
+
+  // --- Attachment CRUD tests ---
+
+  it("uploads an attachment and retrieves it", async () => {
+    const alpha = await createClient().register({ name: "attach-crud", owner: "Frank" });
+
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "readme.txt", data: btoa("hello world"), content_type: "text/plain" }),
+    });
+    expect(createRes.status).toBe(201);
+    const attachment = await createRes.json();
+    expect(attachment.filename).toBe("readme.txt");
+    expect(attachment.content_type).toBe("text/plain");
+    expect(typeof attachment.id).toBe("string");
+    expect(attachment.size_bytes).toBeGreaterThan(0);
+
+    // Retrieve it
+    const getRes = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(getRes.status).toBe(200);
+    const fetched = await getRes.json();
+    expect(fetched.id).toBe(attachment.id);
+    expect(fetched.data).toBe(btoa("hello world"));
+  });
+
+  it("lists my attachments", async () => {
+    const alpha = await createClient().register({ name: "attach-list", owner: "Frank" });
+
+    await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "file1.txt", data: btoa("one") }),
+    });
+    await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "file2.txt", data: btoa("two") }),
+    });
+
+    const listRes = await app.request("/attachments", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(listRes.status).toBe(200);
+    const list = await listRes.json();
+    expect(list.attachments).toHaveLength(2);
+  });
+
+  it("deletes an attachment", async () => {
+    const alpha = await createClient().register({ name: "attach-del", owner: "Frank" });
+
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "delete-me.txt", data: btoa("bye") }),
+    });
+    const attachment = await createRes.json();
+
+    const delRes = await app.request(`/attachments/${attachment.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(delRes.status).toBe(200);
+    const delBody = await delRes.json();
+    expect(delBody.ok).toBe(true);
+
+    // Verify it's gone
+    const getRes = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(getRes.status).toBe(404);
+  });
+
+  it("cannot access another agent's attachment", async () => {
+    const alpha = await createClient().register({ name: "attach-owner", owner: "Frank" });
+    const beta = await createClient().register({ name: "attach-other", owner: "Frank" });
+
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "private.txt", data: btoa("secret") }),
+    });
+    const attachment = await createRes.json();
+
+    // Beta cannot read it
+    const getRes = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(getRes.status).toBe(403);
+
+    // Beta cannot delete it
+    const delRes = await app.request(`/attachments/${attachment.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(delRes.status).toBe(403);
+  });
+
+  it("uploads an attachment linked to a message", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "See attached" },
+    });
+
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "report.pdf", data: btoa("pdf-data"), message_id: sent.id }),
+    });
+    expect(createRes.status).toBe(201);
+    const attachment = await createRes.json();
+    expect(attachment.message_id).toBe(sent.id);
+
+    // List attachments for the message
+    const listRes = await app.request(`/attachments/message/${sent.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(listRes.status).toBe(200);
+    const list = await listRes.json();
+    expect(list.attachments).toHaveLength(1);
+    expect(list.attachments[0].filename).toBe("report.pdf");
+  });
+
+  it("recipient can access message-linked attachment", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "File attached" },
+    });
+
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "shared.txt", data: btoa("shared-content"), message_id: sent.id }),
+    });
+    const attachment = await createRes.json();
+
+    // Beta (recipient) can read the attachment
+    const getRes = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(getRes.status).toBe(200);
+    const fetched = await getRes.json();
+    expect(fetched.filename).toBe("shared.txt");
+
+    // Beta can list message attachments
+    const listRes = await app.request(`/attachments/message/${sent.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(listRes.status).toBe(200);
+    const list = await listRes.json();
+    expect(list.attachments).toHaveLength(1);
+  });
+
+  it("third party cannot access message-linked attachment", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const gamma = await createClient().register({ name: "attach-gamma", owner: "Frank" });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Private message" },
+    });
+
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "secret.txt", data: btoa("private"), message_id: sent.id }),
+    });
+    const attachment = await createRes.json();
+
+    // Gamma (third party) cannot read it
+    const getRes = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${gamma.secret}` },
+    });
+    expect(getRes.status).toBe(403);
+
+    // Gamma cannot list message attachments
+    const listRes = await app.request(`/attachments/message/${sent.id}`, {
+      headers: { Authorization: `Bearer ${gamma.secret}` },
+    });
+    expect(listRes.status).toBe(403);
+  });
+
+  it("rejects attachment with missing required fields", async () => {
+    const alpha = await createClient().register({ name: "attach-miss", owner: "Frank" });
+
+    const res = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "test.txt" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("MISSING_FIELD");
+  });
+
+  it("rejects attachment with invalid base64", async () => {
+    const alpha = await createClient().register({ name: "attach-b64", owner: "Frank" });
+
+    const res = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "test.txt", data: "not!valid@base64" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects attachment linked to nonexistent message", async () => {
+    const alpha = await createClient().register({ name: "attach-nomsg", owner: "Frank" });
+
+    const res = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "test.txt", data: btoa("data"), message_id: "00000000-0000-0000-0000-000000000000" }),
+    });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.code).toBe("MESSAGE_NOT_FOUND");
+  });
+
+  it("returns 404 for nonexistent attachment", async () => {
+    const alpha = await createClient().register({ name: "attach-404", owner: "Frank" });
+
+    const res = await app.request("/attachments/00000000-0000-0000-0000-000000000000", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("defaults content_type to application/octet-stream", async () => {
+    const alpha = await createClient().register({ name: "attach-default-ct", owner: "Frank" });
+
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "mystery.bin", data: btoa("binary") }),
+    });
+    expect(createRes.status).toBe(201);
+    const attachment = await createRes.json();
+    expect(attachment.content_type).toBe("application/octet-stream");
+  });
+
+  // --- Template CRUD tests ---
+
+  it("creates a template and retrieves it", async () => {
+    const alpha = await createClient().register({ name: "tpl-crud", owner: "Frank" });
+
+    const createRes = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Greeting", type: "hello", payload: { content: "Hi {{name}}!" } }),
+    });
+    expect(createRes.status).toBe(201);
+    const tpl = await createRes.json();
+    expect(tpl.name).toBe("Greeting");
+    expect(tpl.type).toBe("hello");
+    expect(tpl.payload).toMatchObject({ content: "Hi {{name}}!" });
+
+    // Get by ID
+    const getRes = await app.request(`/templates/${tpl.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(getRes.status).toBe(200);
+    const fetched = await getRes.json();
+    expect(fetched.id).toBe(tpl.id);
+    expect(fetched.name).toBe("Greeting");
+  });
+
+  it("lists templates", async () => {
+    const alpha = await createClient().register({ name: "tpl-list", owner: "Frank" });
+
+    await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "T1", type: "t", payload: { content: "a" } }),
+    });
+    await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "T2", type: "t", payload: { content: "b" } }),
+    });
+
+    const listRes = await app.request("/templates", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(listRes.status).toBe(200);
+    const list = await listRes.json();
+    expect(list.templates).toHaveLength(2);
+  });
+
+  it("updates a template", async () => {
+    const alpha = await createClient().register({ name: "tpl-update", owner: "Frank" });
+
+    const createRes = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Original", type: "greeting", payload: { content: "v1" } }),
+    });
+    const tpl = await createRes.json();
+
+    const patchRes = await app.request(`/templates/${tpl.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Updated", payload: { content: "v2" } }),
+    });
+    expect(patchRes.status).toBe(200);
+    const updated = await patchRes.json();
+    expect(updated.name).toBe("Updated");
+    expect(updated.payload).toMatchObject({ content: "v2" });
+  });
+
+  it("deletes a template", async () => {
+    const alpha = await createClient().register({ name: "tpl-delete", owner: "Frank" });
+
+    const createRes = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "DeleteMe", type: "temp", payload: { content: "gone" } }),
+    });
+    const tpl = await createRes.json();
+
+    const delRes = await app.request(`/templates/${tpl.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(delRes.status).toBe(200);
+    const delBody = await delRes.json();
+    expect(delBody.ok).toBe(true);
+
+    // Verify it's gone
+    const getRes = await app.request(`/templates/${tpl.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(getRes.status).toBe(404);
+  });
+
+  it("rejects duplicate template name", async () => {
+    const alpha = await createClient().register({ name: "tpl-dup", owner: "Frank" });
+
+    await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Unique", type: "greeting", payload: { content: "hi" } }),
+    });
+
+    const dupRes = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Unique", type: "greeting", payload: { content: "hi again" } }),
+    });
+    expect(dupRes.status).toBe(409);
+    const body = await dupRes.json();
+    expect(body.code).toBe("ALREADY_EXISTS");
+  });
+
+  it("cannot access another agent's template", async () => {
+    const alpha = await createClient().register({ name: "tpl-owner", owner: "Frank" });
+    const beta = await createClient().register({ name: "tpl-other", owner: "Frank" });
+
+    const createRes = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Private", type: "secret", payload: { content: "mine" } }),
+    });
+    const tpl = await createRes.json();
+
+    // Beta cannot read it
+    const getRes = await app.request(`/templates/${tpl.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(getRes.status).toBe(404);
+
+    // Beta cannot update it
+    const patchRes = await app.request(`/templates/${tpl.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${beta.secret}` },
+      body: JSON.stringify({ name: "Hacked" }),
+    });
+    expect(patchRes.status).toBe(404);
+
+    // Beta cannot delete it
+    const delRes = await app.request(`/templates/${tpl.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(delRes.status).toBe(404);
+  });
+
+  it("rejects template creation with missing required fields", async () => {
+    const alpha = await createClient().register({ name: "tpl-miss", owner: "Frank" });
+
+    const res = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "NoPayload", type: "greeting" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("MISSING_FIELD");
+  });
+
+  it("creates template with description and retrieves it", async () => {
+    const alpha = await createClient().register({ name: "tpl-desc", owner: "Frank" });
+
+    const createRes = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Described", type: "greeting", payload: { content: "hi" }, description: "A friendly greeting" }),
+    });
+    expect(createRes.status).toBe(201);
+    const tpl = await createRes.json();
+    expect(tpl.description).toBe("A friendly greeting");
+
+    const getRes = await app.request(`/templates/${tpl.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    const fetched = await getRes.json();
+    expect(fetched.description).toBe("A friendly greeting");
+  });
+
+  it("rejects rename to existing template name", async () => {
+    const alpha = await createClient().register({ name: "tpl-rename-dup", owner: "Frank" });
+
+    await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "First", type: "t", payload: { content: "a" } }),
+    });
+    const secondRes = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Second", type: "t", payload: { content: "b" } }),
+    });
+    const second = await secondRes.json();
+
+    const patchRes = await app.request(`/templates/${second.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "First" }),
+    });
+    expect(patchRes.status).toBe(409);
+    const body = await patchRes.json();
+    expect(body.code).toBe("ALREADY_EXISTS");
+  });
+
+  it("returns 404 for nonexistent template", async () => {
+    const alpha = await createClient().register({ name: "tpl-404", owner: "Frank" });
+
+    const res = await app.request("/templates/00000000-0000-0000-0000-000000000000", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(404);
+  });
 });
 
 async function registerPair(): Promise<{
