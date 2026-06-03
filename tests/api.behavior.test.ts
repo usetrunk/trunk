@@ -6616,6 +6616,45 @@ describe("Hono API behavior", () => {
     ).rejects.toThrow(TrunkApiError);
   });
 
+  it("direct contact with one workspace member does NOT grant workspace fan-out access", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-fanout-member" });
+    const beta = await anon.register({ name: "ws-fanout-member2" });
+    const outsider = await anon.register({ name: "ws-fanout-outsider" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const outsiderClient = createClient(outsider.secret);
+
+    // Create workspace with alpha and beta
+    const ws = await alphaClient.createWorkspace({ name: "ClosedTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Outsider pairs directly with alpha (direct contact), but NOT with the workspace
+    await outsiderClient.pair({ code: alpha.pairing_code });
+
+    // Outsider can DM alpha directly — that's fine
+    const dm = await outsiderClient.send({
+      to: alpha.agent_id,
+      type: "update",
+      payload: { content: "Direct message" },
+    });
+    expect(dm.status).toBe("delivered");
+
+    // But outsider should NOT be able to fan-out to the workspace
+    await expect(
+      outsiderClient.send({
+        to: `workspace:${ws.id}`,
+        type: "update",
+        payload: { content: "Unauthorized fan-out attempt" },
+      })
+    ).rejects.toThrow(TrunkApiError);
+
+    // Verify beta received nothing from the outsider
+    const betaInbox = await betaClient.inbox();
+    const fromOutsider = betaInbox.messages.filter((m: any) => m.fromAgent === outsider.agent_id);
+    expect(fromOutsider).toHaveLength(0);
+  });
+
   // ── Contact Notes ──
   it("can set, get, and update a contact note", async () => {
     const { alphaClient, beta } = await registerPair();

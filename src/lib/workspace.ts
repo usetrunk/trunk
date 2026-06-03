@@ -72,6 +72,31 @@ export async function isBlocked(sender: string, recipient: string): Promise<bool
 }
 
 /**
+ * Check if an agent can send to an entire workspace (fan-out).
+ * True only if the agent is a workspace member or a workspace_contact.
+ * Direct contacts with individual members do NOT grant workspace-level access.
+ */
+export async function canMessageWorkspace(agentId: string, workspaceId: string): Promise<boolean> {
+  // Check if sender is a member of this workspace
+  const [member] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.id, agentId), eq(agents.workspaceId, workspaceId)))
+    .limit(1);
+  if (member) return true;
+
+  // Check if sender is a workspace_contact (external agent paired with workspace)
+  const [wc] = await db
+    .select()
+    .from(workspaceContacts)
+    .where(and(eq(workspaceContacts.workspaceId, workspaceId), eq(workspaceContacts.agentId, agentId)))
+    .limit(1);
+  if (wc) return true;
+
+  return false;
+}
+
+/**
  * Get all agent IDs that are members of a workspace.
  */
 export async function getWorkspaceMembers(workspaceId: string): Promise<string[]> {

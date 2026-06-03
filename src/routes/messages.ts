@@ -9,7 +9,7 @@ import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
-import { canMessage, getWorkspaceMembers, isBlocked } from "../lib/workspace.js";
+import { canMessage, canMessageWorkspace, getWorkspaceMembers, isBlocked } from "../lib/workspace.js";
 import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -126,10 +126,12 @@ app.post("/", async (c) => {
       return c.json({ error: "No other members in workspace", code: "VALIDATION_ERROR" }, 400);
     }
 
-    // Verify sender can message the workspace (member or workspace_contact)
-    const senderCanMessage = await canMessage(agentId, recipients[0]);
+    // Verify sender has workspace-level access (member or workspace_contact)
+    // NOTE: canMessage with a single member is insufficient — a direct contact
+    // with one member must NOT grant fan-out access to the entire workspace.
+    const senderCanMessage = await canMessageWorkspace(agentId, workspaceId);
     if (!senderCanMessage) {
-      return c.json({ error: "Not a contact. Pair first.", code: "NOT_MEMBER" }, 403);
+      return c.json({ error: "Not a workspace member or contact. Pair with the workspace first.", code: "NOT_MEMBER" }, 403);
     }
 
     // Fan-out: create a message for each recipient
