@@ -1615,8 +1615,11 @@ app.post("/:id/forward", requireValidUUIDs("id"), async (c) => {
   const idempotencyKey = requireIdempotencyKey(c);
   if (idempotencyKey instanceof Response) return idempotencyKey;
 
-  if (!body.to) {
-    return c.json({ error: "to is required", code: "MISSING_FIELD" }, 400);
+  if (!body.to || !isValidUUID(body.to)) {
+    return c.json({ error: "to must be a valid UUID", code: "INVALID_INPUT" }, 400);
+  }
+  if (body.comment !== undefined && (typeof body.comment !== "string" || body.comment.length > 2000)) {
+    return c.json({ error: "comment must be a string of at most 2000 characters", code: "INVALID_INPUT" }, 400);
   }
 
   // Verify original message exists and agent is sender or recipient

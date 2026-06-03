@@ -28,7 +28,11 @@ function isValidPriority(p: string): boolean {
 function isValidDate(s: string): boolean {
   if (!ISO_8601_RE.test(s)) return false;
   const d = new Date(s);
-  return !isNaN(d.getTime());
+  if (isNaN(d.getTime())) return false;
+  // Roundtrip check: reject date rollover (e.g. Feb 30 → Mar 2)
+  const [datePart] = s.split("T");
+  const [year, month, day] = datePart.split("-").map(Number);
+  return d.getUTCFullYear() === year && d.getUTCMonth() + 1 === month && d.getUTCDate() === day;
 }
 
 const app = new Hono<AgentVariables>();

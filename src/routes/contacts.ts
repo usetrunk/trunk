@@ -696,7 +696,11 @@ app.get("/:id/tags", requireValidUUIDs("id"), async (c) => {
 // List all contacts with a specific tag
 app.get("/by-tag/:tag", async (c) => {
   const agentId = c.get("agentId");
-  const tag = c.req.param("tag").toLowerCase();
+  const raw = c.req.param("tag");
+  if (!raw || raw.length > 50) {
+    return c.json({ error: "Tag must be 1-50 characters", code: "INVALID_INPUT" }, 400);
+  }
+  const tag = raw.toLowerCase();
 
   const rows = await db
     .select()

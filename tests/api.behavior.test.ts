@@ -12763,6 +12763,93 @@ describe("Hono API behavior", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("x-ratelimit-limit")).toBe("60");
   });
+
+  // --- Input validation hardening ---
+
+  it("rejects /contacts/by-tag/:tag with oversized tag (>50 chars)", async () => {
+    const { alpha } = await registerPair();
+    const longTag = "a".repeat(51);
+    const res = await app.request(`/contacts/by-tag/${longTag}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("accepts /contacts/by-tag/:tag with valid tag (<=50 chars)", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request(`/contacts/by-tag/valid-tag`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects forward with non-UUID 'to' field", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "hi" } });
+    const res = await app.request(`/messages/${sent.id}/forward`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ to: "not-a-uuid" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects forward with comment exceeding 2000 chars", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "hi" } });
+    const res = await app.request(`/messages/${sent.id}/forward`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ to: beta.agent_id, comment: "x".repeat(2001) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects task with rolled-over date like Feb 30", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "test task",
+      due: "2023-02-30",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects task with invalid month 13", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "test task",
+      due: "2023-13-01",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("accepts task with valid date 2024-02-29 (leap year)", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "test task",
+      due: "2024-02-29",
+    });
+    expect(res.status).toBe(201);
+  });
 });
 
 async function registerPair(): Promise<{
