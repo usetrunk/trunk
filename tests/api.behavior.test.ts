@@ -16714,6 +16714,182 @@ describe("Hono API behavior", () => {
       expect(contents).toContain("Follow-up update");
     });
   });
+
+  // --- Thread access control ---
+
+  describe("thread non-participant access control", () => {
+    it("non-participant gets empty thread when reading another agents' thread", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Alpha sends to beta — creates a thread
+      const receipt = await alphaClient.send({
+        to: beta.agent_id,
+        type: "question",
+        payload: { content: "Private conversation" },
+      });
+
+      // Verify the thread has messages for participants
+      const alphaThread = await alphaClient.thread(receipt.thread_id);
+      expect(alphaThread.messages.length).toBe(1);
+
+      // Gamma (outsider) should see an empty thread
+      const gammaReg = await createClient().register({ name: "gamma-outsider", owner: "Test" });
+      const gammaClient = createClient(gammaReg.secret);
+      const gammaThread = await gammaClient.thread(receipt.thread_id);
+      expect(gammaThread.messages.length).toBe(0);
+    });
+
+    it("non-participant gets empty thread for room-originated thread", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Private Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      const receipt = await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "update",
+        payload: { content: "Room-only content" },
+      });
+
+      // Outsider cannot see room thread messages
+      const outsider = await createClient().register({ name: "room-outsider", owner: "Test" });
+      const outsiderClient = createClient(outsider.secret);
+      const outsiderThread = await outsiderClient.thread(receipt.thread_id);
+      expect(outsiderThread.messages.length).toBe(0);
+    });
+  });
+
+  // --- Search date range functional tests ---
+
+  describe("search date range filtering", () => {
+    it("search with after/before filters messages by date range", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Send messages that will be indexed
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "date range test message one" },
+      });
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "date range test message two" },
+      });
+
+      // Search with 'after' in the past — should find messages
+      const pastDate = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1 hour ago
+      const results = await alphaClient.search({ q: "date range test", after: pastDate });
+      expect(results.messages.length).toBe(2);
+
+      // Search with 'after' in the future — should find nothing
+      const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const noResults = await alphaClient.search({ q: "date range test", after: futureDate });
+      expect(noResults.messages.length).toBe(0);
+    });
+
+    it("search with before date filters out newer messages", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "before filter test msg" },
+      });
+
+      // Search with 'before' in the past — should exclude the message just sent
+      const pastDate = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const noResults = await alphaClient.search({ q: "before filter test", before: pastDate });
+      expect(noResults.messages.length).toBe(0);
+
+      // Search with 'before' in the future — should include the message
+      const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const results = await alphaClient.search({ q: "before filter test", before: futureDate });
+      expect(results.messages.length).toBe(1);
+    });
+
+    it("search with both after and before narrows to a window", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "window filter test message" },
+      });
+
+      const pastDate = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+      // Window that includes the message
+      const results = await alphaClient.search({ q: "window filter test", after: pastDate, before: futureDate });
+      expect(results.messages.length).toBe(1);
+
+      // Window entirely in the past — should find nothing
+      const oldPast = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const recentPast = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const empty = await alphaClient.search({ q: "window filter test", after: oldPast, before: recentPast });
+      expect(empty.messages.length).toBe(0);
+    });
+
+    it("search date range combined with type filter", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "question",
+        payload: { content: "combo filter question" },
+      });
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "combo filter update" },
+      });
+
+      const pastDate = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      // Filter by type=question and date range
+      const results = await alphaClient.search({ q: "combo filter", type: "question", after: pastDate });
+      expect(results.messages.length).toBe(1);
+      expect((results.messages[0].payload as Record<string, unknown>).content).toBe("combo filter question");
+    });
+  });
+
+  // --- Room addressing edge cases ---
+
+  describe("room addressing validation", () => {
+    it("rejects room message with invalid UUID after room: prefix", async () => {
+      const alpha = await createClient().register({ name: "room-addr-alpha", owner: "Test" });
+      const alphaClient = createClient(alpha.secret);
+
+      await expect(
+        alphaClient.send({
+          to: "room:not-a-valid-uuid",
+          type: "update",
+          payload: { content: "test" },
+        })
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("returns 404 for workspace-addressed message to non-existent workspace", async () => {
+      const alpha = await createClient().register({ name: "ws-addr-alpha", owner: "Test" });
+      const alphaClient = createClient(alpha.secret);
+
+      const fakeWsId = "00000000-0000-0000-0000-000000000099";
+      await expect(
+        alphaClient.send({
+          to: `workspace:${fakeWsId}`,
+          type: "update",
+          payload: { content: "test" },
+        })
+      ).rejects.toMatchObject({ status: 404 });
+    });
+  });
 });
 
 async function registerPair(): Promise<{
