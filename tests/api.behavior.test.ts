@@ -7663,6 +7663,121 @@ describe("Hono API behavior", () => {
     expect(body.code).toBe("INVALID_FIELD");
     expect(body.error).toContain("255");
   });
+
+  // --- Hardening: deliver-scheduled scoped to caller ---
+
+  it("deliver-scheduled only delivers the caller's own scheduled messages", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Alpha schedules a message to beta
+    const scheduled = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "alpha scheduled" },
+      scheduled_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+
+    // Beta schedules a message to alpha
+    const betaScheduled = await betaClient.send({
+      to: alpha.agent_id,
+      type: "update",
+      payload: { content: "beta scheduled" },
+      scheduled_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+
+    // Make both messages due
+    const alphaMsg = testState.messages.find((m) => m.id === scheduled.id);
+    const betaMsg = testState.messages.find((m) => m.id === betaScheduled.id);
+    if (alphaMsg) alphaMsg.scheduledAt = new Date(Date.now() - 1000);
+    if (betaMsg) betaMsg.scheduledAt = new Date(Date.now() - 1000);
+
+    // Alpha triggers deliver-scheduled — should only deliver alpha's message
+    const result = await alphaClient.deliverScheduled();
+    expect(result.delivered).toBe(1);
+
+    // Beta's scheduled message should still be scheduled
+    const stillScheduled = testState.messages.find((m) => m.id === betaScheduled.id);
+    expect(stillScheduled?.status).toBe("scheduled");
+  });
+
+  // --- Hardening: purge-expired rate limiting ---
+
+  it("purge-expired is rate limited", async () => {
+    const { alphaClient } = await registerPair();
+
+    // Exhaust rate limit (5 per minute)
+    for (let i = 0; i < 5; i++) {
+      await alphaClient.purgeExpiredMessages(90);
+    }
+
+    await expect(alphaClient.purgeExpiredMessages(90)).rejects.toMatchObject({
+      status: 429,
+    });
+  });
+
+  // --- Hardening: deliver-scheduled rate limiting ---
+
+  it("deliver-scheduled is rate limited", async () => {
+    const { alphaClient } = await registerPair();
+
+    // Exhaust rate limit (10 per minute)
+    for (let i = 0; i < 10; i++) {
+      await alphaClient.deliverScheduled();
+    }
+
+    await expect(alphaClient.deliverScheduled()).rejects.toMatchObject({
+      status: 429,
+    });
+  });
+
+  // --- Hardening: purge-expired uses DB-level date filtering ---
+
+  it("purge-expired with custom days parameter only deletes old messages", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send two messages
+    const old = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "old message" },
+    });
+    const recent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "recent message" },
+    });
+
+    // Make the old message 31 days old
+    const oldMsg = testState.messages.find((m) => m.id === old.id);
+    if (oldMsg) oldMsg.createdAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+
+    // Purge messages older than 30 days
+    const result = await alphaClient.purgeExpiredMessages(30);
+    expect(result.purged).toBe(1);
+
+    // Recent message should still exist
+    const remaining = testState.messages.find((m) => m.id === recent.id);
+    expect(remaining).toBeDefined();
+  });
+
+  // --- Hardening: inbox/stats with lightweight projection ---
+
+  it("inbox/stats returns correct counts with projection", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send messages of different types
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "q1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "u1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "q2" } });
+
+    const stats = await betaClient.inboxStats();
+    expect(stats.unread).toBe(3);
+    expect(stats.by_type.question).toBe(2);
+    expect(stats.by_type.update).toBe(1);
+  });
 });
 
 async function registerPair(): Promise<{

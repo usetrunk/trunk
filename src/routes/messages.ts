@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits, attachments } from "../db/schema.js";
-import { eq, or, and, desc, lt } from "drizzle-orm";
+import { eq, or, and, desc, lt, lte } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { parsePaginationQuery, paginateResults, type PaginationParams } from "../lib/pagination.js";
@@ -370,14 +370,16 @@ app.get("/inbox", async (c) => {
   return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
-// Get inbox stats (unread count + breakdown by type)
+// Get inbox stats (unread count + breakdown by type/status)
 app.get("/inbox/stats", async (c) => {
   const agentId = c.get("agentId");
 
+  // Fetch only lightweight projections (status + type), capped to prevent memory exhaustion
   const rows = await db
-    .select()
+    .select({ status: messages.status, type: messages.type })
     .from(messages)
-    .where(eq(messages.toAgent, agentId));
+    .where(eq(messages.toAgent, agentId))
+    .limit(50000);
 
   const unread = rows.filter((row) => row.status === "pending" || row.status === "delivered");
   const byType: Record<string, number> = {};
@@ -774,17 +776,29 @@ app.post("/:id/cancel", async (c) => {
   return c.json({ ok: true, message_id: messageId });
 });
 
-// Process due scheduled messages (delivers all messages past their scheduled_at)
+// Process due scheduled messages (delivers only the caller's scheduled messages that are past due)
 app.post("/deliver-scheduled", async (c) => {
+  const agentId = c.get("agentId");
   const now = new Date();
 
-  // Find all scheduled messages that are due
-  const rows = await db
+  const rateLimit = await checkRateLimit(`deliver-scheduled:${agentId}`, 10, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  // Find caller's scheduled messages that are due (DB-level filter, capped at 200)
+  const due = await db
     .select()
     .from(messages)
-    .where(eq(messages.status, "scheduled"));
-
-  const due = rows.filter((row) => row.scheduledAt && row.scheduledAt.getTime() <= now.getTime());
+    .where(
+      and(
+        eq(messages.fromAgent, agentId),
+        eq(messages.status, "scheduled"),
+        lte(messages.scheduledAt, now)
+      )
+    )
+    .limit(200);
 
   let delivered = 0;
   for (const msg of due) {
@@ -805,26 +819,41 @@ app.post("/deliver-scheduled", async (c) => {
     delivered++;
   }
 
+  await audit(agentId, "message.deliver_scheduled", "message", null, { count: delivered });
   return c.json({ delivered, checked_at: now.toISOString() });
 });
 
 app.post("/purge-expired", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`purge:${agentId}`, 5, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body: { days?: number } = await c.req.json<{ days?: number }>().catch(() => ({}));
   const days = Math.max(1, Math.min(body.days ?? DEFAULT_RETENTION_DAYS, 3650));
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-  const rows = await db
-    .select()
+  // DB-level filtering — never fetch all messages into memory
+  const expired = await db
+    .select({ id: messages.id })
     .from(messages)
-    .where(or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId)));
-  const expired = rows.filter((row) => row.createdAt.getTime() < cutoff);
+    .where(
+      and(
+        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId)),
+        lt(messages.createdAt, cutoffDate)
+      )
+    )
+    .limit(1000);
 
   for (const row of expired) {
     await db.delete(messages).where(eq(messages.id, row.id));
   }
+
   await audit(agentId, "message.retention_purge", "message", null, { days, count: expired.length });
-  return c.json({ purged: expired.length, cutoff: new Date(cutoff).toISOString() });
+  return c.json({ purged: expired.length, cutoff: cutoffDate.toISOString() });
 });
 
 // Get thread summary (structured digest — no LLM, just metadata)
