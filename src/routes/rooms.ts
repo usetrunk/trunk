@@ -459,6 +459,17 @@ app.post("/:roomId/webhooks", requireValidUUIDs("roomId"), async (c) => {
   if (body.url.length > 2000) {
     return c.json({ error: "url must be 2000 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
+  try {
+    const parsed = new URL(body.url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return c.json({ error: "url must use https or http protocol", code: "INVALID_FIELD" }, 400);
+    }
+  } catch {
+    return c.json({ error: "url must be a valid URL", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.secret && body.secret.length < 16) {
+    return c.json({ error: "secret must be at least 16 characters", code: "INVALID_FIELD" }, 400);
+  }
   if (body.secret && body.secret.length > 500) {
     return c.json({ error: "secret must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
   }

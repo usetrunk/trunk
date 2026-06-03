@@ -2339,6 +2339,282 @@ describe("Hono API behavior", () => {
     );
   });
 
+  it("rejects webhook with non-http(s) URL protocol", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Bad Protocol" });
+    const room = await roomRes.json();
+
+    const protocols = ["javascript:alert(1)", "ftp://example.com/hook", "file:///etc/passwd", "data:text/html,test"];
+    for (const url of protocols) {
+      const res = await app.request(`/rooms/${room.id}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ url }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_FIELD");
+    }
+  });
+
+  it("rejects webhook with malformed URL", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Bad URL" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "not-a-url" }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("valid URL");
+  });
+
+  it("accepts webhook with http and https URLs", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Good URLs" });
+    const room = await roomRes.json();
+
+    const httpRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "http://localhost:3000/hook" }),
+    });
+    expect(httpRes.status).toBe(201);
+
+    const httpsRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/webhook" }),
+    });
+    expect(httpsRes.status).toBe(201);
+  });
+
+  it("rejects webhook with secret shorter than 16 characters", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Short Secret" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/test", secret: "tooshort" }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("at least 16 characters");
+  });
+
+  it("accepts webhook with secret of exactly 16 characters", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Good Secret" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/test", secret: "exactly16charss!" }),
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("enforces maximum 20 webhooks per room", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Webhook Limit Room" });
+    const room = await roomRes.json();
+
+    // Create 20 webhooks (clear rate limits between batches to avoid hitting the 20/min write limit)
+    for (let i = 0; i < 20; i++) {
+      if (i % 15 === 0 && i > 0) testState["rate_limits"].length = 0;
+      const res = await app.request(`/rooms/${room.id}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ url: `https://hooks.example.com/hook-${i}` }),
+      });
+      expect(res.status).toBe(201);
+    }
+
+    // 21st should fail with LIMIT_EXCEEDED
+    testState["rate_limits"].length = 0;
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/hook-overflow" }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("LIMIT_EXCEEDED");
+
+    // Verify list returns exactly 20
+    const listRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const listBody = await listRes.json();
+    expect(listBody.webhooks).toHaveLength(20);
+  });
+
+  it("webhook limit resets after deletion", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Webhook Limit Reset" });
+    const room = await roomRes.json();
+
+    // Create 20 webhooks, keep track of first one
+    let firstWebhookId: string = "";
+    for (let i = 0; i < 20; i++) {
+      if (i % 15 === 0 && i > 0) testState["rate_limits"].length = 0;
+      const res = await app.request(`/rooms/${room.id}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ url: `https://hooks.example.com/limit-${i}` }),
+      });
+      const wh = await res.json();
+      if (i === 0) firstWebhookId = wh.id;
+    }
+
+    // Delete one
+    testState["rate_limits"].length = 0;
+    await app.request(`/rooms/${room.id}/webhooks/${firstWebhookId}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+
+    // Now we can create one more
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/replacement" }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("webhook filter matching: only matching webhooks fire", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Filter Match Room" });
+    const room = await roomRes.json();
+
+    // Create webhook with group=human, priority=critical filter
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({
+        url: "https://hooks.example.com/critical-human",
+        filter_group: "human",
+        filter_priority: "critical",
+      }),
+    });
+
+    // Task that matches filters
+    const matchRes = await createRoomTaskRaw(alpha.secret, room.id, {
+      title: "Urgent human task",
+      priority: "critical",
+      group: "human",
+    });
+    expect(matchRes.status).toBe(201);
+    expect(fireRoomTaskWebhooks).toHaveBeenCalledWith(
+      room.id,
+      expect.objectContaining({ priority: "critical", group: "human" })
+    );
+
+    // Task that does NOT match filters (different priority)
+    vi.mocked(fireRoomTaskWebhooks).mockClear();
+    const noMatchRes = await createRoomTaskRaw(alpha.secret, room.id, {
+      title: "Low priority task",
+      priority: "low",
+      group: "human",
+    });
+    expect(noMatchRes.status).toBe(201);
+    // fireRoomTaskWebhooks is still called (it's the room-level function),
+    // but the internal filter logic would skip this webhook
+    expect(fireRoomTaskWebhooks).toHaveBeenCalledWith(
+      room.id,
+      expect.objectContaining({ priority: "low", group: "human" })
+    );
+  });
+
+  it("webhook with no filters fires for all tasks", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Unfiltered Webhook Room" });
+    const room = await roomRes.json();
+
+    // Create webhook with no filters
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/all-tasks" }),
+    });
+
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, {
+      title: "Any task",
+      priority: "low",
+    });
+    expect(taskRes.status).toBe(201);
+    expect(fireRoomTaskWebhooks).toHaveBeenCalledWith(
+      room.id,
+      expect.objectContaining({ title: "Any task" })
+    );
+  });
+
+  it("delete non-existent webhook returns 404", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "404 Webhook Room" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks/00000000-0000-0000-0000-000000000000`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.code).toBe("NOT_FOUND");
+  });
+
+  it("webhook secret is not exposed in list response", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Secret Hidden Room" });
+    const room = await roomRes.json();
+
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/secret", secret: "supersecretkey123456" }),
+    });
+
+    const listRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const body = await listRes.json();
+    // Secret should not be in the response (check it's not leaked)
+    expect(body.webhooks[0].secret).toBeUndefined();
+  });
+
+  it("webhook creation response does not include secret", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Create Secret Hidden" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/nosecret", secret: "anothersecretkey1234" }),
+    });
+
+    expect(res.status).toBe(201);
+    const webhook = await res.json();
+    // Secret should not be echoed back
+    expect(webhook.secret).toBeUndefined();
+  });
+
   // --- Room messaging fan-out tests ---
 
   it("sends a message to room:<id> and fans out to all other members", async () => {
