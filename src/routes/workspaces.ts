@@ -130,7 +130,8 @@ app.get("/me", async (c) => {
   const memberAgents = await db
     .select({ id: agents.id, name: agents.name, owner: agents.owner, workspaceRole: agents.workspaceRole })
     .from(agents)
-    .where(eq(agents.workspaceId, workspace.id));
+    .where(eq(agents.workspaceId, workspace.id))
+    .limit(500);
 
   return c.json({
     workspace: {
@@ -275,7 +276,8 @@ app.get("/:id/members", requireValidUUIDs("id"), async (c) => {
   const memberAgents = await db
     .select({ id: agents.id, name: agents.name, owner: agents.owner, workspaceRole: agents.workspaceRole })
     .from(agents)
-    .where(eq(agents.workspaceId, workspaceId));
+    .where(eq(agents.workspaceId, workspaceId))
+    .limit(500);
 
   return c.json({
     members: memberAgents.map((a) => ({

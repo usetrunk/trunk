@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, contacts, workspaces, workspaceContacts, blockedContacts, contactNotes, notificationPreferences, contactTags } from "../db/schema.js";
-import { eq, or, and } from "drizzle-orm";
+import { eq, or, and, desc, lt } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
 import { canMessage } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
+import { decodeCursor, encodeCursor } from "../lib/pagination.js";
 
 const app = new Hono<AgentVariables>();
 
@@ -788,23 +789,44 @@ app.get("/by-tag/:tag", async (c) => {
   }
   const tag = raw.toLowerCase();
 
+  const limitParam = parseInt(c.req.query("limit") || "50", 10);
+  const limit = isNaN(limitParam) ? 50 : Math.min(Math.max(1, limitParam), 100);
+  const cursorParam = c.req.query("cursor");
+
+  const conditions = [eq(contactTags.agentId, agentId), eq(contactTags.tag, tag)];
+  if (cursorParam) {
+    const decoded = decodeCursor(cursorParam);
+    if (decoded) {
+      conditions.push(lt(contactTags.createdAt, decoded.createdAt));
+    }
+  }
+
   const rows = await db
     .select()
     .from(contactTags)
-    .where(and(eq(contactTags.agentId, agentId), eq(contactTags.tag, tag)));
+    .where(and(...conditions))
+    .orderBy(desc(contactTags.createdAt))
+    .limit(limit + 1);
 
-  const agentIds = rows.map((r) => r.contactAgentId);
+  const has_more = rows.length > limit;
+  const items = has_more ? rows.slice(0, limit) : rows;
+  const last = items[items.length - 1];
+  const next_cursor = has_more && last ? encodeCursor(last.createdAt, last.id) : null;
+
+  const agentIds = items.map((r) => r.contactAgentId);
   const agentList = agentIds.length > 0
     ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
     : [];
   const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
 
   return c.json({
-    contacts: rows.map((r) => ({
+    contacts: items.map((r) => ({
       agent_id: r.contactAgentId,
       name: nameMap[r.contactAgentId] ?? null,
       tagged_at: r.createdAt,
     })),
+    next_cursor,
+    has_more,
   });
 });
 

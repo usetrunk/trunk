@@ -1320,8 +1320,12 @@ export class TrunkClient {
     return this.request(`/contacts/${encodeURIComponent(agentId)}/tags`);
   }
 
-  contactsByTag(tag: string): Promise<{ contacts: Array<{ agent_id: string; name: string | null; tagged_at: string }> }> {
-    return this.request(`/contacts/by-tag/${encodeURIComponent(tag)}`);
+  contactsByTag(tag: string, opts?: { limit?: number; cursor?: string }): Promise<{ contacts: Array<{ agent_id: string; name: string | null; tagged_at: string }>; next_cursor: string | null; has_more: boolean }> {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.cursor) params.set("cursor", opts.cursor);
+    const qs = params.toString();
+    return this.request(`/contacts/by-tag/${encodeURIComponent(tag)}${qs ? `?${qs}` : ""}`);
   }
 
   allContactTags(): Promise<{ tags: Array<{ tag: string; count: number }> }> {

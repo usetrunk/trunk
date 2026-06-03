@@ -20640,6 +20640,102 @@ describe("Hono API behavior", () => {
       expect(reg.agent_id).toBeTruthy();
     });
   });
+
+  // --- Hardening: contacts by-tag pagination and workspace member caps ---
+
+  describe("contacts by-tag pagination", () => {
+    it("returns has_more and next_cursor fields", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.addContactTag(beta.agent_id, "team");
+
+      const result = await alphaClient.contactsByTag("team");
+      expect(result.contacts).toHaveLength(1);
+      expect(result.has_more).toBe(false);
+      expect(result.next_cursor).toBeNull();
+      expect(result.contacts[0].agent_id).toBe(beta.agent_id);
+    });
+
+    it("respects limit parameter", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Register extra agents and tag them
+      const anon = createClient();
+      const gamma = await anon.register({ name: "gamma" });
+      const gammaClient = createClient(gamma.secret);
+      await alphaClient.pair({ code: gamma.pairing_code });
+      await alphaClient.addContactTag(beta.agent_id, "team");
+      await alphaClient.addContactTag(gamma.agent_id, "team");
+
+      const result = await alphaClient.contactsByTag("team", { limit: 1 });
+      expect(result.contacts).toHaveLength(1);
+      expect(result.has_more).toBe(true);
+      expect(result.next_cursor).toBeTruthy();
+    });
+
+    it("paginates through all results with cursor", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const anon = createClient();
+      const gamma = await anon.register({ name: "gamma" });
+      await alphaClient.pair({ code: gamma.pairing_code });
+
+      // Insert tags with different timestamps so cursor ordering works
+      testState["contact_tags"].push({
+        id: crypto.randomUUID(),
+        agentId: alpha.agent_id,
+        contactAgentId: beta.agent_id,
+        tag: "team",
+        createdAt: new Date("2026-01-01T00:00:02Z"),
+      });
+      testState["contact_tags"].push({
+        id: crypto.randomUUID(),
+        agentId: alpha.agent_id,
+        contactAgentId: gamma.agent_id,
+        tag: "team",
+        createdAt: new Date("2026-01-01T00:00:01Z"),
+      });
+
+      // Page 1
+      const page1 = await alphaClient.contactsByTag("team", { limit: 1 });
+      expect(page1.contacts).toHaveLength(1);
+      expect(page1.has_more).toBe(true);
+
+      // Page 2
+      const page2 = await alphaClient.contactsByTag("team", { limit: 1, cursor: page1.next_cursor! });
+      expect(page2.contacts).toHaveLength(1);
+      expect(page2.has_more).toBe(false);
+      expect(page2.next_cursor).toBeNull();
+
+      // All contacts returned across pages
+      const allIds = [page1.contacts[0].agent_id, page2.contacts[0].agent_id].sort();
+      expect(allIds).toEqual([beta.agent_id, gamma.agent_id].sort());
+    });
+
+    it("returns empty contacts for unused tag", async () => {
+      const { alphaClient } = await registerPair();
+      const result = await alphaClient.contactsByTag("nonexistent");
+      expect(result.contacts).toHaveLength(0);
+      expect(result.has_more).toBe(false);
+      expect(result.next_cursor).toBeNull();
+    });
+  });
+
+  describe("workspace member list cap", () => {
+    it("returns members list with limit applied", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      const ws = await alphaClient.createWorkspace({ name: "test-ws" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      const members = await alphaClient.workspaceMembers(ws.id);
+      expect(members.members.length).toBeGreaterThanOrEqual(2);
+      const ids = members.members.map((m: { agent_id: string }) => m.agent_id);
+      expect(ids).toContain(alpha.agent_id);
+      expect(ids).toContain(beta.agent_id);
+    });
+  });
 });
 
 async function registerPair(): Promise<{
