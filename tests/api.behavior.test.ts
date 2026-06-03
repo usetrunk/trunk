@@ -13205,40 +13205,47 @@ class SelectQuery {
 }
 
 class InsertQuery {
-  private insertValues?: Record<string, unknown>;
+  private insertValues?: Record<string, unknown> | Record<string, unknown>[];
 
   constructor(private readonly table: TableName) {}
 
-  values(values: Record<string, unknown>): this {
+  values(values: Record<string, unknown> | Record<string, unknown>[]): this {
     this.insertValues = values;
     return this;
   }
 
   returning(): Promise<unknown[]> {
-    return Promise.resolve([this.insert()]);
+    if (Array.isArray(this.insertValues)) {
+      return Promise.resolve(this.insertValues.map((v) => this.insertOne(v)));
+    }
+    return Promise.resolve([this.insertOne(this.insertValues!)]);
   }
 
   then<TResult1 = unknown, TResult2 = never>(
     onfulfilled?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
   ): PromiseLike<TResult1 | TResult2> {
-    return Promise.resolve(this.insert()).then(onfulfilled, onrejected);
+    if (Array.isArray(this.insertValues)) {
+      return Promise.resolve(this.insertValues.map((v) => this.insertOne(v))).then(onfulfilled as any, onrejected);
+    }
+    return Promise.resolve(this.insertOne(this.insertValues!)).then(onfulfilled, onrejected);
   }
 
-  private insert(): unknown {
-    if (!this.insertValues) throw new Error("insert query missing values");
+  private insertOne(overrideValues?: Record<string, unknown>): unknown {
+    const iv = overrideValues;
+    if (!iv) throw new Error("insert query missing values");
     if (this.table === "agents") {
       const row: AgentRow = {
         id: nextId("agent"),
-        name: this.insertValues.name as string,
-        owner: (this.insertValues.owner as string | undefined) ?? null,
-        secretHash: this.insertValues.secretHash as string,
-        pairingCode: this.insertValues.pairingCode as string,
-        webhookUrl: (this.insertValues.webhookUrl as string | undefined) ?? null,
-        webhookSecret: (this.insertValues.webhookSecret as string | undefined) ?? null,
-        workspaceId: (this.insertValues.workspaceId as string | undefined) ?? null,
-        workspaceRole: (this.insertValues.workspaceRole as string | undefined) ?? null,
-        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        name: iv.name as string,
+        owner: (iv.owner as string | undefined) ?? null,
+        secretHash: iv.secretHash as string,
+        pairingCode: iv.pairingCode as string,
+        webhookUrl: (iv.webhookUrl as string | undefined) ?? null,
+        webhookSecret: (iv.webhookSecret as string | undefined) ?? null,
+        workspaceId: (iv.workspaceId as string | undefined) ?? null,
+        workspaceRole: (iv.workspaceRole as string | undefined) ?? null,
+        metadata: (iv.metadata as Record<string, unknown>) ?? {},
         lastSeenAt: null,
         createdAt: new Date(),
       };
@@ -13248,10 +13255,10 @@ class InsertQuery {
 
     if (this.table === "contacts") {
       const row: ContactRow = {
-        agentA: this.insertValues.agentA as string,
-        agentB: this.insertValues.agentB as string,
-        aliasA: (this.insertValues.aliasA as string | undefined) ?? null,
-        aliasB: (this.insertValues.aliasB as string | undefined) ?? null,
+        agentA: iv.agentA as string,
+        agentB: iv.agentB as string,
+        aliasA: (iv.aliasA as string | undefined) ?? null,
+        aliasB: (iv.aliasB as string | undefined) ?? null,
         pairedAt: new Date(),
       };
       testState.contacts.push(row);
@@ -13261,10 +13268,10 @@ class InsertQuery {
     if (this.table === "rooms") {
       const row: RoomRow = {
         id: nextId("room"),
-        name: this.insertValues.name as string,
-        createdBy: this.insertValues.createdBy as string,
-        pairingCode: this.insertValues.pairingCode as string,
-        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        name: iv.name as string,
+        createdBy: iv.createdBy as string,
+        pairingCode: iv.pairingCode as string,
+        metadata: (iv.metadata as Record<string, unknown>) ?? {},
         createdAt: new Date(),
       };
       testState.rooms.push(row);
@@ -13273,9 +13280,9 @@ class InsertQuery {
 
     if (this.table === "room_members") {
       const row: RoomMemberRow = {
-        roomId: this.insertValues.roomId as string,
-        agentId: this.insertValues.agentId as string,
-        role: (this.insertValues.role as string) ?? "member",
+        roomId: iv.roomId as string,
+        agentId: iv.agentId as string,
+        role: (iv.role as string) ?? "member",
         joinedAt: new Date(),
       };
       testState["room_members"].push(row);
@@ -13285,10 +13292,10 @@ class InsertQuery {
     if (this.table === "workspaces") {
       const row: WorkspaceRow = {
         id: nextId("workspace"),
-        name: this.insertValues.name as string,
-        owner: (this.insertValues.owner as string | undefined) ?? null,
-        pairingCode: this.insertValues.pairingCode as string,
-        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        name: iv.name as string,
+        owner: (iv.owner as string | undefined) ?? null,
+        pairingCode: iv.pairingCode as string,
+        metadata: (iv.metadata as Record<string, unknown>) ?? {},
         createdAt: new Date(),
       };
       testState.workspaces.push(row);
@@ -13297,9 +13304,9 @@ class InsertQuery {
 
     if (this.table === "workspace_contacts") {
       const row: WorkspaceContactRow = {
-        workspaceId: this.insertValues.workspaceId as string,
-        agentId: this.insertValues.agentId as string,
-        alias: (this.insertValues.alias as string | undefined) ?? null,
+        workspaceId: iv.workspaceId as string,
+        agentId: iv.agentId as string,
+        alias: (iv.alias as string | undefined) ?? null,
         pairedAt: new Date(),
       };
       testState["workspace_contacts"].push(row);
@@ -13308,9 +13315,9 @@ class InsertQuery {
 
     if (this.table === "rate_limits") {
       const row: RateLimitRow = {
-        scope: this.insertValues.scope as string,
-        count: (this.insertValues.count as number | undefined) ?? 0,
-        windowStart: (this.insertValues.windowStart as Date | undefined) ?? new Date(),
+        scope: iv.scope as string,
+        count: (iv.count as number | undefined) ?? 0,
+        windowStart: (iv.windowStart as Date | undefined) ?? new Date(),
         updatedAt: new Date(),
       };
       testState["rate_limits"].push(row);
@@ -13320,21 +13327,21 @@ class InsertQuery {
     if (this.table === "tasks") {
       const row: TaskRow = {
         id: nextId("task"),
-        scope: this.insertValues.scope as string,
-        title: this.insertValues.title as string,
-        description: (this.insertValues.description as string | undefined) ?? null,
-        status: (this.insertValues.status as string | undefined) ?? "open",
-        priority: (this.insertValues.priority as string | undefined) ?? "medium",
-        owner: (this.insertValues.owner as string | undefined) ?? null,
-        createdBy: this.insertValues.createdBy as string,
-        due: (this.insertValues.due as string | undefined) ?? null,
-        startDate: (this.insertValues.startDate as string | undefined) ?? null,
-        group: (this.insertValues.group as string | undefined) ?? null,
-        dependsOn: (this.insertValues.dependsOn as string[] | undefined) ?? [],
-        sequence: (this.insertValues.sequence as number | undefined) ?? null,
-        estimate: (this.insertValues.estimate as number | undefined) ?? null,
-        contextRef: (this.insertValues.contextRef as string | undefined) ?? null,
-        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        scope: iv.scope as string,
+        title: iv.title as string,
+        description: (iv.description as string | undefined) ?? null,
+        status: (iv.status as string | undefined) ?? "open",
+        priority: (iv.priority as string | undefined) ?? "medium",
+        owner: (iv.owner as string | undefined) ?? null,
+        createdBy: iv.createdBy as string,
+        due: (iv.due as string | undefined) ?? null,
+        startDate: (iv.startDate as string | undefined) ?? null,
+        group: (iv.group as string | undefined) ?? null,
+        dependsOn: (iv.dependsOn as string[] | undefined) ?? [],
+        sequence: (iv.sequence as number | undefined) ?? null,
+        estimate: (iv.estimate as number | undefined) ?? null,
+        contextRef: (iv.contextRef as string | undefined) ?? null,
+        metadata: (iv.metadata as Record<string, unknown>) ?? {},
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -13345,13 +13352,13 @@ class InsertQuery {
     if (this.table === "subscriptions") {
       const row: SubscriptionRow = {
         id: nextId("sub"),
-        workspaceId: this.insertValues.workspaceId as string,
-        stripeCustomerId: (this.insertValues.stripeCustomerId as string | undefined) ?? null,
-        stripeSubscriptionId: (this.insertValues.stripeSubscriptionId as string | undefined) ?? null,
-        plan: (this.insertValues.plan as string | undefined) ?? "free",
-        status: (this.insertValues.status as string | undefined) ?? "active",
-        currentPeriodStart: (this.insertValues.currentPeriodStart as Date | undefined) ?? null,
-        currentPeriodEnd: (this.insertValues.currentPeriodEnd as Date | undefined) ?? null,
+        workspaceId: iv.workspaceId as string,
+        stripeCustomerId: (iv.stripeCustomerId as string | undefined) ?? null,
+        stripeSubscriptionId: (iv.stripeSubscriptionId as string | undefined) ?? null,
+        plan: (iv.plan as string | undefined) ?? "free",
+        status: (iv.status as string | undefined) ?? "active",
+        currentPeriodStart: (iv.currentPeriodStart as Date | undefined) ?? null,
+        currentPeriodEnd: (iv.currentPeriodEnd as Date | undefined) ?? null,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -13361,11 +13368,11 @@ class InsertQuery {
 
     if (this.table === "shared_facts") {
       const row: SharedFactRow = {
-        scope: this.insertValues.scope as string,
-        key: this.insertValues.key as string,
-        value: this.insertValues.value,
-        version: (this.insertValues.version as number | undefined) ?? 1,
-        updatedBy: this.insertValues.updatedBy as string,
+        scope: iv.scope as string,
+        key: iv.key as string,
+        value: iv.value,
+        version: (iv.version as number | undefined) ?? 1,
+        updatedBy: iv.updatedBy as string,
         updatedAt: new Date(),
       };
       testState["shared_facts"].push(row);
@@ -13375,12 +13382,12 @@ class InsertQuery {
     if (this.table === "shared_documents") {
       const row: SharedDocumentRow = {
         id: nextId("doc"),
-        scope: this.insertValues.scope as string,
-        name: this.insertValues.name as string,
-        contentType: (this.insertValues.contentType as string) ?? "text/markdown",
-        body: this.insertValues.body as string,
-        version: (this.insertValues.version as number | undefined) ?? 1,
-        lastEditedBy: this.insertValues.lastEditedBy as string,
+        scope: iv.scope as string,
+        name: iv.name as string,
+        contentType: (iv.contentType as string) ?? "text/markdown",
+        body: iv.body as string,
+        version: (iv.version as number | undefined) ?? 1,
+        lastEditedBy: iv.lastEditedBy as string,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -13391,10 +13398,10 @@ class InsertQuery {
     if (this.table === "shared_document_versions") {
       const row: SharedDocumentVersionRow = {
         id: nextId("docver"),
-        documentId: this.insertValues.documentId as string,
-        version: this.insertValues.version as number,
-        body: this.insertValues.body as string,
-        editedBy: this.insertValues.editedBy as string,
+        documentId: iv.documentId as string,
+        version: iv.version as number,
+        body: iv.body as string,
+        editedBy: iv.editedBy as string,
         createdAt: new Date(),
       };
       testState["shared_document_versions"].push(row);
@@ -13404,11 +13411,11 @@ class InsertQuery {
     if (this.table === "audit_events") {
       const row: AuditEventRow = {
         id: nextId("audit"),
-        actorAgent: (this.insertValues.actorAgent as string | undefined) ?? null,
-        action: this.insertValues.action as string,
-        targetType: this.insertValues.targetType as string,
-        targetId: (this.insertValues.targetId as string | undefined) ?? null,
-        metadata: (this.insertValues.metadata as Record<string, unknown>) ?? {},
+        actorAgent: (iv.actorAgent as string | undefined) ?? null,
+        action: iv.action as string,
+        targetType: iv.targetType as string,
+        targetId: (iv.targetId as string | undefined) ?? null,
+        metadata: (iv.metadata as Record<string, unknown>) ?? {},
         createdAt: new Date(),
       };
       testState["audit_events"].push(row);
@@ -13418,9 +13425,9 @@ class InsertQuery {
     if (this.table === "reactions") {
       const row: ReactionRow = {
         id: nextId("reaction"),
-        messageId: this.insertValues.messageId as string,
-        agentId: this.insertValues.agentId as string,
-        emoji: this.insertValues.emoji as string,
+        messageId: iv.messageId as string,
+        agentId: iv.agentId as string,
+        emoji: iv.emoji as string,
         createdAt: new Date(),
       };
       testState.reactions.push(row);
@@ -13430,9 +13437,9 @@ class InsertQuery {
     if (this.table === "message_labels") {
       const row: MessageLabelRow = {
         id: nextId("label"),
-        messageId: this.insertValues.messageId as string,
-        agentId: this.insertValues.agentId as string,
-        label: this.insertValues.label as string,
+        messageId: iv.messageId as string,
+        agentId: iv.agentId as string,
+        label: iv.label as string,
         createdAt: new Date(),
       };
       testState["message_labels"].push(row);
@@ -13442,9 +13449,9 @@ class InsertQuery {
     if (this.table === "contact_notes") {
       const row: ContactNoteRow = {
         id: nextId("note"),
-        agentId: this.insertValues.agentId as string,
-        contactAgentId: this.insertValues.contactAgentId as string,
-        content: this.insertValues.content as string,
+        agentId: iv.agentId as string,
+        contactAgentId: iv.contactAgentId as string,
+        content: iv.content as string,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -13455,9 +13462,9 @@ class InsertQuery {
     if (this.table === "blocked_contacts") {
       const row: BlockedContactRow = {
         id: nextId("block"),
-        agentId: this.insertValues.agentId as string,
-        blockedAgentId: this.insertValues.blockedAgentId as string,
-        reason: (this.insertValues.reason as string | undefined) ?? null,
+        agentId: iv.agentId as string,
+        blockedAgentId: iv.blockedAgentId as string,
+        reason: (iv.reason as string | undefined) ?? null,
         createdAt: new Date(),
       };
       testState["blocked_contacts"].push(row);
@@ -13467,15 +13474,15 @@ class InsertQuery {
     if (this.table === "webhook_deliveries") {
       const row: WebhookDeliveryRow = {
         id: nextId("whd"),
-        agentId: this.insertValues.agentId as string,
-        messageId: (this.insertValues.messageId as string | undefined) ?? null,
-        url: this.insertValues.url as string,
-        event: this.insertValues.event as string,
-        success: this.insertValues.success as number,
-        httpStatus: (this.insertValues.httpStatus as number | undefined) ?? null,
-        latencyMs: (this.insertValues.latencyMs as number | undefined) ?? null,
-        error: (this.insertValues.error as string | undefined) ?? null,
-        attempts: (this.insertValues.attempts as number | undefined) ?? 1,
+        agentId: iv.agentId as string,
+        messageId: (iv.messageId as string | undefined) ?? null,
+        url: iv.url as string,
+        event: iv.event as string,
+        success: iv.success as number,
+        httpStatus: (iv.httpStatus as number | undefined) ?? null,
+        latencyMs: (iv.latencyMs as number | undefined) ?? null,
+        error: (iv.error as string | undefined) ?? null,
+        attempts: (iv.attempts as number | undefined) ?? 1,
         createdAt: new Date(),
       };
       testState["webhook_deliveries"].push(row);
@@ -13485,9 +13492,9 @@ class InsertQuery {
     if (this.table === "saved_searches") {
       const row: SavedSearchRow = {
         id: nextId("search"),
-        agentId: this.insertValues.agentId as string,
-        name: this.insertValues.name as string,
-        query: this.insertValues.query as Record<string, string>,
+        agentId: iv.agentId as string,
+        name: iv.name as string,
+        query: iv.query as Record<string, string>,
         createdAt: new Date(),
       };
       testState["saved_searches"].push(row);
@@ -13497,10 +13504,10 @@ class InsertQuery {
     if (this.table === "message_edits") {
       const row: MessageEditRow = {
         id: nextId("medit"),
-        messageId: this.insertValues.messageId as string,
-        version: this.insertValues.version as number,
-        previousPayload: this.insertValues.previousPayload as Record<string, unknown>,
-        editedBy: this.insertValues.editedBy as string,
+        messageId: iv.messageId as string,
+        version: iv.version as number,
+        previousPayload: iv.previousPayload as Record<string, unknown>,
+        editedBy: iv.editedBy as string,
         createdAt: new Date(),
       };
       testState["message_edits"].push(row);
@@ -13510,9 +13517,9 @@ class InsertQuery {
     if (this.table === "contact_tags") {
       const row: ContactTagRow = {
         id: nextId("ctag"),
-        agentId: this.insertValues.agentId as string,
-        contactAgentId: this.insertValues.contactAgentId as string,
-        tag: this.insertValues.tag as string,
+        agentId: iv.agentId as string,
+        contactAgentId: iv.contactAgentId as string,
+        tag: iv.tag as string,
         createdAt: new Date(),
       };
       testState["contact_tags"].push(row);
@@ -13522,10 +13529,10 @@ class InsertQuery {
     if (this.table === "notification_preferences") {
       const row: NotificationPrefRow = {
         id: nextId("notifpref"),
-        agentId: this.insertValues.agentId as string,
-        contactAgentId: this.insertValues.contactAgentId as string,
-        muted: (this.insertValues.muted as number | undefined) ?? 0,
-        urgencyFilter: (this.insertValues.urgencyFilter as string | undefined) ?? "all",
+        agentId: iv.agentId as string,
+        contactAgentId: iv.contactAgentId as string,
+        muted: (iv.muted as number | undefined) ?? 0,
+        urgencyFilter: (iv.urgencyFilter as string | undefined) ?? "all",
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -13536,11 +13543,11 @@ class InsertQuery {
     if (this.table === "message_templates") {
       const row: MessageTemplateRow = {
         id: nextId("template"),
-        agentId: this.insertValues.agentId as string,
-        name: this.insertValues.name as string,
-        type: this.insertValues.type as string,
-        payload: this.insertValues.payload as Record<string, unknown>,
-        description: (this.insertValues.description as string | undefined) ?? null,
+        agentId: iv.agentId as string,
+        name: iv.name as string,
+        type: iv.type as string,
+        payload: iv.payload as Record<string, unknown>,
+        description: (iv.description as string | undefined) ?? null,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -13551,12 +13558,12 @@ class InsertQuery {
     if (this.table === "attachments") {
       const row: AttachmentRow = {
         id: nextId("attachment"),
-        messageId: (this.insertValues.messageId as string | undefined) ?? null,
-        agentId: this.insertValues.agentId as string,
-        filename: this.insertValues.filename as string,
-        contentType: (this.insertValues.contentType as string) ?? "application/octet-stream",
-        sizeBytes: this.insertValues.sizeBytes as number,
-        data: this.insertValues.data as string,
+        messageId: (iv.messageId as string | undefined) ?? null,
+        agentId: iv.agentId as string,
+        filename: iv.filename as string,
+        contentType: (iv.contentType as string) ?? "application/octet-stream",
+        sizeBytes: iv.sizeBytes as number,
+        data: iv.data as string,
         createdAt: new Date(),
       };
       testState.attachments.push(row);
@@ -13565,16 +13572,16 @@ class InsertQuery {
 
     const row: MessageRow = {
       id: nextId("message"),
-      fromAgent: this.insertValues.fromAgent as string,
-      toAgent: this.insertValues.toAgent as string,
-      toWorkspace: (this.insertValues.toWorkspace as string | undefined) ?? null,
-      toRoom: (this.insertValues.toRoom as string | undefined) ?? null,
-      threadId: (this.insertValues.threadId as string | undefined) ?? null,
-      replyTo: (this.insertValues.replyTo as string | undefined) ?? null,
-      idempotencyKey: (this.insertValues.idempotencyKey as string | undefined) ?? null,
-      type: this.insertValues.type as string,
-      payload: this.insertValues.payload as Record<string, unknown>,
-      status: (this.insertValues.status as string | undefined) ?? "pending",
+      fromAgent: iv.fromAgent as string,
+      toAgent: iv.toAgent as string,
+      toWorkspace: (iv.toWorkspace as string | undefined) ?? null,
+      toRoom: (iv.toRoom as string | undefined) ?? null,
+      threadId: (iv.threadId as string | undefined) ?? null,
+      replyTo: (iv.replyTo as string | undefined) ?? null,
+      idempotencyKey: (iv.idempotencyKey as string | undefined) ?? null,
+      type: iv.type as string,
+      payload: iv.payload as Record<string, unknown>,
+      status: (iv.status as string | undefined) ?? "pending",
       createdAt: new Date(Date.now() + testState.idCounter),
       readAt: null,
       deliveredAt: null,
@@ -13584,8 +13591,8 @@ class InsertQuery {
       editedAt: null,
       pinnedAt: null,
       pinnedBy: null,
-      scheduledAt: (this.insertValues.scheduledAt as Date | undefined) ?? null,
-      expiresAt: (this.insertValues.expiresAt as Date | undefined) ?? null,
+      scheduledAt: (iv.scheduledAt as Date | undefined) ?? null,
+      expiresAt: (iv.expiresAt as Date | undefined) ?? null,
     };
     testState.messages.push(row);
     return row;
@@ -13727,9 +13734,34 @@ function evaluateCondition(condition: SQL | undefined, row: unknown): boolean {
   }
 
   const column = chunks.find(isColumn);
+
+  // Handle "column is null" (isNull operator)
+  if (column && chunks.some((chunk) => isStringChunk(chunk, " is null"))) {
+    return getRowValue(row, column.name) == null;
+  }
+
+  // Handle "column in (values)" (inArray operator)
+  if (column && chunks.some((chunk) => isStringChunk(chunk, " in "))) {
+    const rowVal = getRowValue(row, column.name);
+    const paramArray = chunks.find((chunk) => Array.isArray(chunk));
+    if (paramArray) {
+      const values = (paramArray as unknown[]).map((p: unknown) => (p as { value: unknown }).value);
+      return values.includes(rowVal);
+    }
+    return false;
+  }
+
   const param = chunks.find(isParam);
   if (!column || !param) {
     return sqlChildren.every((chunk) => evaluateCondition(chunk, row));
+  }
+
+  // Handle "<>" (ne operator)
+  if (chunks.some((chunk) => isStringChunk(chunk, " <> "))) {
+    const rowVal = getRowValue(row, column.name);
+    const paramVal = param.value;
+    if (rowVal instanceof Date && paramVal instanceof Date) return rowVal.getTime() !== paramVal.getTime();
+    return rowVal !== paramVal;
   }
 
   // Detect comparison operator from string chunks

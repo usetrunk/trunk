@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits, attachments } from "../db/schema.js";
-import { eq, or, and, desc, lt, lte } from "drizzle-orm";
+import { eq, or, and, desc, lt, lte, inArray, isNull, ne } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { parsePaginationQuery, paginateResults, type PaginationParams } from "../lib/pagination.js";
@@ -1278,22 +1278,16 @@ app.post("/ack-bulk", async (c) => {
     }
   }
 
-  let acked = 0;
-  for (const messageId of body.message_ids) {
-    const [msg] = await db
-      .select()
-      .from(messages)
-      .where(and(eq(messages.id, messageId), eq(messages.toAgent, agentId)))
-      .limit(1);
-
-    if (msg) {
-      await db
-        .update(messages)
-        .set({ status: "processed", readAt: new Date(), processedAt: new Date() })
-        .where(eq(messages.id, messageId));
-      acked++;
-    }
-  }
+  const now = new Date();
+  const updated = await db
+    .update(messages)
+    .set({ status: "processed", readAt: now, processedAt: now })
+    .where(and(
+      inArray(messages.id, body.message_ids),
+      eq(messages.toAgent, agentId),
+    ))
+    .returning();
+  const acked = updated.length;
 
   await audit(agentId, "message.ack_bulk", "message", null, { count: acked });
   return c.json({ ok: true, acked });
@@ -1323,22 +1317,16 @@ app.post("/read-bulk", async (c) => {
     }
   }
 
-  let marked = 0;
-  for (const messageId of body.message_ids) {
-    const [msg] = await db
-      .select()
-      .from(messages)
-      .where(and(eq(messages.id, messageId), eq(messages.toAgent, agentId)))
-      .limit(1);
-
-    if (msg && !msg.readAt) {
-      await db
-        .update(messages)
-        .set({ readAt: new Date() })
-        .where(eq(messages.id, messageId));
-      marked++;
-    }
-  }
+  const updated = await db
+    .update(messages)
+    .set({ readAt: new Date() })
+    .where(and(
+      inArray(messages.id, body.message_ids),
+      eq(messages.toAgent, agentId),
+      isNull(messages.readAt),
+    ))
+    .returning();
+  const marked = updated.length;
 
   await audit(agentId, "message.read_bulk", "message", null, { count: marked });
   return c.json({ ok: true, marked });
@@ -1368,22 +1356,16 @@ app.post("/delete-bulk", async (c) => {
     }
   }
 
-  let deleted = 0;
-  for (const messageId of body.message_ids) {
-    const [msg] = await db
-      .select()
-      .from(messages)
-      .where(and(eq(messages.id, messageId), eq(messages.fromAgent, agentId)))
-      .limit(1);
-
-    if (msg && msg.status !== "deleted") {
-      await db
-        .update(messages)
-        .set({ status: "deleted", deletedAt: new Date() })
-        .where(eq(messages.id, messageId));
-      deleted++;
-    }
-  }
+  const updated = await db
+    .update(messages)
+    .set({ status: "deleted", deletedAt: new Date() })
+    .where(and(
+      inArray(messages.id, body.message_ids),
+      eq(messages.fromAgent, agentId),
+      ne(messages.status, "deleted"),
+    ))
+    .returning();
+  const deleted = updated.length;
 
   await audit(agentId, "message.delete_bulk", "message", null, { count: deleted });
   return c.json({ ok: true, deleted });
@@ -1419,36 +1401,36 @@ app.post("/label-bulk", async (c) => {
     }
   }
 
+  // Find which message IDs the agent actually owns/received
+  const ownedMessages = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(and(
+      inArray(messages.id, body.message_ids),
+      or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId)),
+    ));
+  const ownedIds = ownedMessages.map((m) => m.id);
+
   let labeled = 0;
-  for (const messageId of body.message_ids) {
-    const [msg] = await db
-      .select()
-      .from(messages)
+  if (ownedIds.length > 0) {
+    // Find which already have this label
+    const existingLabels = await db
+      .select({ messageId: messageLabels.messageId })
+      .from(messageLabels)
       .where(and(
-        eq(messages.id, messageId),
-        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
-      ))
-      .limit(1);
+        inArray(messageLabels.messageId, ownedIds),
+        eq(messageLabels.agentId, agentId),
+        eq(messageLabels.label, body.label),
+      ));
+    const alreadyLabeled = new Set(existingLabels.map((l) => l.messageId));
 
-    if (msg) {
-      const existing = await db
-        .select()
-        .from(messageLabels)
-        .where(and(
-          eq(messageLabels.messageId, messageId),
-          eq(messageLabels.agentId, agentId),
-          eq(messageLabels.label, body.label)
-        ))
-        .limit(1);
+    const toInsert = ownedIds
+      .filter((id) => !alreadyLabeled.has(id))
+      .map((messageId) => ({ messageId, agentId, label: body.label }));
 
-      if (existing.length === 0) {
-        await db.insert(messageLabels).values({
-          messageId,
-          agentId,
-          label: body.label,
-        });
-        labeled++;
-      }
+    if (toInsert.length > 0) {
+      await db.insert(messageLabels).values(toInsert);
+      labeled = toInsert.length;
     }
   }
 
