@@ -8040,6 +8040,240 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("x-ratelimit-remaining")).toBeTruthy();
   });
 
+  // --- Room connect page tests ---
+
+  it("room connect page shows room info for a valid room code", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Sprint Planning" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/connect/room/${room.pairing_code}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain("Sprint Planning");
+    expect(body).toContain("Join the Sprint Planning project");
+    expect(body).toContain("member");
+  });
+
+  it("room connect page renders for room with multiple members", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Team Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const res = await app.request(`/connect/room/${room.pairing_code}`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Team Room");
+    expect(body).toContain("member");
+  });
+
+  it("room connect page shows invalid code message for unknown room code", async () => {
+    const res = await app.request("/connect/room/ZZZZZZZZ");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Invalid room code");
+    expect(body).toContain("ZZZZZZZZ");
+  });
+
+  it("room connect page uppercases the code in the URL", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Case Room" });
+    const room = await roomRes.json();
+    const lowerCode = room.pairing_code.toLowerCase();
+
+    const res = await app.request(`/connect/room/${lowerCode}`);
+    const body = await res.text();
+    expect(body).toContain("Case Room");
+    expect(body).toContain(room.pairing_code);
+  });
+
+  it("room connect page includes machine-readable agent-hint", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Hint Room" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/connect/room/${room.pairing_code}`);
+    const body = await res.text();
+    expect(body).toContain("data-trunk-room-code");
+    expect(body).toContain(`data-trunk-room-code="${room.pairing_code}"`);
+    expect(body).toContain('data-trunk-relay="https://trunk.bot"');
+    expect(body).toContain(`data-trunk-room-name="Hint Room"`);
+  });
+
+  it("room connect page rejects oversized code in URL", async () => {
+    const res = await app.request(`/connect/room/${"A".repeat(50)}`);
+    expect(res.status).toBe(400);
+  });
+
+  it("room connect page includes rate limit headers", async () => {
+    const res = await app.request("/connect/room/TESTCODE", {
+      headers: { "x-forwarded-for": "203.0.113.99" },
+    });
+    expect(res.headers.get("x-ratelimit-limit")).toBe("30");
+    expect(res.headers.get("x-ratelimit-remaining")).toBeTruthy();
+  });
+
+  // --- Room message operations tests ---
+
+  it("edits a room message by the sender", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Edit Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Alpha sends to room
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Original room message" },
+    });
+
+    // Alpha edits the message
+    const edited = await alphaClient.editMessage(receipt.id, { content: "Edited room message" });
+    expect(edited.payload).toEqual({ content: "Edited room message" });
+    expect(edited.version).toBe(2);
+  });
+
+  it("rejects editing a room message by a non-sender member", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Edit Auth Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Alpha's message" },
+    });
+
+    // Beta tries to edit alpha's message — rejected because beta is not the sender
+    try {
+      await betaClient.editMessage(receipt.id, { content: "Beta's edit" });
+      expect(true).toBe(false);
+    } catch (e: unknown) {
+      expect((e as Error).message).toContain("not found");
+    }
+  });
+
+  it("reacts to a room message", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "React Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "React to this" },
+    });
+
+    // Beta reacts to room message
+    const reaction = await betaClient.react(receipt.id, "thumbsup");
+    expect(reaction.emoji).toBe("thumbsup");
+    expect(reaction.message_id).toBe(receipt.id);
+
+    // Verify reaction is listed
+    const reactions = await alphaClient.reactions(receipt.id);
+    expect(reactions.reactions.length).toBe(1);
+    expect(reactions.reactions[0].emoji).toBe("thumbsup");
+  });
+
+  it("pins and unpins a room message", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Pin Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Pin this message" },
+    });
+
+    // Alpha pins the room message
+    const pinResult = await alphaClient.pin(receipt.id);
+    expect(pinResult.ok).toBe(true);
+    expect(pinResult.pinned_by).toBe(alpha.agent_id);
+
+    // Verify the pin shows up in thread pins
+    const pins = await alphaClient.threadPins(receipt.thread_id);
+    expect(pins.pinned.length).toBe(1);
+    expect(pins.pinned[0].id).toBe(receipt.id);
+
+    // Unpin the message
+    const unpinResult = await alphaClient.unpin(receipt.id);
+    expect(unpinResult.ok).toBe(true);
+
+    // Verify pin is removed
+    const pinsAfter = await alphaClient.threadPins(receipt.thread_id);
+    expect(pinsAfter.pinned.length).toBe(0);
+  });
+
+  it("forwards a room message to a contact", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Register a third agent as forward target
+    const gammaReg = await createClient().register({ name: "gamma-forward", owner: "Test" });
+    const gammaClient = createClient(gammaReg.secret);
+    await alphaClient.pair({ code: gammaReg.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Forward Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Forward this room message" },
+    });
+
+    // Alpha forwards the room message to gamma
+    const fwd = await alphaClient.forward(receipt.id, gammaReg.agent_id, "Check this out");
+    expect(fwd.status).toBeDefined();
+
+    // Gamma should see the forwarded message (keeps original type, adds forwarded_from in payload)
+    const gammaInbox = await gammaClient.inbox();
+    const fwdMsg = gammaInbox.messages.find(
+      (m: TrunkMessage) => (m.payload as Record<string, unknown>).forwarded_from !== undefined
+    );
+    expect(fwdMsg).toBeDefined();
+    expect((fwdMsg!.payload as Record<string, unknown>).forward_comment).toBe("Check this out");
+  });
+
+  it("room message edit history tracks versions", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "History Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const receipt = await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Version 1" },
+    });
+
+    await alphaClient.editMessage(receipt.id, { content: "Version 2" });
+    await alphaClient.editMessage(receipt.id, { content: "Version 3" });
+
+    const history = await alphaClient.messageEditHistory(receipt.id);
+    expect(history.edits.length).toBe(2);
+    expect(history.edits[0].version).toBe(1);
+    expect(history.edits[1].version).toBe(2);
+  });
+
   it("dashboard shows login form when no session is provided", async () => {
     const res = await app.request("/dashboard");
     expect(res.status).toBe(401);
