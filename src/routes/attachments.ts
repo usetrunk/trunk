@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { attachments, messages } from "../db/schema.js";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, lt, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { canMessage } from "../lib/workspace.js";
+import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
@@ -139,7 +140,8 @@ app.get("/message/:messageId", requireValidUUIDs("messageId"), async (c) => {
 
   const results = await db.select().from(attachments)
     .where(eq(attachments.messageId, messageId))
-    .orderBy(desc(attachments.createdAt));
+    .orderBy(desc(attachments.createdAt))
+    .limit(100);
 
   return c.json({
     message_id: messageId,
@@ -179,13 +181,31 @@ app.delete("/:id", requireValidUUIDs("id"), async (c) => {
 app.get("/", async (c) => {
   const agentId = c.get("agentId");
 
-  const results = await db.select().from(attachments)
-    .where(eq(attachments.agentId, agentId))
-    .orderBy(desc(attachments.createdAt))
-    .limit(200);
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
 
+  const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
+  const conditions = [eq(attachments.agentId, agentId)];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(attachments.createdAt, cursor.createdAt),
+        and(eq(attachments.createdAt, cursor.createdAt), lt(attachments.id, cursor.id))
+      )!
+    );
+  }
+
+  const results = await db.select().from(attachments)
+    .where(and(...conditions))
+    .orderBy(desc(attachments.createdAt), desc(attachments.id))
+    .limit(limit + 1);
+
+  const page = paginateResults(results, limit);
   return c.json({
-    attachments: results.map((a) => ({
+    attachments: page.items.map((a) => ({
       id: a.id,
       message_id: a.messageId,
       filename: a.filename,
@@ -193,6 +213,8 @@ app.get("/", async (c) => {
       size_bytes: a.sizeBytes,
       created_at: a.createdAt.toISOString(),
     })),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 

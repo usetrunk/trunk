@@ -5108,6 +5108,79 @@ describe("Hono API behavior", () => {
     expect(page2.next_cursor).toBeNull();
   });
 
+  it("template list supports cursor pagination", async () => {
+    const reg = await createClient().register({ name: "tpl-pag" });
+    const client = createClient(reg.secret);
+
+    for (let i = 0; i < 3; i++) {
+      await client.createTemplate({ name: `tpl-${i}`, type: "ping", payload: { i } });
+    }
+
+    const page1 = await client.listTemplates({ limit: 2 });
+    expect(page1.templates).toHaveLength(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    const page2 = await client.listTemplates({ limit: 2, cursor: page1.next_cursor! });
+    expect(page2.templates).toHaveLength(1);
+    expect(page2.has_more).toBe(false);
+    expect(page2.next_cursor).toBeNull();
+
+    // Verify no overlap
+    const page1Ids = new Set(page1.templates.map(t => t.id));
+    for (const t of page2.templates) {
+      expect(page1Ids.has(t.id)).toBe(false);
+    }
+  });
+
+  it("attachment list supports cursor pagination", async () => {
+    const reg = await createClient().register({ name: "att-pag" });
+    const client = createClient(reg.secret);
+
+    for (let i = 0; i < 3; i++) {
+      await client.uploadAttachment({ filename: `file-${i}.txt`, data: btoa(`data-${i}`) });
+    }
+
+    const page1 = await client.listAttachments({ limit: 2 });
+    expect(page1.attachments).toHaveLength(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    const page2 = await client.listAttachments({ limit: 2, cursor: page1.next_cursor! });
+    expect(page2.attachments).toHaveLength(1);
+    expect(page2.has_more).toBe(false);
+    expect(page2.next_cursor).toBeNull();
+  });
+
+  it("document version history supports cursor pagination", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create a document and update it multiple times to generate versions
+    const doc = await alphaClient.createDocument(beta.agent_id, { name: "ver-doc", body: "v1" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "v2" });
+    await alphaClient.updateDocument(beta.agent_id, doc.id, { body: "v3" });
+
+    // Fetch versions with limit=2
+    const r1 = await app.request(`/documents/${beta.agent_id}/${doc.id}/versions?limit=2`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(r1.status).toBe(200);
+    const page1 = await r1.json() as { versions: unknown[]; has_more: boolean; next_cursor: string | null };
+    expect(page1.versions).toHaveLength(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    const r2 = await app.request(`/documents/${beta.agent_id}/${doc.id}/versions?limit=2&cursor=${page1.next_cursor}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(r2.status).toBe(200);
+    const page2 = await r2.json() as { versions: unknown[]; has_more: boolean; next_cursor: string | null };
+    expect(page2.versions).toHaveLength(1);
+    expect(page2.has_more).toBe(false);
+    expect(page2.next_cursor).toBeNull();
+  });
+
   // --- Message Forwarding ---
 
   it("forward sends a message to another contact with provenance metadata", async () => {
@@ -11917,9 +11990,11 @@ class SelectQuery {
 
     if (this.table === "shared_document_versions") {
       rows.sort((a, b) => {
-        const left = (a as SharedDocumentVersionRow).version;
-        const right = (b as SharedDocumentVersionRow).version;
-        return this.orderDirection === "desc" ? right - left : left - right;
+        const left = (a as SharedDocumentVersionRow).createdAt.getTime();
+        const right = (b as SharedDocumentVersionRow).createdAt.getTime();
+        const dir = this.orderDirection === "desc" ? -1 : 1;
+        if (left !== right) return dir * (left - right);
+        return dir * ((a as SharedDocumentVersionRow).id < (b as SharedDocumentVersionRow).id ? -1 : 1);
       });
     }
 
@@ -11940,6 +12015,16 @@ class SelectQuery {
         const dir = this.orderDirection === "desc" ? -1 : 1;
         if (left !== right) return dir * (left - right);
         return dir * ((a as AuditEventRow).id < (b as AuditEventRow).id ? -1 : 1);
+      });
+    }
+
+    if (this.table === "message_templates") {
+      rows.sort((a, b) => {
+        const left = (a as MessageTemplateRow).createdAt.getTime();
+        const right = (b as MessageTemplateRow).createdAt.getTime();
+        const dir = this.orderDirection === "desc" ? -1 : 1;
+        if (left !== right) return dir * (left - right);
+        return dir * ((a as MessageTemplateRow).id < (b as MessageTemplateRow).id ? -1 : 1);
       });
     }
 

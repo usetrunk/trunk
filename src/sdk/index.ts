@@ -664,6 +664,8 @@ export type AttachmentDownloadResponse = AttachmentResponse & {
 
 export type AttachmentListResponse = {
   attachments: AttachmentResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
 };
 
 export type MessageAttachmentsResponse = {
@@ -1372,8 +1374,12 @@ export class TrunkClient {
 
   // --- Templates ---
 
-  listTemplates(): Promise<{ templates: TemplateResponse[] }> {
-    return this.request("/templates");
+  listTemplates(opts?: { limit?: number; cursor?: string }): Promise<{ templates: TemplateResponse[]; next_cursor: string | null; has_more: boolean }> {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.cursor) params.set("cursor", opts.cursor);
+    const qs = params.toString();
+    return this.request(`/templates${qs ? `?${qs}` : ""}`);
   }
 
   createTemplate(input: { name: string; type: string; payload: Record<string, unknown>; description?: string }): Promise<TemplateResponse> {
@@ -1402,8 +1408,12 @@ export class TrunkClient {
     return this.request(`/attachments/${encodeURIComponent(attachmentId)}`);
   }
 
-  listAttachments(): Promise<AttachmentListResponse> {
-    return this.request("/attachments");
+  listAttachments(opts?: { limit?: number; cursor?: string }): Promise<AttachmentListResponse> {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.cursor) params.set("cursor", opts.cursor);
+    const qs = params.toString();
+    return this.request(`/attachments${qs ? `?${qs}` : ""}`);
   }
 
   messageAttachments(messageId: string): Promise<MessageAttachmentsResponse> {

@@ -1799,7 +1799,8 @@ app.get("/:id/reactions", requireValidUUIDs("id"), async (c) => {
   const rows = await db
     .select()
     .from(reactions)
-    .where(eq(reactions.messageId, messageId));
+    .where(eq(reactions.messageId, messageId))
+    .limit(500);
 
   // Group by emoji for summary
   const summary: Record<string, { count: number; agents: string[] }> = {};

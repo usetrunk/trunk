@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { messageTemplates } from "../db/schema.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc, lt, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
+import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
@@ -23,13 +24,27 @@ app.get("/", async (c) => {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
 
+  const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
+  const conditions = [eq(messageTemplates.agentId, agentId)];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(messageTemplates.createdAt, cursor.createdAt),
+        and(eq(messageTemplates.createdAt, cursor.createdAt), lt(messageTemplates.id, cursor.id))
+      )!
+    );
+  }
+
   const rows = await db
     .select()
     .from(messageTemplates)
-    .where(eq(messageTemplates.agentId, agentId));
+    .where(and(...conditions))
+    .orderBy(desc(messageTemplates.createdAt), desc(messageTemplates.id))
+    .limit(limit + 1);
 
+  const page = paginateResults(rows, limit);
   return c.json({
-    templates: rows.map((r) => ({
+    templates: page.items.map((r) => ({
       id: r.id,
       name: r.name,
       type: r.type,
@@ -38,6 +53,8 @@ app.get("/", async (c) => {
       created_at: r.createdAt,
       updated_at: r.updatedAt,
     })),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 

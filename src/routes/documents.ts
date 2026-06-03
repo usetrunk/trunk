@@ -207,19 +207,34 @@ app.get("/room/:roomId/:docId/versions", requireValidUUIDs("roomId", "docId"), r
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
+  const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
+  const conditions = [eq(sharedDocumentVersions.documentId, docId)];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(sharedDocumentVersions.createdAt, cursor.createdAt),
+        and(eq(sharedDocumentVersions.createdAt, cursor.createdAt), lt(sharedDocumentVersions.id, cursor.id))
+      )!
+    );
+  }
+
   const versions = await db
     .select()
     .from(sharedDocumentVersions)
-    .where(eq(sharedDocumentVersions.documentId, docId))
-    .orderBy(desc(sharedDocumentVersions.version));
+    .where(and(...conditions))
+    .orderBy(desc(sharedDocumentVersions.createdAt), desc(sharedDocumentVersions.id))
+    .limit(limit + 1);
 
+  const page = paginateResults(versions, limit);
   return c.json({
-    versions: versions.map(v => ({
+    versions: page.items.map(v => ({
       version: v.version,
       edited_by: v.editedBy,
       created_at: v.createdAt,
       body_length: v.body.length,
     })),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 
@@ -385,19 +400,34 @@ app.get("/workspace/:workspaceId/:docId/versions", requireValidUUIDs("workspaceI
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
 
+  const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
+  const conditions = [eq(sharedDocumentVersions.documentId, docId)];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(sharedDocumentVersions.createdAt, cursor.createdAt),
+        and(eq(sharedDocumentVersions.createdAt, cursor.createdAt), lt(sharedDocumentVersions.id, cursor.id))
+      )!
+    );
+  }
+
   const versions = await db
     .select()
     .from(sharedDocumentVersions)
-    .where(eq(sharedDocumentVersions.documentId, docId))
-    .orderBy(desc(sharedDocumentVersions.version));
+    .where(and(...conditions))
+    .orderBy(desc(sharedDocumentVersions.createdAt), desc(sharedDocumentVersions.id))
+    .limit(limit + 1);
 
+  const page = paginateResults(versions, limit);
   return c.json({
-    versions: versions.map(v => ({
+    versions: page.items.map(v => ({
       version: v.version,
       edited_by: v.editedBy,
       created_at: v.createdAt,
       body_length: v.body.length,
     })),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 
@@ -654,19 +684,34 @@ app.get("/:contactId/:docId/versions", requireValidUUIDs("contactId", "docId"), 
 
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);
 
+  const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
+  const conditions = [eq(sharedDocumentVersions.documentId, docId)];
+  if (cursor) {
+    conditions.push(
+      or(
+        lt(sharedDocumentVersions.createdAt, cursor.createdAt),
+        and(eq(sharedDocumentVersions.createdAt, cursor.createdAt), lt(sharedDocumentVersions.id, cursor.id))
+      )!
+    );
+  }
+
   const versions = await db
     .select()
     .from(sharedDocumentVersions)
-    .where(eq(sharedDocumentVersions.documentId, docId))
-    .orderBy(desc(sharedDocumentVersions.version));
+    .where(and(...conditions))
+    .orderBy(desc(sharedDocumentVersions.createdAt), desc(sharedDocumentVersions.id))
+    .limit(limit + 1);
 
+  const page = paginateResults(versions, limit);
   return c.json({
-    versions: versions.map(v => ({
+    versions: page.items.map(v => ({
       version: v.version,
       edited_by: v.editedBy,
       created_at: v.createdAt,
       body_length: v.body.length,
     })),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
   });
 });
 
