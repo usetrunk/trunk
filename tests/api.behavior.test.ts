@@ -6446,6 +6446,59 @@ describe("Hono API behavior", () => {
     expect(betaNote.content).toBe("beta's note about alpha");
   });
 
+  it("rejects registration with invalid webhook_url", async () => {
+    await expect(
+      createClient().register({ name: "bad-webhook", webhook_url: "not-a-url" } as any)
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects PATCH with invalid webhook_url", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(
+      alphaClient.updateMe({ webhook_url: "not-a-url" } as any)
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects status text exceeding 500 characters", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(
+      alphaClient.setStatus("x".repeat(501))
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("accepts status text at exactly 500 characters", async () => {
+    const { alphaClient } = await registerPair();
+    const result = await alphaClient.setStatus("x".repeat(500));
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects role exceeding 200 characters", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(
+      alphaClient.updateMe({ role: "x".repeat(201) })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects metadata exceeding 10KB", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(
+      alphaClient.updateMe({ metadata: { big: "x".repeat(11000) } })
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects contact note exceeding 5000 characters", async () => {
+    const { alphaClient, beta } = await registerPair();
+    await expect(
+      alphaClient.setContactNote(beta.agent_id, "x".repeat(5001))
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("accepts contact note at exactly 5000 characters", async () => {
+    const { alphaClient, beta } = await registerPair();
+    const result = await alphaClient.setContactNote(beta.agent_id, "x".repeat(5000));
+    expect(result.content).toBe("x".repeat(5000));
+  });
+
   // --- Message template tests ---
 
   it("creates and lists message templates", async () => {

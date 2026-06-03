@@ -371,6 +371,9 @@ app.put("/:agentId/notes", async (c) => {
   if (!body.content || typeof body.content !== "string") {
     return c.json({ error: "content is required", code: "MISSING_FIELD" }, 400);
   }
+  if (body.content.length > 5000) {
+    return c.json({ error: "content must not exceed 5000 characters", code: "INVALID_FIELD" }, 400);
+  }
 
   // Check for existing note
   const existing = await db

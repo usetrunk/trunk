@@ -29,6 +29,9 @@ app.post("/register", async (c) => {
   if (body.owner !== undefined && body.owner.length > 100) {
     return c.json({ error: "owner must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
   }
+  if (body.webhook_url !== undefined && body.webhook_url !== null) {
+    try { new URL(body.webhook_url); } catch { return c.json({ error: "Invalid webhook URL", code: "INVALID_FIELD" }, 400); }
+  }
 
   const secret = generateSecret();
   const secretHash = await hashSecretAsync(secret);
@@ -98,10 +101,24 @@ app.patch("/me", authMiddleware, async (c) => {
     return c.json({ error: "owner must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
   }
 
+  if (body.webhook_url !== undefined && body.webhook_url !== null) {
+    try { new URL(body.webhook_url); } catch { return c.json({ error: "Invalid webhook URL", code: "INVALID_FIELD" }, 400); }
+  }
+
   const updates: Partial<typeof agents.$inferInsert> = {};
   if (body.name !== undefined) updates.name = body.name;
   if (body.webhook_url !== undefined) updates.webhookUrl = body.webhook_url;
   if (body.owner !== undefined) updates.owner = body.owner;
+
+  if (body.role !== undefined && typeof body.role === "string" && body.role.length > 200) {
+    return c.json({ error: "role must not exceed 200 characters", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.projects !== undefined && Array.isArray(body.projects) && body.projects.length > 50) {
+    return c.json({ error: "projects must not exceed 50 entries", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.metadata !== undefined && JSON.stringify(body.metadata).length > 10000) {
+    return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
+  }
 
   if (body.role !== undefined || body.projects !== undefined || body.metadata !== undefined) {
     const [current] = await db.select({ metadata: agents.metadata }).from(agents).where(eq(agents.id, agentId)).limit(1);
@@ -135,6 +152,10 @@ app.patch("/me", authMiddleware, async (c) => {
 app.put("/me/status", authMiddleware, async (c) => {
   const agentId = c.get("agentId");
   const body = await c.req.json<{ text: string | null }>();
+
+  if (body.text !== undefined && body.text !== null && typeof body.text === "string" && body.text.length > 500) {
+    return c.json({ error: "status text must not exceed 500 characters", code: "INVALID_FIELD" }, 400);
+  }
 
   const [current] = await db.select({ metadata: agents.metadata }).from(agents).where(eq(agents.id, agentId)).limit(1);
   const meta = { ...((current?.metadata ?? {}) as Record<string, unknown>) };
