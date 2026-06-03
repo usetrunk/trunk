@@ -9477,6 +9477,69 @@ describe("Hono API behavior", () => {
     expect(result.labels).toEqual([]);
   });
 
+  // --- Contacts: blocked list, tags by-tag, tags/all ---
+
+  it("blockedContacts returns the blocked list with names", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.blockContact(beta.agent_id, "spammy");
+
+    const result = await alphaClient.blockedContacts();
+    expect(result.count).toBe(1);
+    expect(result.blocked[0]).toMatchObject({
+      agent_id: beta.agent_id,
+      reason: "spammy",
+    });
+    expect(result.blocked[0].blocked_at).toBeDefined();
+  });
+
+  it("blockedContacts returns empty when no contacts are blocked", async () => {
+    const { alphaClient } = await registerPair();
+    const result = await alphaClient.blockedContacts();
+    expect(result.blocked).toEqual([]);
+    expect(result.count).toBe(0);
+  });
+
+  it("contactsByTag returns contacts with the specified tag", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.addContactTag(beta.agent_id, "teammate");
+
+    const result = await alphaClient.contactsByTag("teammate");
+    expect(result.contacts.length).toBe(1);
+    expect(result.contacts[0].agent_id).toBe(beta.agent_id);
+  });
+
+  it("contactsByTag returns empty for unused tag", async () => {
+    const { alphaClient } = await registerPair();
+    const result = await alphaClient.contactsByTag("nonexistent");
+    expect(result.contacts).toEqual([]);
+  });
+
+  it("allContactTags returns all tags with counts", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const gamma = await createClient().register({ name: "gamma", owner: "Tester" });
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    await alphaClient.addContactTag(beta.agent_id, "dev");
+    await alphaClient.addContactTag(gamma.agent_id, "dev");
+    await alphaClient.addContactTag(beta.agent_id, "priority");
+
+    const result = await alphaClient.allContactTags();
+    const devTag = result.tags.find((t) => t.tag === "dev");
+    const prioTag = result.tags.find((t) => t.tag === "priority");
+    expect(devTag?.count).toBe(2);
+    expect(prioTag?.count).toBe(1);
+  });
+
+  it("allContactTags returns empty when no tags exist", async () => {
+    const { alphaClient } = await registerPair();
+    const result = await alphaClient.allContactTags();
+    expect(result.tags).toEqual([]);
+  });
+
   // --- Additional audit log filter edge cases ---
 
   it("auditLog combines action and target_type filters", async () => {
