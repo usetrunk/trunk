@@ -69,6 +69,13 @@ app.post("/room/:roomId", requireRoomMember(), async (c) => {
 
 app.get("/room/:roomId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const roomId = c.req.param("roomId");
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
@@ -294,6 +301,13 @@ app.post("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
 
 app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const workspaceId = c.req.param("workspaceId");
   const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
 
@@ -473,6 +487,13 @@ app.post("/:contactId", async (c) => {
 // List documents for a contact pair
 app.get("/:contactId", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const contactId = c.req.param("contactId");
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),

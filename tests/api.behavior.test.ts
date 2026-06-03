@@ -10186,6 +10186,16 @@ describe("Hono API behavior", () => {
     expect(body.code).toBe("VALIDATION_ERROR");
   });
 
+  it("rooms list endpoint includes rate limit headers", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/rooms", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+  });
+
   // --- Attachment CRUD tests ---
 
   it("uploads an attachment and retrieves it", async () => {
