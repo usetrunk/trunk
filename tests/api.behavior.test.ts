@@ -12383,6 +12383,110 @@ describe("Hono API behavior", () => {
     expect(body.code).toBe("INVALID_FIELD");
   });
 
+  it("task create rejects description exceeding 5000 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "desc-test", contact_id: beta.agent_id, description: "x".repeat(5001) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("description");
+  });
+
+  it("task create rejects group exceeding 200 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "group-test", contact_id: beta.agent_id, group: "g".repeat(201) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("group");
+  });
+
+  it("task create rejects context_ref exceeding 500 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "ctx-test", contact_id: beta.agent_id, context_ref: "c".repeat(501) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("context_ref");
+  });
+
+  it("task update rejects description exceeding 5000 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "update-desc-test", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ description: "x".repeat(5001) }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("task update rejects group exceeding 200 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "update-group-test", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ group: "g".repeat(201) }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("label-bulk rejects label exceeding 50 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "test" } });
+
+    const res = await app.request("/messages/label-bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ message_ids: [msg.id], label: "x".repeat(51) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("label");
+  });
+
   it("projects array rejects items exceeding 100 characters", async () => {
     const anon = createClient();
     const agent = await anon.register({ name: "projects-test" });

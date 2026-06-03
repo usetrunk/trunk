@@ -1402,6 +1402,9 @@ app.post("/label-bulk", async (c) => {
   if (!body.label || typeof body.label !== "string") {
     return c.json({ error: "label is required", code: "MISSING_FIELD" }, 400);
   }
+  if (body.label.length > 50) {
+    return c.json({ error: "label must be 50 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
   if (body.message_ids.length > 100) {
     return c.json({ error: "Cannot label more than 100 messages at once", code: "VALIDATION_ERROR" }, 400);
   }

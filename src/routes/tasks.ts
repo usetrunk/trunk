@@ -85,6 +85,9 @@ app.post("/", async (c) => {
 
   if (!body.title) return c.json({ error: "title is required", code: "MISSING_FIELD" }, 400);
   if (body.title.length > 500) return c.json({ error: "title must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
+  if (body.description && body.description.length > 5000) return c.json({ error: "description must be 5000 characters or fewer", code: "INVALID_FIELD" }, 400);
+  if (body.group && body.group.length > 200) return c.json({ error: "group must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
+  if (body.context_ref && body.context_ref.length > 500) return c.json({ error: "context_ref must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (!body.contact_id && !body.room_id && !body.workspace_id) return c.json({ error: "contact_id, room_id, or workspace_id is required", code: "MISSING_FIELD" }, 400);
   if (body.priority && !isValidPriority(body.priority)) {
     return c.json({ error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(", ")}`, code: "INVALID_FIELD" }, 400);
@@ -342,6 +345,15 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
   if (body.title !== undefined && body.title.length > 500) {
     return c.json({ error: "title must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
+  if (body.description !== undefined && body.description !== null && body.description.length > 5000) {
+    return c.json({ error: "description must be 5000 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.group !== undefined && body.group !== null && body.group.length > 200) {
+    return c.json({ error: "group must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.context_ref !== undefined && body.context_ref !== null && body.context_ref.length > 500) {
+    return c.json({ error: "context_ref must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
   if (body.depends_on !== undefined) {
     if (!Array.isArray(body.depends_on)) {
       return c.json({ error: "depends_on must be an array", code: "INVALID_FIELD" }, 400);
@@ -427,7 +439,8 @@ app.get("/gantt/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requi
     .select()
     .from(tasks)
     .where(eq(tasks.scope, scope))
-    .orderBy(tasks.sequence, tasks.createdAt);
+    .orderBy(tasks.sequence, tasks.createdAt)
+    .limit(500);
 
   const ownerIds = [...new Set(allTasks.map(t => t.owner).filter(Boolean))] as string[];
   const ownerRows = ownerIds.length > 0

@@ -632,16 +632,18 @@ app.get("/me/analytics", authMiddleware, async (c) => {
   const since = new Date();
   since.setDate(since.getDate() - days);
 
-  // Get all messages in the window
+  // Get messages in the window (capped to prevent unbounded memory usage)
   const sent = await db
     .select()
     .from(messages)
-    .where(and(eq(messages.fromAgent, agentId), gte(messages.createdAt, since)));
+    .where(and(eq(messages.fromAgent, agentId), gte(messages.createdAt, since)))
+    .limit(10000);
 
   const received = await db
     .select()
     .from(messages)
-    .where(and(eq(messages.toAgent, agentId), gte(messages.createdAt, since)));
+    .where(and(eq(messages.toAgent, agentId), gte(messages.createdAt, since)))
+    .limit(10000);
 
   // Volume by day
   const volumeByDay: Record<string, { sent: number; received: number }> = {};
