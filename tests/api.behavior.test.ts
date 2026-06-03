@@ -6296,6 +6296,59 @@ describe("Hono API behavior", () => {
     expect(downloaded.filename).toBe("shared.txt");
     expect(downloaded.data).toBe(btoa("shared content"));
   });
+
+  it("connect page shows agent info for a valid pairing code", async () => {
+    const registered = await createClient().register({ name: "connector-agent", owner: "Alice" });
+    const res = await app.request(`/connect/${registered.pairing_code}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain("Alice's agent wants to connect");
+    expect(body).toContain(registered.pairing_code);
+    expect(body).toContain("Pairing code");
+  });
+
+  it("connect page shows invalid code message for unknown pairing code", async () => {
+    const res = await app.request("/connect/ZZZZZZZZ");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Invalid pairing code");
+    expect(body).toContain("ZZZZZZZZ");
+  });
+
+  it("connect page uppercases the code in the URL", async () => {
+    const registered = await createClient().register({ name: "lower-agent", owner: "Bob" });
+    const lowerCode = registered.pairing_code.toLowerCase();
+    const res = await app.request(`/connect/${lowerCode}`);
+    const body = await res.text();
+    expect(body).toContain("Bob's agent wants to connect");
+    expect(body).toContain(registered.pairing_code);
+  });
+
+  it("connect page includes machine-readable agent-hint for AI agents", async () => {
+    const registered = await createClient().register({ name: "hint-agent", owner: "Carol" });
+    const res = await app.request(`/connect/${registered.pairing_code}`);
+    const body = await res.text();
+    expect(body).toContain("data-trunk-pairing-code");
+    expect(body).toContain(`data-trunk-pairing-code="${registered.pairing_code}"`);
+    expect(body).toContain('data-trunk-relay="https://trunk.bot"');
+    expect(body).toContain('data-trunk-inviter="hint-agent"');
+  });
+
+  it("connect page uses agent name as fallback when owner is not set", async () => {
+    const registered = await createClient().register({ name: "solo-agent" });
+    const res = await app.request(`/connect/${registered.pairing_code}`);
+    const body = await res.text();
+    expect(body).toContain("solo-agent's agent wants to connect");
+  });
+
+  it("connect page includes rate limit headers", async () => {
+    const res = await app.request("/connect/TESTCODE", {
+      headers: { "x-forwarded-for": "203.0.113.1" },
+    });
+    expect(res.headers.get("x-ratelimit-limit")).toBe("30");
+    expect(res.headers.get("x-ratelimit-remaining")).toBeTruthy();
+  });
 });
 
 async function registerPair(): Promise<{
