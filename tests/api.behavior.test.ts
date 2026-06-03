@@ -2909,6 +2909,54 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("Retry-After")).toBeTruthy();
   });
 
+  it("rate limits pairing attempts at 20/min", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    // Exhaust pairing rate limit (20 calls with invalid codes)
+    for (let i = 0; i < 20; i++) {
+      const res = await app.request("/contacts/pair", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ code: `FAKE${i}XX` }),
+      });
+      // These should return 404 (code not found), not 429
+      expect(res.status).not.toBe(429);
+    }
+
+    // 21st attempt should be rate limited
+    const res = await app.request("/contacts/pair", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ code: "FAKE21XX" }),
+    });
+    expect(res.status).toBe(429);
+    const body = await res.json();
+    expect(body.code).toBe("RATE_LIMITED");
+  });
+
+  it("rate limits connect page lookups by IP", async () => {
+    // Exhaust connect rate limit (30 per minute per IP)
+    for (let i = 0; i < 30; i++) {
+      const res = await app.request(`/connect/CODE${i}`, {
+        headers: { "x-forwarded-for": "198.51.100.42" },
+      });
+      expect(res.status).toBe(200);
+    }
+
+    // 31st lookup should be rate limited
+    const res = await app.request("/connect/CODE31", {
+      headers: { "x-forwarded-for": "198.51.100.42" },
+    });
+    expect(res.status).toBe(429);
+  });
+
   it("rate limits attachment uploads at 30/min", async () => {
     const alpha = await createClient().register({ name: "alpha" });
     const client = createClient(alpha.secret);

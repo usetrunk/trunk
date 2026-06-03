@@ -4,6 +4,7 @@ import { agents, contacts, workspaces, workspaceContacts, blockedContacts, conta
 import { eq, or, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -13,6 +14,13 @@ app.use("/*", authMiddleware);
 // Pair with another agent or workspace via pairing code
 app.post("/pair", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`pair:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ code: string; alias?: string }>();
 
   if (!body.code) {

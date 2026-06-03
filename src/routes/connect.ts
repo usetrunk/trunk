@@ -3,10 +3,18 @@ import { html } from "hono/html";
 import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 import { eq } from "drizzle-orm";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 
 const app = new Hono();
 
 app.get("/:code", async (c) => {
+  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const rateLimit = await checkRateLimit(`connect:${ip}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.text("Too many requests. Please try again later.", 429);
+  }
+
   const code = c.req.param("code").toUpperCase();
 
   // Look up who owns this pairing code
