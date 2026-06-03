@@ -27,8 +27,13 @@ app.post("/register", async (c) => {
   if (body.name.length > 100) {
     return c.json({ error: "name must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
   }
-  if (body.owner !== undefined && body.owner.length > 100) {
-    return c.json({ error: "owner must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
+  if (body.owner !== undefined) {
+    if (typeof body.owner !== "string" || body.owner.trim().length === 0) {
+      return c.json({ error: "owner must not be empty", code: "INVALID_FIELD" }, 400);
+    }
+    if (body.owner.length > 100) {
+      return c.json({ error: "owner must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
+    }
   }
   if (body.webhook_url !== undefined && body.webhook_url !== null) {
     try { new URL(body.webhook_url); } catch { return c.json({ error: "Invalid webhook URL", code: "INVALID_FIELD" }, 400); }
@@ -112,8 +117,13 @@ app.patch("/me", authMiddleware, async (c) => {
       return c.json({ error: "name must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
     }
   }
-  if (body.owner !== undefined && body.owner.length > 100) {
-    return c.json({ error: "owner must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
+  if (body.owner !== undefined) {
+    if (typeof body.owner !== "string" || body.owner.trim().length === 0) {
+      return c.json({ error: "owner must not be empty", code: "INVALID_FIELD" }, 400);
+    }
+    if (body.owner.length > 100) {
+      return c.json({ error: "owner must not exceed 100 characters", code: "INVALID_FIELD" }, 400);
+    }
   }
 
   if (body.webhook_url !== undefined && body.webhook_url !== null) {

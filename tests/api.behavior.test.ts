@@ -8217,6 +8217,56 @@ describe("Hono API behavior", () => {
     await expect(client.updateMe({ owner: "x".repeat(101) })).rejects.toMatchObject({ status: 400 });
   });
 
+  it("rejects registration with empty string owner", async () => {
+    await expect(createClient().register({ name: "valid", owner: "" })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects registration with whitespace-only owner", async () => {
+    await expect(createClient().register({ name: "valid", owner: "   " })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects updateMe with empty string owner", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+    await expect(client.updateMe({ owner: "" })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects updateMe with whitespace-only owner", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+    await expect(client.updateMe({ owner: "   " })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("accepts registration with name at exactly 100 characters", async () => {
+    const result = await createClient().register({ name: "x".repeat(100) });
+    expect(result.agent_id).toBeDefined();
+  });
+
+  it("accepts updateMe with name at exactly 100 characters", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+    const result = await client.updateMe({ name: "x".repeat(100) });
+    expect(result.name).toBe("x".repeat(100));
+  });
+
+  it("accepts registration with owner at exactly 100 characters", async () => {
+    const result = await createClient().register({ name: "valid", owner: "x".repeat(100) });
+    expect(result.agent_id).toBeDefined();
+  });
+
+  it("accepts updateMe with owner at exactly 100 characters", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+    const result = await client.updateMe({ owner: "x".repeat(100) });
+    expect(result.owner).toBe("x".repeat(100));
+  });
+
+  it("rejects pair with empty code", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+    await expect(client.pair({ code: "" })).rejects.toMatchObject({ status: 400 });
+  });
+
   it("rejects workspace creation with owner exceeding 100 characters", async () => {
     const alpha = await createClient().register({ name: "ws-owner-val", owner: "Frank" });
 
