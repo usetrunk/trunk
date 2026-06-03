@@ -3302,9 +3302,13 @@ describe("Hono API behavior", () => {
     await expect(betaClient.inbox()).resolves.toMatchObject({
       messages: [expect.objectContaining({ id: sent.id, payload: { content: "Still lands in inbox." } })],
     });
-    expect(testState["audit_events"]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ action: "message.push_failed", targetId: sent.id }),
-    ]));
+    const pushFailedEvent = testState["audit_events"].find(
+      (e: any) => e.action === "message.push_failed" && e.targetId === sent.id
+    );
+    expect(pushFailedEvent).toBeDefined();
+    // Verify audit logs error_type (class name) not raw error message
+    expect(pushFailedEvent.metadata.error_type).toBe("Error");
+    expect(pushFailedEvent.metadata.error_type).not.toContain("push worker down");
   });
 
   it("stores shared facts through context CRUD for either contact", async () => {
@@ -5884,6 +5888,47 @@ describe("Hono API behavior", () => {
     });
 
     await expect(alphaClient.react(sent.id, "x".repeat(33))).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("react rejects emoji with control characters", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+
+    // Null byte
+    await expect(alphaClient.react(sent.id, "👍\x00")).rejects.toMatchObject({ status: 400 });
+    // Tab character
+    await expect(alphaClient.react(sent.id, "\t")).rejects.toMatchObject({ status: 400 });
+    // Newline
+    await expect(alphaClient.react(sent.id, "\n")).rejects.toMatchObject({ status: 400 });
+    // DEL character
+    await expect(alphaClient.react(sent.id, "\x7f")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("react allows valid text shortcodes and unicode emoji", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "test" },
+    });
+
+    // Text shortcode
+    const r1 = await alphaClient.react(sent.id, "thumbsup");
+    expect(r1.emoji).toBe("thumbsup");
+
+    // Unicode emoji
+    const r2 = await alphaClient.react(sent.id, "🎉");
+    expect(r2.emoji).toBe("🎉");
+
+    // Multi-codepoint emoji
+    const r3 = await alphaClient.react(sent.id, "👨‍👩‍👧‍👦");
+    expect(r3.emoji).toBe("👨‍👩‍👧‍👦");
   });
 
   it("unreact removes a reaction", async () => {
