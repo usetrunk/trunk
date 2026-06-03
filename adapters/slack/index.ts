@@ -105,6 +105,12 @@ export async function handleSlackEvent(request: Request): Promise<Response> {
   const timestamp = request.headers.get("X-Slack-Request-Timestamp") || "";
   const signature = request.headers.get("X-Slack-Signature") || "";
 
+  // Reject requests with timestamps older than 5 minutes (replay protection)
+  const requestAge = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
+  if (!timestamp || Number.isNaN(requestAge) || requestAge > 300) {
+    return new Response("Request too old", { status: 401 });
+  }
+
   // Verify request is from Slack
   if (!await verifySlackRequest(rawBody, timestamp, signature)) {
     return new Response("Invalid signature", { status: 401 });

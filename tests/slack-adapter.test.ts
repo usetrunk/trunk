@@ -26,13 +26,17 @@ vi.stubGlobal("fetch", mockFetch);
 // Now import — adapter reads env vars at module scope
 import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget } from "../adapters/slack/index.js";
 
+function currentTimestamp(): string {
+  return String(Math.floor(Date.now() / 1000));
+}
+
 function signSlackRequest(body: string, timestamp: string, secret = TEST_SIGNING_SECRET): string {
   const baseString = `v0:${timestamp}:${body}`;
   return `v0=${createHmac("sha256", secret).update(baseString).digest("hex")}`;
 }
 
 function slackRequest(body: string, timestamp?: string, signature?: string): Request {
-  const ts = timestamp || String(Math.floor(Date.now() / 1000));
+  const ts = timestamp || currentTimestamp();
   const sig = signature || signSlackRequest(body, ts);
   return new Request("https://example.com/slack/events", {
     method: "POST",
@@ -60,16 +64,37 @@ describe("Slack adapter", () => {
     mockFetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
   });
 
-  // --- Signature verification ---
+  // --- Replay protection ---
 
-  describe("signature verification", () => {
-    it("rejects requests with invalid signature", async () => {
+  describe("replay protection", () => {
+    it("rejects requests with timestamps older than 5 minutes", async () => {
+      const staleTimestamp = String(Math.floor(Date.now() / 1000) - 301); // 5 min + 1 sec ago
       const body = JSON.stringify({ type: "url_verification", challenge: "abc" });
-      const req = slackRequest(body, "1234567890", "v0=invalid_signature_here");
+      const sig = signSlackRequest(body, staleTimestamp);
+      const req = slackRequest(body, staleTimestamp, sig);
       const res = await handleSlackEvent(req);
 
       expect(res.status).toBe(401);
-      expect(await res.text()).toBe("Invalid signature");
+      expect(await res.text()).toBe("Request too old");
+    });
+
+    it("accepts requests with timestamps within 5 minutes", async () => {
+      const freshTimestamp = String(Math.floor(Date.now() / 1000) - 120); // 2 min ago
+      const body = JSON.stringify({ type: "url_verification", challenge: "fresh" });
+      const sig = signSlackRequest(body, freshTimestamp);
+      const req = slackRequest(body, freshTimestamp, sig);
+      const res = await handleSlackEvent(req);
+
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects requests with non-numeric timestamps", async () => {
+      const body = JSON.stringify({ type: "url_verification", challenge: "abc" });
+      const req = slackRequest(body, "not-a-number", "v0=anything");
+      const res = await handleSlackEvent(req);
+
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe("Request too old");
     });
 
     it("rejects requests with missing timestamp header", async () => {
@@ -84,12 +109,28 @@ describe("Slack adapter", () => {
       });
       const res = await handleSlackEvent(req);
       expect(res.status).toBe(401);
+      expect(await res.text()).toBe("Request too old");
+    });
+  });
+
+  // --- Signature verification ---
+
+  describe("signature verification", () => {
+    it("rejects requests with invalid signature", async () => {
+      const ts = currentTimestamp();
+      const body = JSON.stringify({ type: "url_verification", challenge: "abc" });
+      const req = slackRequest(body, ts, "v0=invalid_signature_here");
+      const res = await handleSlackEvent(req);
+
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe("Invalid signature");
     });
 
     it("rejects requests with wrong signing secret", async () => {
+      const ts = currentTimestamp();
       const body = JSON.stringify({ type: "url_verification", challenge: "abc" });
-      const sig = signSlackRequest(body, "1234567890", "wrong_secret");
-      const req = slackRequest(body, "1234567890", sig);
+      const sig = signSlackRequest(body, ts, "wrong_secret");
+      const req = slackRequest(body, ts, sig);
       const res = await handleSlackEvent(req);
 
       expect(res.status).toBe(401);
@@ -97,7 +138,7 @@ describe("Slack adapter", () => {
 
     it("accepts requests with valid signature", async () => {
       const body = JSON.stringify({ type: "url_verification", challenge: "test123" });
-      const req = slackRequest(body, "1234567890");
+      const req = slackRequest(body);
       const res = await handleSlackEvent(req);
 
       expect(res.status).toBe(200);
@@ -461,8 +502,6 @@ describe("Slack adapter", () => {
 
   describe("channel map parsing", () => {
     it("module loaded channel map from SLACK_CHANNEL_AGENT_MAP env var", async () => {
-      // The default channelMap parameter in resolveSlackTarget uses the module-level constant.
-      // Since we set env vars via vi.hoisted before import, the map should be populated.
       expect(resolveSlackTarget("C_GENERAL", undefined)).toBe("agent-general");
       expect(resolveSlackTarget("C_SUPPORT", undefined)).toBe("agent-support");
       expect(resolveSlackTarget("C_GENERAL", "1710000.0001")).toBe("agent-thread-override");
