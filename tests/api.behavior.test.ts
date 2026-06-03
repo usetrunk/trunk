@@ -5141,6 +5141,30 @@ describe("Hono API behavior", () => {
     expect(forwarded.status).toBe("delivered");
   });
 
+  it("forward rejects when target has blocked the forwarder", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const gamma = await createClient().register({ name: "gamma" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    // Alpha sends a message to beta
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Will try to forward" },
+    });
+
+    // Gamma blocks alpha
+    await gammaClient.blockContact(alpha.agent_id);
+
+    // Alpha tries to forward to gamma — should be rejected
+    await expect(alphaClient.forward(sent.id, gamma.agent_id)).rejects.toMatchObject({ status: 403 });
+  });
+
   // --- Message Reactions ---
 
   it("react adds an emoji reaction to a message", async () => {
@@ -9317,6 +9341,143 @@ describe("Hono API behavior", () => {
     const result = await alphaClient.auditLog({ before: "2000-01-01T00:00:00Z" });
     expect(result.events).toEqual([]);
   });
+
+  // --- Bulk operations: read-bulk, delete-bulk, label-bulk ---
+
+  it("readBulk marks multiple messages as read", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "bulk read 1" } });
+    const msg2 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "bulk read 2" } });
+
+    const result = await betaClient.readBulk([msg1.id, msg2.id]);
+    expect(result.ok).toBe(true);
+    expect(result.marked).toBe(2);
+  });
+
+  it("readBulk ignores messages not addressed to the caller", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "not yours" } });
+
+    // Alpha tries to mark as read a message addressed to beta
+    const result = await alphaClient.readBulk([msg.id]);
+    expect(result.marked).toBe(0);
+  });
+
+  it("readBulk rejects empty message_ids array", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(alphaClient.readBulk([])).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("deleteBulk soft-deletes multiple sent messages", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "bulk del 1" } });
+    const msg2 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "bulk del 2" } });
+
+    const result = await alphaClient.deleteBulk([msg1.id, msg2.id]);
+    expect(result.ok).toBe(true);
+    expect(result.deleted).toBe(2);
+  });
+
+  it("deleteBulk only deletes messages sent by the caller", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "not beta's" } });
+
+    // Beta tries to delete alpha's sent message
+    const result = await betaClient.deleteBulk([msg.id]);
+    expect(result.deleted).toBe(0);
+  });
+
+  it("deleteBulk rejects empty array", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(alphaClient.deleteBulk([])).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("labelBulk adds a label to multiple messages", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "label me 1" } });
+    const msg2 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "label me 2" } });
+
+    const result = await alphaClient.labelBulk([msg1.id, msg2.id], "important");
+    expect(result.ok).toBe(true);
+    expect(result.labeled).toBe(2);
+  });
+
+  it("labelBulk rejects missing label", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "test" } });
+
+    const res = await app.request("/messages/label-bulk", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ message_ids: [msg.id] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("labelBulk rejects empty message_ids", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(alphaClient.labelBulk([], "urgent")).rejects.toMatchObject({ status: 400 });
+  });
+
+  // --- Messages by label and all labels ---
+
+  it("messagesByLabel returns messages with the specified label", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "labeled msg" } });
+    await alphaClient.addLabel(msg.id, "priority");
+
+    const result = await alphaClient.messagesByLabel("priority");
+    expect(result.messages.length).toBe(1);
+  });
+
+  it("messagesByLabel returns empty for unused label", async () => {
+    const { alphaClient } = await registerPair();
+    const result = await alphaClient.messagesByLabel("nonexistent");
+    expect(result.messages).toEqual([]);
+  });
+
+  it("allLabels returns all labels with counts", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const msg1 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "label test 1" } });
+    const msg2 = await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "label test 2" } });
+
+    await alphaClient.addLabel(msg1.id, "urgent");
+    await alphaClient.addLabel(msg2.id, "urgent");
+    await alphaClient.addLabel(msg1.id, "review");
+
+    const result = await alphaClient.allLabels();
+    const urgentLabel = result.labels.find((l) => l.label === "urgent");
+    const reviewLabel = result.labels.find((l) => l.label === "review");
+    expect(urgentLabel?.count).toBe(2);
+    expect(reviewLabel?.count).toBe(1);
+  });
+
+  it("allLabels returns empty when no labels exist", async () => {
+    const { alphaClient } = await registerPair();
+    const result = await alphaClient.allLabels();
+    expect(result.labels).toEqual([]);
+  });
+
+  // --- Additional audit log filter edge cases ---
 
   it("auditLog combines action and target_type filters", async () => {
     const { alpha, beta, alphaClient } = await registerPair();

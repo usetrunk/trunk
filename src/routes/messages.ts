@@ -1447,6 +1447,10 @@ app.post("/:id/forward", async (c) => {
     return c.json({ error: "Not a contact. Pair first.", code: "NOT_MEMBER" }, 403);
   }
 
+  if (await isBlocked(agentId, body.to)) {
+    return c.json({ error: "Contact is blocked", code: "BLOCKED" }, 403);
+  }
+
   const existing = await findIdempotentMessage(agentId, idempotencyKey);
   if (existing) {
     return c.json(receipt(existing), 200);
