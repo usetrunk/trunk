@@ -12757,6 +12757,220 @@ describe("Hono API behavior", () => {
     expect(body.code).toBe("INVALID_FIELD");
   });
 
+  it("task create rejects invalid contact_id format", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "uuid-val-alpha" });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "bad-uuid", contact_id: "not-a-uuid" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("contact_id");
+  });
+
+  it("task create rejects invalid room_id format", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "uuid-val-room" });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "bad-room", room_id: ";;;drop-table" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("room_id");
+  });
+
+  it("task create rejects invalid workspace_id format", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "uuid-val-ws" });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "bad-ws", workspace_id: "xyz" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("workspace_id");
+  });
+
+  it("task create rejects invalid owner format", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "bad-owner", contact_id: beta.agent_id, owner: "not-uuid" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("owner");
+  });
+
+  it("task create rejects oversized metadata", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "big-meta", contact_id: beta.agent_id, metadata: { data: "x".repeat(11000) } }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(body.error).toContain("metadata");
+  });
+
+  it("task create rejects invalid sequence value", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "bad-seq", contact_id: beta.agent_id, sequence: -1 }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("sequence");
+  });
+
+  it("task create rejects non-finite estimate value", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "bad-est", contact_id: beta.agent_id, estimate: 2000000 }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("estimate");
+  });
+
+  it("task update rejects oversized metadata", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "meta-update", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ metadata: { data: "x".repeat(11000) } }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(body.error).toContain("metadata");
+  });
+
+  it("task update rejects invalid owner format", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "owner-update", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ owner: "not-a-uuid" }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("owner");
+  });
+
+  it("task update rejects invalid sequence value", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "seq-update", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ sequence: -5 }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("sequence");
+  });
+
+  it("task update rejects invalid estimate value", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "est-update", contact_id: beta.agent_id }),
+    });
+    const task = await createRes.json();
+
+    const updateRes = await app.request(`/tasks/${beta.agent_id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ estimate: -1 }),
+    });
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("estimate");
+  });
+
+  it("task create accepts valid metadata, sequence, and estimate", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({
+        title: "valid-fields",
+        contact_id: beta.agent_id,
+        metadata: { key: "value" },
+        sequence: 5,
+        estimate: 8,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.sequence).toBe(5);
+    expect(body.estimate).toBe(8);
+  });
+
   it("label-bulk rejects label exceeding 50 characters", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

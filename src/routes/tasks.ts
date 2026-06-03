@@ -93,8 +93,21 @@ app.post("/", async (c) => {
   if (body.group && body.group.length > 200) return c.json({ error: "group must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (body.context_ref && body.context_ref.length > 500) return c.json({ error: "context_ref must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (!body.contact_id && !body.room_id && !body.workspace_id) return c.json({ error: "contact_id, room_id, or workspace_id is required", code: "MISSING_FIELD" }, 400);
+  if (body.contact_id && !isValidUUID(body.contact_id)) return c.json({ error: "Invalid contact_id format", code: "INVALID_INPUT" }, 400);
+  if (body.room_id && !isValidUUID(body.room_id)) return c.json({ error: "Invalid room_id format", code: "INVALID_INPUT" }, 400);
+  if (body.workspace_id && !isValidUUID(body.workspace_id)) return c.json({ error: "Invalid workspace_id format", code: "INVALID_INPUT" }, 400);
+  if (body.owner && !isValidUUID(body.owner)) return c.json({ error: "Invalid owner format", code: "INVALID_INPUT" }, 400);
   if (body.priority && !isValidPriority(body.priority)) {
     return c.json({ error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+  if (body.metadata && JSON.stringify(body.metadata).length > 10000) {
+    return c.json({ error: "metadata exceeds 10KB limit", code: "VALIDATION_ERROR" }, 400);
+  }
+  if (body.sequence !== undefined && (typeof body.sequence !== "number" || !Number.isFinite(body.sequence) || body.sequence < 0 || body.sequence > 1_000_000)) {
+    return c.json({ error: "sequence must be a finite number between 0 and 1000000", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.estimate !== undefined && (typeof body.estimate !== "number" || !Number.isFinite(body.estimate) || body.estimate < 0 || body.estimate > 1_000_000)) {
+    return c.json({ error: "estimate must be a finite number between 0 and 1000000", code: "INVALID_FIELD" }, 400);
   }
   if (body.depends_on) {
     if (!Array.isArray(body.depends_on)) {
@@ -357,6 +370,18 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
   }
   if (body.context_ref !== undefined && body.context_ref !== null && body.context_ref.length > 500) {
     return c.json({ error: "context_ref must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.owner !== undefined && body.owner !== null && body.owner !== "" && !isValidUUID(body.owner)) {
+    return c.json({ error: "Invalid owner format", code: "INVALID_INPUT" }, 400);
+  }
+  if (body.metadata !== undefined && JSON.stringify(body.metadata).length > 10000) {
+    return c.json({ error: "metadata exceeds 10KB limit", code: "VALIDATION_ERROR" }, 400);
+  }
+  if (body.sequence !== undefined && body.sequence !== null && (typeof body.sequence !== "number" || !Number.isFinite(body.sequence) || body.sequence < 0 || body.sequence > 1_000_000)) {
+    return c.json({ error: "sequence must be a finite number between 0 and 1000000", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.estimate !== undefined && body.estimate !== null && (typeof body.estimate !== "number" || !Number.isFinite(body.estimate) || body.estimate < 0 || body.estimate > 1_000_000)) {
+    return c.json({ error: "estimate must be a finite number between 0 and 1000000", code: "INVALID_FIELD" }, 400);
   }
   if (body.depends_on !== undefined) {
     if (!Array.isArray(body.depends_on)) {
