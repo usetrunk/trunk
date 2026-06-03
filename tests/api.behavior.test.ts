@@ -14979,6 +14979,239 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // --- Hardening: cross-agent authorization for delete, edit, read, ack, and labels ---
+
+  it("non-sender cannot delete another agent's message", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "del-a" });
+    const beta = await anon.register({ name: "del-b" });
+    const gamma = await anon.register({ name: "del-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "delete target" },
+    });
+
+    // Recipient cannot delete the message (only sender can)
+    await expect(betaClient.deleteMessage(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Third party cannot delete the message
+    await gammaClient.pair({ code: alpha.pairing_code });
+    await expect(gammaClient.deleteMessage(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Sender can delete
+    const result = await alphaClient.deleteMessage(sent.id);
+    expect(result.ok).toBe(true);
+  });
+
+  it("non-sender cannot edit another agent's message", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "edit-sender-a" });
+    const beta = await anon.register({ name: "edit-sender-b" });
+    const gamma = await anon.register({ name: "edit-sender-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "original content" },
+    });
+
+    // Recipient cannot edit the message (only sender can)
+    await expect(betaClient.editMessage(sent.id, { content: "hacked by beta" })).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Third party cannot edit the message
+    await gammaClient.pair({ code: alpha.pairing_code });
+    await expect(gammaClient.editMessage(sent.id, { content: "hacked by gamma" })).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Sender can edit
+    const edited = await alphaClient.editMessage(sent.id, { content: "edited by sender" });
+    expect(edited.payload).toMatchObject({ content: "edited by sender" });
+  });
+
+  it("non-recipient cannot mark another agent's message as read", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "read-auth-a" });
+    const beta = await anon.register({ name: "read-auth-b" });
+    const gamma = await anon.register({ name: "read-auth-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+    const betaClient = createClient(beta.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "read target" },
+    });
+
+    // Sender cannot mark own sent message as read (only recipient can)
+    await expect(alphaClient.markRead(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Third party cannot mark the message as read
+    await gammaClient.pair({ code: alpha.pairing_code });
+    await expect(gammaClient.markRead(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Recipient can mark as read
+    const result = await betaClient.markRead(sent.id);
+    expect(result.ok).toBe(true);
+  });
+
+  it("non-recipient cannot ack another agent's message", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ack-auth-a" });
+    const beta = await anon.register({ name: "ack-auth-b" });
+    const gamma = await anon.register({ name: "ack-auth-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+    const betaClient = createClient(beta.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "ack target" },
+    });
+
+    // Sender cannot ack own sent message
+    await expect(alphaClient.ack(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Third party cannot ack the message
+    await gammaClient.pair({ code: alpha.pairing_code });
+    await expect(gammaClient.ack(sent.id)).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Recipient can ack
+    const result = await betaClient.ack(sent.id);
+    expect(result.ok).toBe(true);
+  });
+
+  it("non-participant cannot add a label to another agent's message", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "label-auth-a" });
+    const beta = await anon.register({ name: "label-auth-b" });
+    const gamma = await anon.register({ name: "label-auth-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "label target" },
+    });
+
+    // Third party tries to label the message — should be rejected
+    await gammaClient.pair({ code: alpha.pairing_code });
+    await expect(gammaClient.addLabel(sent.id, "urgent")).rejects.toMatchObject({
+      status: 403,
+    });
+
+    // Sender can label
+    const label = await alphaClient.addLabel(sent.id, "urgent");
+    expect(label.label).toBe("urgent");
+  });
+
+  it("non-participant cannot remove a label from another agent's message", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "unlabel-auth-a" });
+    const beta = await anon.register({ name: "unlabel-auth-b" });
+    const gamma = await anon.register({ name: "unlabel-auth-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "unlabel target" },
+    });
+
+    // Sender labels the message
+    await alphaClient.addLabel(sent.id, "important");
+
+    // Third party tries to remove the label — should get 404 (no matching label for their agent)
+    await gammaClient.pair({ code: alpha.pairing_code });
+    await expect(gammaClient.removeLabel(sent.id, "important")).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // Sender can remove their own label
+    const result = await alphaClient.removeLabel(sent.id, "important");
+    expect(result.ok).toBe(true);
+  });
+
+  it("non-participant cannot view labels on another agent's message", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "viewlabel-a" });
+    const beta = await anon.register({ name: "viewlabel-b" });
+    const gamma = await anon.register({ name: "viewlabel-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "label view target" },
+    });
+    await alphaClient.addLabel(sent.id, "secret");
+
+    // Third party tries to view labels — should get 403
+    await gammaClient.pair({ code: alpha.pairing_code });
+    await expect(gammaClient.messageLabels(sent.id)).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+
+  it("non-recipient cannot reply to another agent's message", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "reply-auth-a" });
+    const beta = await anon.register({ name: "reply-auth-b" });
+    const gamma = await anon.register({ name: "reply-auth-spy" });
+    const alphaClient = createClient(alpha.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "reply target" },
+    });
+
+    // Third party tries to reply — should get 404 (only recipient can reply)
+    await gammaClient.pair({ code: alpha.pairing_code });
+    await expect(gammaClient.reply(sent.id, {
+      type: "response",
+      payload: { content: "intercepted reply" },
+    })).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
   // --- Task circular/self-dependency tests ---
 
   it("rejects task with self-referencing depends_on", async () => {
