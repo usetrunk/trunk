@@ -3,8 +3,8 @@ import { and, eq, desc, lt, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { sharedDocuments, sharedDocumentVersions } from "../db/schema.js";
 import { authMiddleware } from "../lib/auth.js";
-import { contactScope, roomScope, workspaceScope, verifyContactAccess, verifyRoomAccess } from "../lib/context.js";
-import { verifyWorkspaceAccess } from "../lib/workspace.js";
+import { contactScope, roomScope, workspaceScope, verifyContactAccess } from "../lib/context.js";
+import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middleware.js";
 import { audit } from "../lib/audit.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
@@ -19,7 +19,7 @@ app.use("/*", authMiddleware);
 
 // --- Room-scoped document endpoints (must be before /:contactId to avoid route conflicts) ---
 
-app.post("/room/:roomId", async (c) => {
+app.post("/room/:roomId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 
@@ -28,8 +28,6 @@ app.post("/room/:roomId", async (c) => {
   if (!rateLimit.ok) {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
-
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ name: string; body: string; content_type?: string }>();
   if (!body.name || !body.body) return c.json({ error: "name and body are required", code: "MISSING_FIELD" }, 400);
@@ -69,15 +67,13 @@ app.post("/room/:roomId", async (c) => {
   }, 201);
 });
 
-app.get("/room/:roomId", async (c) => {
+app.get("/room/:roomId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
   });
-
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const scope = roomScope(roomId);
   const conditions = [eq(sharedDocuments.scope, scope)];
@@ -112,12 +108,10 @@ app.get("/room/:roomId", async (c) => {
   });
 });
 
-app.get("/room/:roomId/:docId", async (c) => {
+app.get("/room/:roomId/:docId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
-
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db
     .select()
@@ -139,12 +133,10 @@ app.get("/room/:roomId/:docId", async (c) => {
   });
 });
 
-app.put("/room/:roomId/:docId", async (c) => {
+app.put("/room/:roomId/:docId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
-
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ body: string; name?: string }>();
   if (!body.body) return c.json({ error: "body is required", code: "MISSING_FIELD" }, 400);
@@ -194,12 +186,10 @@ app.put("/room/:roomId/:docId", async (c) => {
 });
 
 // Room document version history
-app.get("/room/:roomId/:docId/versions", async (c) => {
+app.get("/room/:roomId/:docId/versions", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
-
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
@@ -221,14 +211,12 @@ app.get("/room/:roomId/:docId/versions", async (c) => {
 });
 
 // Room document specific version
-app.get("/room/:roomId/:docId/versions/:version", async (c) => {
+app.get("/room/:roomId/:docId/versions/:version", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
   const version = parseInt(c.req.param("version"));
   if (isNaN(version) || version < 1) return c.json({ error: "Invalid version", code: "INVALID_INPUT" }, 400);
-
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== roomScope(roomId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
@@ -252,12 +240,10 @@ app.get("/room/:roomId/:docId/versions/:version", async (c) => {
   });
 });
 
-app.delete("/room/:roomId/:docId", async (c) => {
+app.delete("/room/:roomId/:docId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
-
-  if (!(await verifyRoomAccess(agentId, roomId))) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db
     .select()
@@ -277,7 +263,7 @@ app.delete("/room/:roomId/:docId", async (c) => {
 
 // --- Workspace-scoped document endpoints ---
 
-app.post("/workspace/:workspaceId", async (c) => {
+app.post("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
 
@@ -286,8 +272,6 @@ app.post("/workspace/:workspaceId", async (c) => {
   if (!rateLimit.ok) {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
-
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ name: string; body: string; content_type?: string }>();
   if (!body.name || !body.body) return c.json({ error: "name and body are required", code: "MISSING_FIELD" }, 400);
@@ -308,12 +292,10 @@ app.post("/workspace/:workspaceId", async (c) => {
   return c.json({ id: doc.id, name: doc.name, content_type: doc.contentType, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt }, 201);
 });
 
-app.get("/workspace/:workspaceId", async (c) => {
+app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const { limit, cursor } = parsePaginationQuery({ limit: c.req.query("limit"), cursor: c.req.query("cursor") });
-
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const scope = workspaceScope(workspaceId);
   const conditions = [eq(sharedDocuments.scope, scope)];
@@ -330,12 +312,10 @@ app.get("/workspace/:workspaceId", async (c) => {
   });
 });
 
-app.get("/workspace/:workspaceId/:docId", async (c) => {
+app.get("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
-
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
@@ -343,12 +323,10 @@ app.get("/workspace/:workspaceId/:docId", async (c) => {
   return c.json({ id: doc.id, name: doc.name, content_type: doc.contentType, body: doc.body, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt, updated_at: doc.updatedAt });
 });
 
-app.put("/workspace/:workspaceId/:docId", async (c) => {
+app.put("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
-
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const body = await c.req.json<{ body: string; name?: string }>();
   if (!body.body) return c.json({ error: "body is required", code: "MISSING_FIELD" }, 400);
@@ -369,12 +347,10 @@ app.put("/workspace/:workspaceId/:docId", async (c) => {
 });
 
 // Workspace document version history
-app.get("/workspace/:workspaceId/:docId/versions", async (c) => {
+app.get("/workspace/:workspaceId/:docId/versions", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
-
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
@@ -396,14 +372,12 @@ app.get("/workspace/:workspaceId/:docId/versions", async (c) => {
 });
 
 // Workspace document specific version
-app.get("/workspace/:workspaceId/:docId/versions/:version", async (c) => {
+app.get("/workspace/:workspaceId/:docId/versions/:version", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
   const version = parseInt(c.req.param("version"));
   if (isNaN(version) || version < 1) return c.json({ error: "Invalid version", code: "INVALID_INPUT" }, 400);
-
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
@@ -427,12 +401,10 @@ app.get("/workspace/:workspaceId/:docId/versions/:version", async (c) => {
   });
 });
 
-app.delete("/workspace/:workspaceId/:docId", async (c) => {
+app.delete("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
-
-  if (!(await verifyWorkspaceAccess(agentId, workspaceId))) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);

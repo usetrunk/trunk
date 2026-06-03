@@ -5,6 +5,7 @@ import { eq, and, desc, lt, or, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
 import { contactScope, verifyRoomAccess, resolveScopeAccess } from "../lib/context.js";
+import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middleware.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -161,7 +162,7 @@ app.get("/:contactId", async (c) => {
 });
 
 // List tasks for a room
-app.get("/room/:roomId", async (c) => {
+app.get("/room/:roomId", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const status = c.req.query("status");
@@ -174,9 +175,6 @@ app.get("/room/:roomId", async (c) => {
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
   });
-
-  const hasAccess = await verifyRoomAccess(agentId, roomId);
-  if (!hasAccess) return c.json({ error: "Not a room member", code: "NOT_MEMBER" }, 403);
 
   const scope = `room:${roomId}`;
   const conditions = [eq(tasks.scope, scope)];
@@ -209,7 +207,7 @@ app.get("/room/:roomId", async (c) => {
 });
 
 // List tasks for a workspace
-app.get("/workspace/:workspaceId", async (c) => {
+app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const status = c.req.query("status");
@@ -222,9 +220,6 @@ app.get("/workspace/:workspaceId", async (c) => {
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
   });
-
-  const hasAccess = await verifyWorkspaceAccess(agentId, workspaceId);
-  if (!hasAccess) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const scope = `workspace:${workspaceId}`;
   const conditions = [eq(tasks.scope, scope)];
@@ -340,12 +335,9 @@ app.patch("/:scopeId/:taskId", async (c) => {
 });
 
 // Gantt data endpoint — returns tasks with dependency info for visualization
-app.get("/gantt/workspace/:workspaceId", async (c) => {
+app.get("/gantt/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
-
-  const hasAccess = await verifyWorkspaceAccess(agentId, workspaceId);
-  if (!hasAccess) return c.json({ error: "Not a workspace member", code: "NOT_MEMBER" }, 403);
 
   const scope = `workspace:${workspaceId}`;
   const allTasks = await db
