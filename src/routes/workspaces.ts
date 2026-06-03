@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -51,6 +52,13 @@ app.post("/", async (c) => {
 // Join an existing workspace via its pairing code
 app.post("/join", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`join:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ code: string }>();
 
   if (!body.code) return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
