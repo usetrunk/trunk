@@ -7876,6 +7876,63 @@ describe("Hono API behavior", () => {
     expect(tag.tag).toBe("teammate");
   });
 
+  it("allows self-notes (agent can set a note about themselves)", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "self-note" });
+    const aClient = createClient(a.secret);
+
+    const note = await aClient.setContactNote(a.agent_id, "my own note");
+    expect(note.content).toBe("my own note");
+
+    const fetched = await aClient.contactNote(a.agent_id);
+    expect(fetched.content).toBe("my own note");
+  });
+
+  it("allows self-tags (agent can tag themselves)", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "self-tag" });
+    const aClient = createClient(a.secret);
+
+    const tag = await aClient.addContactTag(a.agent_id, "me");
+    expect(tag.tag).toBe("me");
+
+    const tags = await aClient.contactTags(a.agent_id);
+    expect(tags.tags).toContain("me");
+  });
+
+  it("rejects notes after unpairing", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "unpair-note-a" });
+    const b = await anon.register({ name: "unpair-note-b" });
+    const aClient = createClient(a.secret);
+
+    // Pair, set note, then unpair
+    await aClient.pair({ code: b.pairing_code });
+    await aClient.setContactNote(b.agent_id, "still friends");
+    await aClient.unpair(b.agent_id);
+
+    // After unpairing, should be rejected
+    await expect(aClient.setContactNote(b.agent_id, "not anymore")).rejects.toMatchObject({ status: 403 });
+    await expect(aClient.contactNote(b.agent_id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("allows notes/tags on blocked contacts (blocking doesn't remove contact)", async () => {
+    const anon = createClient();
+    const a = await anon.register({ name: "block-note-a" });
+    const b = await anon.register({ name: "block-note-b" });
+    const aClient = createClient(a.secret);
+
+    await aClient.pair({ code: b.pairing_code });
+    await aClient.blockContact(b.agent_id);
+
+    // Blocking doesn't remove contact — notes/tags should still work
+    const note = await aClient.setContactNote(b.agent_id, "blocked but noted");
+    expect(note.content).toBe("blocked but noted");
+
+    const tag = await aClient.addContactTag(b.agent_id, "blocked");
+    expect(tag.tag).toBe("blocked");
+  });
+
   // --- Message template tests ---
 
   it("creates and lists message templates", async () => {
