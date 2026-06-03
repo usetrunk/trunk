@@ -103,6 +103,12 @@ app.post("/join", async (c) => {
 app.get("/me", async (c) => {
   const agentId = c.get("agentId");
 
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
     return c.json({ error: "Not in a workspace", code: "WORKSPACE_NOT_FOUND" }, 404);
@@ -213,6 +219,13 @@ app.post("/leave", async (c) => {
 // List members of a workspace
 app.get("/:id/members", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const workspaceId = c.req.param("id");
 
   // Verify membership

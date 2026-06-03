@@ -17,6 +17,13 @@ app.use("/*", authMiddleware);
 
 app.get("/room/:roomId/facts", requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const roomId = c.req.param("roomId");
 
   const scope = roomScope(roomId);
@@ -118,6 +125,13 @@ app.delete("/room/:roomId/facts/:key", requireRoomMember(), async (c) => {
 
 app.get("/workspace/:workspaceId/facts", requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const workspaceId = c.req.param("workspaceId");
 
   const scope = workspaceScope(workspaceId);
@@ -196,6 +210,13 @@ app.delete("/workspace/:workspaceId/facts/:key", requireWorkspaceMember(), async
 
 app.get("/:contactId/facts", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const contactId = c.req.param("contactId");
 
   if (!(await verifyContactAccess(agentId, contactId))) return c.json({ error: "Not a contact", code: "NOT_MEMBER" }, 403);

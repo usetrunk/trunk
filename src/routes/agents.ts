@@ -62,6 +62,13 @@ app.post("/register", async (c) => {
 
 // Get current agent info
 app.get("/me", authMiddleware, async (c) => {
+  const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const agent = c.get("agent");
   const meta = (agent.metadata ?? {}) as Record<string, unknown>;
   return c.json({
@@ -243,6 +250,13 @@ app.get("/presence", authMiddleware, async (c) => {
 // Get another agent's public profile (caller must be a contact or workspace co-member)
 app.get("/:id", authMiddleware, async (c) => {
   const myId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${myId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const targetId = c.req.param("id");
 
   const allowed = await canMessage(myId, targetId);
