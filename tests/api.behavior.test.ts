@@ -2869,6 +2869,72 @@ describe("Hono API behavior", () => {
     }
   });
 
+  it("rate limits bulk operations at 30/min shared across bulk endpoints", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send a message to have something to bulk-ack
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "bulk-rl-test" },
+    });
+
+    // Exhaust the bulk rate limit (30 calls)
+    for (let i = 0; i < 30; i++) {
+      const res = await app.request("/messages/ack-bulk", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ message_ids: ["nonexistent-id"] }),
+      });
+      expect(res.status).toBe(200);
+    }
+
+    // 31st call should be rate limited
+    const res = await app.request("/messages/ack-bulk", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ message_ids: ["nonexistent-id"] }),
+    });
+    expect(res.status).toBe(429);
+    const body = await res.json();
+    expect(body.code).toBe("RATE_LIMITED");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBe("0");
+    expect(res.headers.get("Retry-After")).toBeTruthy();
+  });
+
+  it("rate limits attachment uploads at 30/min", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const client = createClient(alpha.secret);
+
+    // Exhaust the attachment rate limit
+    for (let i = 0; i < 30; i++) {
+      await client.uploadAttachment({
+        filename: `test-${i}.txt`,
+        data: btoa("test content"),
+      });
+    }
+
+    // 31st upload should be rate limited
+    try {
+      await client.uploadAttachment({
+        filename: "overflow.txt",
+        data: btoa("test content"),
+      });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(TrunkApiError);
+      const apiErr = err as TrunkApiError;
+      expect(apiErr.status).toBe(429);
+    }
+  });
+
   it("LangGraph adapter nodes send messages and write inbox results into graph state", async () => {
     const { beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

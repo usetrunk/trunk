@@ -1029,6 +1029,13 @@ app.get("/:id/edits", async (c) => {
 // Bulk acknowledge messages (mark multiple as read)
 app.post("/ack-bulk", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`bulk:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ message_ids: string[] }>();
 
   if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
@@ -1062,6 +1069,13 @@ app.post("/ack-bulk", async (c) => {
 // Bulk mark messages as read (without processing/acking)
 app.post("/read-bulk", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`bulk:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ message_ids: string[] }>();
 
   if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
@@ -1095,6 +1109,13 @@ app.post("/read-bulk", async (c) => {
 // Bulk delete messages (soft-delete, sender only)
 app.post("/delete-bulk", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`bulk:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ message_ids: string[] }>();
 
   if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
@@ -1128,6 +1149,13 @@ app.post("/delete-bulk", async (c) => {
 // Bulk add label to messages
 app.post("/label-bulk", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`bulk:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ message_ids: string[]; label: string }>();
 
   if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {

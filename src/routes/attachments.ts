@@ -4,6 +4,7 @@ import { attachments, messages } from "../db/schema.js";
 import { eq, and, desc } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { canMessage } from "../lib/workspace.js";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -14,6 +15,13 @@ app.use("/*", authMiddleware);
 // Upload an attachment (optionally linked to a message)
 app.post("/", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`attachments:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{
     filename: string;
     content_type?: string;
