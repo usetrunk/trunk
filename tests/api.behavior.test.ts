@@ -7386,6 +7386,283 @@ describe("Hono API behavior", () => {
     const body = await res.json();
     expect(body.error).toContain("100");
   });
+
+  // --- Message field length validation ---
+
+  it("rejects message send with type exceeding 50 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "msg-type-len",
+      },
+      body: JSON.stringify({ to: beta.agent_id, type: "x".repeat(51), payload: { content: "test" } }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("50");
+  });
+
+  it("rejects message send with to exceeding 200 characters", async () => {
+    const { alpha, alphaClient, beta } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "msg-to-len",
+      },
+      body: JSON.stringify({ to: "x".repeat(201), type: "question", payload: { content: "test" } }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("200");
+  });
+
+  // --- Saved search validation ---
+
+  it("rejects saved search with name exceeding 200 characters", async () => {
+    const alpha = await createClient().register({ name: "search-val", owner: "Frank" });
+
+    const res = await app.request("/messages/searches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "x".repeat(201), query: { type: "question" } }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  // --- Contact alias and block reason validation ---
+
+  it("rejects contact alias exceeding 100 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request(`/contacts/${beta.agent_id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ alias: "x".repeat(101) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
+
+  it("accepts contact alias of exactly 100 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request(`/contacts/${beta.agent_id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ alias: "x".repeat(100) }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects block reason exceeding 500 characters", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const res = await app.request(`/contacts/${beta.agent_id}/block`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ reason: "x".repeat(501) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("500");
+  });
+
+  // --- Attachment validation ---
+
+  it("rejects attachment with filename exceeding 255 characters", async () => {
+    const alpha = await createClient().register({ name: "attach-val", owner: "Frank" });
+
+    const res = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "x".repeat(256), data: btoa("test") }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("255");
+  });
+
+  it("rejects attachment with content_type exceeding 100 characters", async () => {
+    const alpha = await createClient().register({ name: "attach-ct-val", owner: "Frank" });
+
+    const res = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "test.txt", data: btoa("test"), content_type: "x".repeat(101) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
+
+  // --- Template validation ---
+
+  it("rejects template creation with name exceeding 200 characters", async () => {
+    const alpha = await createClient().register({ name: "tpl-val", owner: "Frank" });
+
+    const res = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "x".repeat(201), type: "greeting", payload: { content: "hi" } }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("200");
+  });
+
+  it("rejects template creation with type exceeding 100 characters", async () => {
+    const alpha = await createClient().register({ name: "tpl-type-val", owner: "Frank" });
+
+    const res = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "valid", type: "x".repeat(101), payload: { content: "hi" } }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
+
+  it("rejects template creation with description exceeding 500 characters", async () => {
+    const alpha = await createClient().register({ name: "tpl-desc-val", owner: "Frank" });
+
+    const res = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "valid", type: "greeting", payload: { content: "hi" }, description: "x".repeat(501) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("500");
+  });
+
+  it("rejects template update with name exceeding 200 characters", async () => {
+    const alpha = await createClient().register({ name: "tpl-upd-val", owner: "Frank" });
+
+    // Create a valid template first
+    const createRes = await app.request("/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "update-me", type: "greeting", payload: { content: "hi" } }),
+    });
+    const template = await createRes.json();
+
+    const res = await app.request(`/templates/${template.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "x".repeat(201) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  // --- Document validation ---
+
+  it("rejects room document creation with name exceeding 255 characters", async () => {
+    const alpha = await createClient().register({ name: "doc-val", owner: "Frank" });
+    const roomRes = await app.request("/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Doc test room" }),
+    });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/documents/room/${room.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "x".repeat(256), body: "some content" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("255");
+  });
+
+  it("rejects room document creation with content_type exceeding 100 characters", async () => {
+    const alpha = await createClient().register({ name: "doc-ct-val", owner: "Frank" });
+    const roomRes = await app.request("/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Doc CT room" }),
+    });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/documents/room/${room.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "valid", body: "some content", content_type: "x".repeat(101) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("100");
+  });
+
+  it("rejects room document update with name exceeding 255 characters", async () => {
+    const alpha = await createClient().register({ name: "doc-upd-val", owner: "Frank" });
+    const roomRes = await app.request("/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "Doc upd room" }),
+    });
+    const room = await roomRes.json();
+
+    // Create a doc first
+    const createRes = await app.request(`/documents/room/${room.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "update-me", body: "original" }),
+    });
+    const doc = await createRes.json();
+
+    const res = await app.request(`/documents/room/${room.id}/${doc.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ body: "updated", name: "x".repeat(256) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("rejects contact document creation with name exceeding 255 characters", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request(`/documents/${beta.agent_id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ name: "x".repeat(256), body: "some content" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("255");
+  });
 });
 
 async function registerPair(): Promise<{

@@ -275,6 +275,9 @@ app.patch("/:agentId", async (c) => {
   if (body.alias === undefined) {
     return c.json({ error: "alias is required", code: "MISSING_FIELD" }, 400);
   }
+  if (body.alias !== null && body.alias.length > 100) {
+    return c.json({ error: "alias must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
 
   // Find the contact row in either direction
   const [row] = await db
@@ -330,6 +333,10 @@ app.post("/:agentId/block", async (c) => {
   if (myId === targetId) return c.json({ error: "Cannot block yourself", code: "SELF_ACTION" }, 400);
 
   const body: { reason?: string } = await c.req.json<{ reason?: string }>().catch(() => ({}));
+
+  if (body.reason && body.reason.length > 500) {
+    return c.json({ error: "reason must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
 
   // Check if already blocked
   const existing = await db

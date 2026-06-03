@@ -39,6 +39,12 @@ app.post("/", async (c) => {
   if (!body.to || !body.type || !body.payload) {
     return c.json({ error: "to, type, and payload are required", code: "MISSING_FIELD" }, 400);
   }
+  if (body.to.length > 200) {
+    return c.json({ error: "to must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.type.length > 50) {
+    return c.json({ error: "type must be 50 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
     return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   }
@@ -609,6 +615,12 @@ app.post("/searches", async (c) => {
 
   if (!body.name || !body.query) {
     return c.json({ error: "name and query are required", code: "MISSING_FIELD" }, 400);
+  }
+  if (body.name.length > 200) {
+    return c.json({ error: "name must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (JSON.stringify(body.query).length > 10000) {
+    return c.json({ error: "query is too large", code: "VALIDATION_ERROR" }, 400);
   }
 
   const [existing] = await db

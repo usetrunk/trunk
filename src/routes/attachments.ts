@@ -32,6 +32,12 @@ app.post("/", async (c) => {
   if (!body.filename || !body.data) {
     return c.json({ error: "filename and data are required", code: "MISSING_FIELD" }, 400);
   }
+  if (body.filename.length > 255) {
+    return c.json({ error: "filename must be 255 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.content_type && body.content_type.length > 100) {
+    return c.json({ error: "content_type must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
 
   // Validate base64 and check size
   let sizeBytes: number;

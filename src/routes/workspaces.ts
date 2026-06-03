@@ -15,6 +15,13 @@ app.use("/*", authMiddleware);
 // Create a workspace — the creating agent joins automatically
 app.post("/", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`workspace:create:${agentId}`, 5, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const body = await c.req.json<{ name: string; owner?: string }>();
 
   if (!body.name) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
