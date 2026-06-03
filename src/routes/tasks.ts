@@ -7,6 +7,7 @@ import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
 import { contactScope, verifyRoomAccess, resolveScopeAccess } from "../lib/context.js";
 import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middleware.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
+import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
@@ -49,6 +50,11 @@ function taskToJson(t: typeof tasks.$inferSelect) {
 // Create a task (contact-scoped, room-scoped, or workspace-scoped)
 app.post("/", async (c) => {
   const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
+
   const body = await c.req.json<{
     contact_id?: string;
     room_id?: string;
@@ -134,6 +140,8 @@ app.get("/:contactId", async (c) => {
   const scope = contactScope(agentId, contactId);
   const conditions = [eq(tasks.scope, scope)];
   if (status) conditions.push(eq(tasks.status, status));
+  if (ownerFilter) conditions.push(eq(tasks.owner, ownerFilter));
+  if (groupFilter) conditions.push(eq(tasks.group, groupFilter));
   if (cursor) {
     conditions.push(
       or(
@@ -150,10 +158,7 @@ app.get("/:contactId", async (c) => {
     .orderBy(desc(tasks.createdAt), desc(tasks.id))
     .limit(limit + 1);
 
-  let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
-  if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
-
-  const page = paginateResults(filtered, limit);
+  const page = paginateResults(rows, limit);
   return c.json({
     tasks: page.items.map(taskToJson),
     next_cursor: page.next_cursor,
@@ -179,6 +184,8 @@ app.get("/room/:roomId", requireRoomMember(), async (c) => {
   const scope = `room:${roomId}`;
   const conditions = [eq(tasks.scope, scope)];
   if (status) conditions.push(eq(tasks.status, status));
+  if (ownerFilter) conditions.push(eq(tasks.owner, ownerFilter));
+  if (groupFilter) conditions.push(eq(tasks.group, groupFilter));
   if (cursor) {
     conditions.push(
       or(
@@ -195,10 +202,7 @@ app.get("/room/:roomId", requireRoomMember(), async (c) => {
     .orderBy(desc(tasks.createdAt), desc(tasks.id))
     .limit(limit + 1);
 
-  let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
-  if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
-
-  const page = paginateResults(filtered, limit);
+  const page = paginateResults(rows, limit);
   return c.json({
     tasks: page.items.map(taskToJson),
     next_cursor: page.next_cursor,
@@ -224,6 +228,8 @@ app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   const scope = `workspace:${workspaceId}`;
   const conditions = [eq(tasks.scope, scope)];
   if (status) conditions.push(eq(tasks.status, status));
+  if (ownerFilter) conditions.push(eq(tasks.owner, ownerFilter));
+  if (groupFilter) conditions.push(eq(tasks.group, groupFilter));
   if (cursor) {
     conditions.push(
       or(
@@ -240,10 +246,7 @@ app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
     .orderBy(desc(tasks.createdAt), desc(tasks.id))
     .limit(limit + 1);
 
-  let filtered = ownerFilter ? rows.filter(t => t.owner === ownerFilter) : rows;
-  if (groupFilter) filtered = filtered.filter(t => t.group === groupFilter);
-
-  const page = paginateResults(filtered, limit);
+  const page = paginateResults(rows, limit);
   return c.json({
     tasks: page.items.map(taskToJson),
     next_cursor: page.next_cursor,
@@ -256,6 +259,10 @@ app.patch("/:scopeId/:taskId", async (c) => {
   const agentId = c.get("agentId");
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");
+
+  const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
 
   const scope = await resolveScopeAccess(agentId, scopeId);
   if (!scope) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);
@@ -396,6 +403,10 @@ app.delete("/:scopeId/:taskId", async (c) => {
   const agentId = c.get("agentId");
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");
+
+  const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED" }, 429);
 
   const deleteScope = await resolveScopeAccess(agentId, scopeId);
   if (!deleteScope) return c.json({ error: "No access", code: "FORBIDDEN" }, 403);

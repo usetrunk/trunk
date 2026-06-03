@@ -7879,6 +7879,100 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // --- Hardening: tasks rate limiting ---
+
+  it("rate limits task creation at 30/min", async () => {
+    const { alpha, beta } = await registerPair();
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 30; i++) {
+      const res = await createTaskRaw(alpha.secret, beta.agent_id, { title: `Task ${i}` });
+      expect(res.status).toBe(201);
+    }
+
+    const blocked = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Over limit" });
+    expect(blocked.status).toBe(429);
+    const body = await blocked.json();
+    expect(body.code).toBe("RATE_LIMITED");
+  });
+
+  it("rate limits task updates at 30/min", async () => {
+    const { alpha, beta } = await registerPair();
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const createRes = await createTaskRaw(alpha.secret, beta.agent_id, { title: "Rate test" });
+    const task = await createRes.json();
+
+    // Already used 1 of the 30 limit for the create; use 29 more via updates
+    for (let i = 0; i < 29; i++) {
+      const res = await updateTaskRaw(alpha.secret, beta.agent_id, task.id, { status: "open" });
+      expect(res.status).toBe(200);
+    }
+
+    const blocked = await updateTaskRaw(alpha.secret, beta.agent_id, task.id, { status: "done" });
+    expect(blocked.status).toBe(429);
+    const body = await blocked.json();
+    expect(body.code).toBe("RATE_LIMITED");
+  });
+
+  // --- Hardening: context/facts rate limiting ---
+
+  it("rate limits fact upserts at 30/min", async () => {
+    const { alpha, beta } = await registerPair();
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (let i = 0; i < 30; i++) {
+      const res = await app.request(`/context/${beta.agent_id}/facts/key${i}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ value: `val${i}` }),
+      });
+      expect(res.status).toBe(200);
+    }
+
+    const blocked = await app.request(`/context/${beta.agent_id}/facts/over-limit`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ value: "blocked" }),
+    });
+    expect(blocked.status).toBe(429);
+    const body = await blocked.json();
+    expect(body.code).toBe("RATE_LIMITED");
+  });
+
+  it("rate limits fact deletes at 30/min (shared counter with upserts)", async () => {
+    const { alpha, beta } = await registerPair();
+    const alphaClient = createClient(alpha.secret);
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Use up rate limit with upserts
+    for (let i = 0; i < 30; i++) {
+      await app.request(`/context/${beta.agent_id}/facts/key${i}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ value: `val${i}` }),
+      });
+    }
+
+    const blocked = await app.request(`/context/${beta.agent_id}/facts/key0`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
   // --- Hardening: purge-expired uses DB-level date filtering ---
 
   it("purge-expired with custom days parameter only deletes old messages", async () => {
