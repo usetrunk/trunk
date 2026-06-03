@@ -4653,6 +4653,75 @@ describe("Hono API behavior", () => {
     expect(upgraded.status).toBe("active");
   });
 
+  it("billing webhook handles subscription.updated by updating status and period", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-upd", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "Upd Team" });
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    expect(sub).toBeDefined();
+
+    // Set up as if checkout already completed
+    sub!.plan = "team";
+    sub!.status = "active";
+    sub!.stripeSubscriptionId = "sub_upd_test";
+    sub!.stripeCustomerId = "cus_upd_test";
+
+    // Simulate subscription.updated: transition to past_due
+    sub!.status = "past_due";
+    sub!.currentPeriodStart = new Date("2026-06-01T00:00:00Z");
+    sub!.currentPeriodEnd = new Date("2026-07-01T00:00:00Z");
+
+    const status = await client.billingStatus();
+    expect(status.plan).toBe("team");
+    expect(status.status).toBe("past_due");
+  });
+
+  it("billing webhook handles subscription.updated trialing status", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-trial", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "Trial Team" });
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    sub!.stripeSubscriptionId = "sub_trial_test";
+    sub!.stripeCustomerId = "cus_trial_test";
+
+    // Simulate subscription.updated: trialing status
+    sub!.status = "trialing";
+    sub!.plan = "team";
+
+    const status = await client.billingStatus();
+    expect(status.status).toBe("trialing");
+    expect(status.plan).toBe("team");
+  });
+
+  it("billing webhook handles subscription.updated canceled status", async () => {
+    const client = createClient();
+    const reg = await client.register({ name: "bill-cancel", owner: "Test" });
+    client.setSecret(reg.secret);
+
+    const ws = await client.createWorkspace({ name: "Cancel Team" });
+    await client.billingStatus();
+
+    const sub = testState.subscriptions.find((s) => s.workspaceId === ws.id);
+    sub!.stripeSubscriptionId = "sub_cancel_test";
+    sub!.stripeCustomerId = "cus_cancel_test";
+    sub!.plan = "team";
+    sub!.status = "active";
+
+    // Simulate subscription.updated: canceled
+    sub!.status = "canceled";
+
+    const status = await client.billingStatus();
+    expect(status.status).toBe("canceled");
+  });
+
   it("billing webhook handles subscription.deleted by downgrading to free", async () => {
     const client = createClient();
     const reg = await client.register({ name: "bill-del", owner: "Test" });
@@ -5361,6 +5430,62 @@ describe("Hono API behavior", () => {
 
     const betaPresence = presence.members.find((m: any) => m.agent_id === beta.agent_id);
     expect(betaPresence).toMatchObject({ status: "away" });
+  });
+
+  it("presence includes status_text and role from agent metadata", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Meta Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Set status text and role via metadata
+    await alphaClient.setStatus("Busy coding");
+    const alphaRow = testState.agents.find(a => a.id === alpha.agent_id);
+    if (alphaRow) {
+      alphaRow.metadata = { ...(alphaRow.metadata as Record<string, unknown> ?? {}), role: "developer", status_text: "Busy coding" };
+    }
+
+    const presence = await alphaClient.presence();
+    const alphaPresence = presence.members.find((m: any) => m.agent_id === alpha.agent_id);
+    expect(alphaPresence).toMatchObject({
+      status_text: "Busy coding",
+      role: "developer",
+    });
+  });
+
+  it("presence returns null status_text when not set", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "No Meta Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    const presence = await alphaClient.presence();
+    const betaPresence = presence.members.find((m: any) => m.agent_id === beta.agent_id);
+    expect(betaPresence!.status_text).toBeNull();
+  });
+
+  it("presence returns offline for agents with lastSeenAt > 30 minutes ago", async () => {
+    const alpha = await createClient().register({ name: "alpha" });
+    const beta = await createClient().register({ name: "beta" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "Old Team" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Set beta's lastSeenAt to 45 minutes ago (beyond 30-min threshold)
+    const betaRow = testState.agents.find(a => a.id === beta.agent_id);
+    if (betaRow) betaRow.lastSeenAt = new Date(Date.now() - 45 * 60 * 1000);
+
+    const presence = await alphaClient.presence();
+    const betaPresence = presence.members.find((m: any) => m.agent_id === beta.agent_id);
+    expect(betaPresence).toMatchObject({ status: "offline" });
   });
 
   // --- Message pinning ---
@@ -6583,6 +6708,85 @@ describe("Hono API behavior", () => {
 
     const high = await alphaClient.analytics({ days: 100 });
     expect(high.period_days).toBe(30);
+  });
+
+  it("analytics computes volume_by_day breakdown", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "a" } });
+    await betaClient.send({ to: alpha.agent_id, type: "ack", payload: { content: "b" } });
+
+    const analytics = await alphaClient.analytics({ days: 7 });
+    const today = new Date().toISOString().slice(0, 10);
+    expect(analytics.volume_by_day).toBeDefined();
+    expect(analytics.volume_by_day[today]).toBeDefined();
+    expect(analytics.volume_by_day[today].sent).toBe(1);
+    expect(analytics.volume_by_day[today].received).toBe(1);
+  });
+
+  it("analytics computes by_type breakdown correctly", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "a" } });
+    await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "b" } });
+    await betaClient.send({ to: alpha.agent_id, type: "ack", payload: { content: "c" } });
+
+    const analytics = await alphaClient.analytics({ days: 7 });
+    expect(analytics.by_type.update).toBe(1);
+    expect(analytics.by_type.question).toBe(1);
+    expect(analytics.by_type.ack).toBe(1);
+  });
+
+  it("analytics computes avg_response_ms for thread replies", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Beta sends a message, alpha replies in the same thread
+    const msg = await betaClient.send({ to: alpha.agent_id, type: "question", payload: { content: "ping" } });
+    await alphaClient.reply(msg.id, { type: "ack", payload: { content: "pong" } });
+
+    const analytics = await alphaClient.analytics({ days: 7 });
+    expect(analytics.response_count).toBeGreaterThanOrEqual(1);
+    // avg_response_ms should be a positive number when there are thread replies
+    expect(analytics.avg_response_ms).not.toBeNull();
+    expect(analytics.avg_response_ms).toBeGreaterThan(0);
+  });
+
+  it("analytics returns null avg_response_ms when no thread replies exist", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send a message but no replies
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "one-way" } });
+
+    const analytics = await alphaClient.analytics({ days: 7 });
+    expect(analytics.avg_response_ms).toBeNull();
+    expect(analytics.response_count).toBe(0);
+  });
+
+  it("analytics top_contacts sorts by total volume descending", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Register a third agent
+    const gamma = await createClient().register({ name: "gamma" });
+    const gammaClient = createClient(gamma.secret);
+    await alphaClient.pair({ code: gamma.pairing_code });
+
+    // Send more messages to beta than gamma
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "1" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "2" } });
+    await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "3" } });
+    await alphaClient.send({ to: gamma.agent_id, type: "update", payload: { content: "1" } });
+
+    const analytics = await alphaClient.analytics({ days: 7 });
+    expect(analytics.top_contacts.length).toBe(2);
+    expect(analytics.top_contacts[0].agent_id).toBe(beta.agent_id);
+    expect(analytics.top_contacts[0].total).toBe(3);
+    expect(analytics.top_contacts[1].agent_id).toBe(gamma.agent_id);
+    expect(analytics.top_contacts[1].total).toBe(1);
   });
 
   // ── Agent Status Messages ──
