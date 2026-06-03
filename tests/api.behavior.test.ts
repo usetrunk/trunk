@@ -2973,7 +2973,9 @@ describe("Hono API behavior", () => {
       payload: { content: "Observer work started." },
     });
 
-    const dashboard = await app.request(`/dashboard?secret=${alpha.secret}`);
+    const dashboard = await app.request(`/dashboard`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
     const body = await dashboard.text();
 
     expect(dashboard.status).toBe(200);
@@ -2986,7 +2988,6 @@ describe("Hono API behavior", () => {
     expect(body).toContain("Playbook Room");
     expect(body).toContain("Build observer UI");
     expect(body).toContain("Observer work started.");
-    expect(body).not.toContain("<form");
     expect(body).not.toContain("<textarea");
   });
 
@@ -7398,18 +7399,124 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("x-ratelimit-remaining")).toBeTruthy();
   });
 
-  it("dashboard shows login form when no secret is provided", async () => {
+  it("dashboard shows login form when no session is provided", async () => {
     const res = await app.request("/dashboard");
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(401);
     const body = await res.text();
     expect(body).toContain("Sign in");
     expect(body).toContain('<input type="password"');
-    expect(body).toContain('<form method="GET"');
+    expect(body).toContain('<form method="POST"');
   });
 
   it("dashboard rejects invalid secret with 401", async () => {
-    const res = await app.request("/dashboard?secret=invalid-secret-value");
+    const res = await app.request("/dashboard", {
+      headers: { Authorization: "Bearer invalid-secret-value" },
+    });
     expect(res.status).toBe(401);
+  });
+
+  it("dashboard login sets HTTP-only session cookie and redirects", async () => {
+    const registered = await createClient().register({ name: "cookie-agent" });
+    const formBody = new URLSearchParams({ secret: registered.secret });
+    const res = await app.request("/dashboard/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: formBody.toString(),
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/dashboard");
+    const setCookieHeader = res.headers.get("set-cookie");
+    expect(setCookieHeader).toBeTruthy();
+    expect(setCookieHeader).toContain("trunk_session=");
+    expect(setCookieHeader).toContain("HttpOnly");
+    expect(setCookieHeader).toContain("Path=/dashboard");
+  });
+
+  it("dashboard login rejects invalid secret", async () => {
+    const formBody = new URLSearchParams({ secret: "bad-secret" });
+    const res = await app.request("/dashboard/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: formBody.toString(),
+    });
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    expect(body).toContain("Invalid secret");
+  });
+
+  it("dashboard login rejects empty secret", async () => {
+    const formBody = new URLSearchParams({ secret: "" });
+    const res = await app.request("/dashboard/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: formBody.toString(),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.text();
+    expect(body).toContain("Secret is required");
+  });
+
+  it("dashboard authenticates via session cookie", async () => {
+    const registered = await createClient().register({ name: "cookie-auth-agent" });
+    // First login to get a cookie
+    const formBody = new URLSearchParams({ secret: registered.secret });
+    const loginRes = await app.request("/dashboard/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: formBody.toString(),
+    });
+    const setCookieHeader = loginRes.headers.get("set-cookie")!;
+    const cookieValue = setCookieHeader.split(";")[0]; // "trunk_session=..."
+
+    // Use the cookie to access the dashboard
+    const res = await app.request("/dashboard", {
+      headers: { Cookie: cookieValue },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("cookie-auth-agent");
+  });
+
+  it("dashboard logout clears session cookie", async () => {
+    const res = await app.request("/dashboard/logout", { method: "POST" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/dashboard");
+    const setCookieHeader = res.headers.get("set-cookie");
+    expect(setCookieHeader).toContain("trunk_session=");
+    // Cookie should be cleared (max-age=0 or expires in the past)
+    expect(setCookieHeader).toMatch(/Max-Age=0|expires=Thu, 01 Jan 1970/i);
+  });
+
+  it("dashboard login form uses POST method not GET (no secret in URL)", async () => {
+    const res = await app.request("/dashboard");
+    const body = await res.text();
+    expect(body).toContain('method="POST"');
+    expect(body).toContain('action="/dashboard/login"');
+    expect(body).not.toContain('method="GET"');
+  });
+
+  it("dashboard pages do not leak secret in URLs", async () => {
+    const registered = await createClient().register({ name: "no-leak-agent" });
+    const res = await app.request("/dashboard", {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
+    const body = await res.text();
+    expect(body).not.toContain("?secret=");
+    expect(body).not.toContain("&secret=");
+  });
+
+  it("dashboard login is rate limited", async () => {
+    const results: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const formBody = new URLSearchParams({ secret: "bad-secret" });
+      const res = await app.request("/dashboard/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: formBody.toString(),
+      });
+      results.push(res.status);
+    }
+    expect(results.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
   });
 
   it("dashboard authenticates via Authorization header", async () => {
@@ -7425,7 +7532,9 @@ describe("Hono API behavior", () => {
 
   it("dashboard thread view requires auth and renders thread page", async () => {
     const registered = await createClient().register({ name: "thread-viewer" });
-    const res = await app.request(`/dashboard/thread/fake-thread-id?secret=${registered.secret}`);
+    const res = await app.request(`/dashboard/thread/fake-thread-id`, {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain("Thread");
@@ -7434,14 +7543,16 @@ describe("Hono API behavior", () => {
 
   it("dashboard thread view rejects without auth", async () => {
     const res = await app.request("/dashboard/thread/fake-thread-id");
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(401);
     const body = await res.text();
     expect(body).toContain("Sign in");
   });
 
   it("dashboard inbox view requires auth and renders inbox page", async () => {
     const registered = await createClient().register({ name: "inbox-viewer" });
-    const res = await app.request(`/dashboard/inbox?secret=${registered.secret}`);
+    const res = await app.request(`/dashboard/inbox`, {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain("Inbox");
@@ -7449,7 +7560,9 @@ describe("Hono API behavior", () => {
 
   it("dashboard inbox view shows status filter tabs", async () => {
     const registered = await createClient().register({ name: "filter-viewer" });
-    const res = await app.request(`/dashboard/inbox?secret=${registered.secret}&status=read`);
+    const res = await app.request(`/dashboard/inbox?status=read`, {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain("Inbox (read)");
@@ -7459,7 +7572,9 @@ describe("Hono API behavior", () => {
 
   it("dashboard gantt view renders mission control with no tasks", async () => {
     const registered = await createClient().register({ name: "gantt-agent" });
-    const res = await app.request(`/dashboard/gantt?secret=${registered.secret}`);
+    const res = await app.request(`/dashboard/gantt`, {
+      headers: { Authorization: `Bearer ${registered.secret}` },
+    });
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain("Mission control");
@@ -9489,8 +9604,9 @@ describe("Hono API behavior", () => {
     const alpha = await createClient().register({ name: "dash-rl" });
     const results: number[] = [];
     for (let i = 0; i < 31; i++) {
-      const res = await app.request(`/dashboard?secret=${alpha.secret}`, {
+      const res = await app.request(`/dashboard`, {
         method: "GET",
+        headers: { Authorization: `Bearer ${alpha.secret}` },
       });
       results.push(res.status);
     }

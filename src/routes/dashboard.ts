@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { html } from "hono/html";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, roomMembers, rooms, tasks, workspaceContacts, workspaces } from "../db/schema.js";
 import { and, eq, or, desc, inArray } from "drizzle-orm";
@@ -9,17 +10,10 @@ import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
 
-// Dashboard auth via query param (simple for now — will move to cookies/sessions later)
-app.use("/*", async (c, next) => {
-  // Try bearer token from Authorization header first
-  const authHeader = c.req.header("Authorization");
-  if (authHeader?.startsWith("Bearer ")) {
-    return authMiddleware(c, next);
-  }
-  // Fall back to ?secret= query param for browser access
-  const secret = c.req.query("secret");
-  if (!secret) {
-    return c.html(html`<!DOCTYPE html>
+const COOKIE_NAME = "trunk_session";
+
+function loginPage(error?: string) {
+  return html`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -31,17 +25,88 @@ app.use("/*", async (c, next) => {
   <div class="card" style="max-width:400px;margin:auto;margin-top:20vh;">
     <div class="logo">trunk</div>
     <h2>Sign in</h2>
-    <form method="GET">
-      <input type="password" name="secret" placeholder="Agent secret" style="width:100%;margin:1rem 0;padding:0.75rem;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:0.9rem;">
+    ${error ? html`<div style="color:#ff7b72;font-size:0.85rem;margin-bottom:0.5rem;">${error}</div>` : ""}
+    <form method="POST" action="/dashboard/login">
+      <input type="password" name="secret" placeholder="Agent secret" required style="width:100%;margin:1rem 0;padding:0.75rem;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:0.9rem;">
       <button type="submit" style="width:100%;padding:0.75rem;background:#7c6aef;border:none;border-radius:6px;color:#fff;font-weight:600;cursor:pointer;">Sign in</button>
     </form>
   </div>
 </body>
-</html>`);
+</html>`;
+}
+
+// Login endpoint — validates secret, sets HTTP-only cookie, redirects to dashboard
+app.post("/login", async (c) => {
+  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const rateLimit = await checkRateLimit(`dashboard-login:${ip}`, 10, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.html(loginPage("Too many login attempts. Please try again later."), 429);
   }
-  // Manually inject the auth header for the middleware
+
+  const body = await c.req.parseBody();
+  const secret = typeof body.secret === "string" ? body.secret : "";
+  if (!secret) {
+    return c.html(loginPage("Secret is required."), 400);
+  }
+
+  // Validate the secret by injecting it as a bearer token and running authMiddleware
   const newHeaders = new Headers(c.req.raw.headers);
   newHeaders.set("Authorization", `Bearer ${secret}`);
+  const newReq = new Request(c.req.raw.url, {
+    method: c.req.raw.method,
+    headers: newHeaders,
+  });
+  Object.defineProperty(c.req, "raw", { value: newReq, writable: true });
+  Object.defineProperty(c.req, "header", {
+    value: (name: string) => newHeaders.get(name),
+    writable: true,
+  });
+
+  try {
+    let authPassed = false;
+    await authMiddleware(c, async () => { authPassed = true; });
+    if (!authPassed) {
+      return c.html(loginPage("Invalid secret."), 401);
+    }
+  } catch {
+    return c.html(loginPage("Invalid secret."), 401);
+  }
+
+  setCookie(c, COOKIE_NAME, secret, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/dashboard",
+    maxAge: 7 * 24 * 60 * 60, // 7 days
+  });
+
+  return c.redirect("/dashboard");
+});
+
+// Logout endpoint — clears cookie
+app.post("/logout", (c) => {
+  deleteCookie(c, COOKIE_NAME, { path: "/dashboard" });
+  return c.redirect("/dashboard");
+});
+
+// Dashboard auth middleware — cookie or Authorization header
+app.use("/*", async (c, next) => {
+  // Try bearer token from Authorization header first (API/test access)
+  const authHeader = c.req.header("Authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    return authMiddleware(c, next);
+  }
+
+  // Try session cookie for browser access
+  const sessionSecret = getCookie(c, COOKIE_NAME);
+  if (!sessionSecret) {
+    return c.html(loginPage(), 401);
+  }
+
+  // Inject the cookie secret as a bearer token for authMiddleware
+  const newHeaders = new Headers(c.req.raw.headers);
+  newHeaders.set("Authorization", `Bearer ${sessionSecret}`);
   const newReq = new Request(c.req.raw.url, {
     method: c.req.raw.method,
     headers: newHeaders,
@@ -57,7 +122,6 @@ app.use("/*", async (c, next) => {
 app.get("/", async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
-  const secret = c.req.query("secret") || "";
 
   const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -164,7 +228,7 @@ app.get("/", async (c) => {
           : contactAgents.map((ca) => {
             const contactMessages = recentMessages.filter((m) => m.fromAgent === ca.id || m.toAgent === ca.id).length;
             return html`
-              <a class="sidebar-item" href="/dashboard?secret=${secret}">
+              <a class="sidebar-item" href="/dashboard">
                 <span class="presence-dot"></span>
                 <span class="sidebar-main">${ca.name}</span>
                 <span class="sidebar-count">${contactMessages}</span>
@@ -180,7 +244,7 @@ app.get("/", async (c) => {
             const members = memberRows.filter((member) => member.roomId === room.id);
             const roomTasks = roomTaskRows.filter((task) => task.scope === `room:${room.id}` && task.status !== "done");
             return html`
-              <a class="sidebar-item room" href="/dashboard?secret=${secret}">
+              <a class="sidebar-item room" href="/dashboard">
                 <span class="room-hash">#</span>
                 <span class="sidebar-main">${room.name}</span>
                 <span class="sidebar-count">${roomTasks.length}</span>
@@ -212,7 +276,7 @@ app.get("/", async (c) => {
         <div class="chat-stream">
           <div class="stream-title">
             <span>Messages</span>
-            <a href="/dashboard/inbox?secret=${secret}">Inbox</a>
+            <a href="/dashboard/inbox">Inbox</a>
           </div>
           ${transcriptMessages.length === 0
             ? html`<p class="empty">No visible direct messages.</p>`
@@ -280,7 +344,7 @@ app.get("/", async (c) => {
             ${threads.size === 0
               ? html`<p class="empty">No threads yet.</p>`
               : Array.from(threads.entries()).slice(0, 6).map(([tid, t]) => html`
-                <a class="thread-link" href="/dashboard/thread/${tid}?secret=${secret}">
+                <a class="thread-link" href="/dashboard/thread/${tid}">
                   <span class="mono">${tid.slice(0, 8)}</span>
                   <span>${t.count} msgs</span>
                   <time>${timeAgo(t.lastActivity)}</time>
@@ -299,7 +363,6 @@ app.get("/", async (c) => {
 app.get("/thread/:threadId", async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
-  const secret = c.req.query("secret") || "";
   const threadId = c.req.param("threadId");
 
   const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
@@ -335,7 +398,7 @@ app.get("/thread/:threadId", async (c) => {
 <body>
   <div class="container">
     <div class="header">
-      <a href="/dashboard?secret=${secret}" class="logo" style="text-decoration:none;">← trunk</a>
+      <a href="/dashboard" class="logo" style="text-decoration:none;">← trunk</a>
       <div class="agent-name">Thread ${threadId.slice(0, 8)}...</div>
     </div>
 
@@ -375,7 +438,6 @@ app.get("/thread/:threadId", async (c) => {
 app.get("/inbox", async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
-  const secret = c.req.query("secret") || "";
   const statusFilter = c.req.query("status") || "pending";
 
   const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
@@ -409,13 +471,13 @@ app.get("/inbox", async (c) => {
 <body>
   <div class="container">
     <div class="header">
-      <a href="/dashboard?secret=${secret}" class="logo" style="text-decoration:none;">← trunk</a>
+      <a href="/dashboard" class="logo" style="text-decoration:none;">← trunk</a>
       <div class="agent-name">Inbox (${statusFilter})</div>
     </div>
 
     <div style="margin-bottom:1rem;display:flex;gap:0.5rem;">
       ${["pending", "read", "replied"].map(s => html`
-        <a href="/dashboard/inbox?secret=${secret}&status=${s}"
+        <a href="/dashboard/inbox&status=${s}"
            style="padding:0.4rem 0.8rem;background:${s === statusFilter ? "#7c6aef" : "#1a1a1a"};border:1px solid ${s === statusFilter ? "#7c6aef" : "#333"};border-radius:6px;color:#fff;text-decoration:none;font-size:0.8rem;">${s}</a>
       `)}
     </div>
@@ -434,7 +496,7 @@ app.get("/inbox", async (c) => {
               <span class="thread-sender">${senderName}</span>
               <span class="thread-type">${m.type}</span>
               <span class="thread-time">${timeAgo(m.createdAt)}</span>
-              ${m.threadId ? html`<a href="/dashboard/thread/${m.threadId}?secret=${secret}" style="color:#7c6aef;text-decoration:none;font-size:0.75rem;">view thread →</a>` : ""}
+              ${m.threadId ? html`<a href="/dashboard/thread/${m.threadId}" style="color:#7c6aef;text-decoration:none;font-size:0.75rem;">view thread →</a>` : ""}
             </div>
             <div class="thread-msg-body">${content}</div>
             ${context ? html`<div class="thread-msg-context">${context}</div>` : ""}
@@ -450,7 +512,6 @@ app.get("/inbox", async (c) => {
 app.get("/gantt", async (c) => {
   const agent = c.get("agent");
   const agentId = c.get("agentId");
-  const secret = c.req.query("secret") || "";
 
   const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -779,7 +840,7 @@ app.get("/gantt", async (c) => {
   <div class="mc-shell">
     <div class="mc-header">
       <div class="mc-header-left">
-        <a href="/dashboard?secret=${secret}">← dashboard</a>
+        <a href="/dashboard">← dashboard</a>
         <h1>Mission control</h1>
         <span class="mc-live">live</span>
       </div>
