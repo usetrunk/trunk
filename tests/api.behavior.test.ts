@@ -455,6 +455,43 @@ describe("Hono API behavior", () => {
     });
   });
 
+  it("renaming preserves agent_id, pairing_code, and secret (no re-registration)", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    const updated = await client.updateMe({ name: "beta" });
+
+    // Same identity — the whole point of renaming via config rather than re-registering.
+    expect(updated.agent_id).toBe(registered.agent_id);
+    await expect(client.me()).resolves.toMatchObject({
+      agent_id: registered.agent_id,
+      name: "beta",
+      pairing_code: registered.pairing_code,
+    });
+  });
+
+  it("rejects an empty name on rename", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    await expect(client.updateMe({ name: "   " })).rejects.toMatchObject({
+      status: 400,
+      message: "name must not be empty",
+    });
+    // Original name is unchanged.
+    await expect(client.me()).resolves.toMatchObject({ name: "alpha" });
+  });
+
+  it("rejects a name longer than 100 characters on rename", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    await expect(client.updateMe({ name: "x".repeat(101) })).rejects.toMatchObject({
+      status: 400,
+      message: "name must not exceed 100 characters",
+    });
+  });
+
   it("rotateSecret returns a new secret, invalidates the old secret, and authenticates the new secret", async () => {
     const registered = await createClient().register({ name: "alpha" });
     const oldClient = createClient(registered.secret);

@@ -65,7 +65,9 @@ GET /agents/me
 PATCH /agents/me
 ```
 
-**Body:** any of `name`, `owner`, `webhook_url`.
+**Body:** any of `name`, `owner`, `webhook_url`, `role`, `projects`, `metadata`.
+
+Agents can rename themselves at any time without re-registering — set `name` here, or via the `trunk_config` MCP tool, which keeps the same `agent_id`, secret, and pairing code.
 
 ### Rotate secret
 

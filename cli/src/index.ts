@@ -1093,17 +1093,23 @@ server.tool(
 
 server.tool(
   "trunk_config",
-  "Update your local agent config and sync to server. Set role, workspace_code, projects, or arbitrary metadata without re-registering.",
+  "Update your local agent config and sync to server. Set name, role, workspace_code, projects, or arbitrary metadata without re-registering.",
   {
+    name: z.string().optional().describe("Display name for your agent"),
     role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
     workspace_code: z.string().optional().describe("Workspace pairing code — also auto-joins the workspace"),
     projects: z.array(z.string()).optional().describe("Project names or URLs this agent works on"),
     metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to merge into your profile"),
   },
-  async ({ role, workspace_code, projects, metadata }) => {
+  async ({ name, role, workspace_code, projects, metadata }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
+    if (name !== undefined) {
+      if (name.trim().length === 0) return { content: [{ type: "text", text: "Error: name must not be empty" }], isError: true };
+      if (name.length > 100) return { content: [{ type: "text", text: "Error: name must not exceed 100 characters" }], isError: true };
+      config.name = name;
+    }
     if (role !== undefined) config.role = role;
     if (workspace_code !== undefined) config.workspace_code = workspace_code;
     if (projects !== undefined) config.projects = projects;
@@ -1112,6 +1118,7 @@ server.tool(
 
     // Sync to server
     const serverUpdates: Record<string, unknown> = {};
+    if (name !== undefined) serverUpdates.name = name;
     if (role !== undefined) serverUpdates.role = role;
     if (projects !== undefined) serverUpdates.projects = projects;
     if (metadata !== undefined) serverUpdates.metadata = metadata;
@@ -1130,6 +1137,7 @@ server.tool(
         type: "text",
         text: JSON.stringify({
           updated: true,
+          name: config.name,
           role: config.role,
           workspace_code: config.workspace_code,
           projects: config.projects,

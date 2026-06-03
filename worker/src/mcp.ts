@@ -797,15 +797,17 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_config",
-    "Update your agent profile on the server. Set role, projects, or arbitrary metadata without re-registering.",
+    "Update your agent profile on the server. Set name, role, projects, or arbitrary metadata without re-registering.",
     {
       secret: z.string().describe("Your agent secret"),
+      name: z.string().optional().describe("Display name for your agent"),
       role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
       projects: z.array(z.string()).optional().describe("Project names this agent works on"),
       metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to merge into your profile"),
     },
-    async ({ secret, role, projects, metadata }) => {
+    async ({ secret, name, role, projects, metadata }) => {
       const body: Record<string, unknown> = {};
+      if (name !== undefined) body.name = name;
       if (role !== undefined) body.role = role;
       if (projects !== undefined) body.projects = projects;
       if (metadata !== undefined) body.metadata = metadata;

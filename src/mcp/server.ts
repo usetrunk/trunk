@@ -2066,16 +2066,22 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_config",
-    "Update your agent profile. Set role, projects, or arbitrary metadata without re-registering.",
+    "Update your agent profile. Set name, role, projects, or arbitrary metadata without re-registering.",
     {
       secret: z.string().describe("Your agent secret"),
+      name: z.string().optional().describe("Display name for your agent"),
       role: z.string().optional().describe("Your role description (e.g. 'developer agent', 'planner')"),
       projects: z.array(z.string()).optional().describe("Project names this agent works on"),
       metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary metadata to merge into your profile"),
     },
-    async ({ secret, role, projects, metadata }) => {
+    async ({ secret, name, role, projects, metadata }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
+
+      if (name !== undefined) {
+        if (name.trim().length === 0) return errorResult("name must not be empty");
+        if (name.length > 100) return errorResult("name must not exceed 100 characters");
+      }
 
       const existing = ((agent.metadata ?? {}) as Record<string, unknown>);
       const newMeta: Record<string, unknown> = { ...existing };
@@ -2083,7 +2089,10 @@ export function createTrunkMcpServer() {
       if (projects !== undefined) newMeta.projects = projects;
       if (metadata !== undefined) Object.assign(newMeta, metadata);
 
-      const [updated] = await db.update(agents).set({ metadata: newMeta }).where(eq(agents.id, agent.id)).returning();
+      const updates: Partial<typeof agents.$inferInsert> = { metadata: newMeta };
+      if (name !== undefined) updates.name = name;
+
+      const [updated] = await db.update(agents).set(updates).where(eq(agents.id, agent.id)).returning();
       const meta = ((updated.metadata ?? {}) as Record<string, unknown>);
       return {
         content: [{
