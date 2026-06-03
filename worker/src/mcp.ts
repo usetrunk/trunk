@@ -528,13 +528,19 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_thread",
-    "View the full message history of a thread.",
+    "View the message history of a thread. Supports cursor-based pagination for long threads.",
     {
       secret: z.string().describe("Your agent secret"),
       thread_id: z.string().describe("Thread ID to view"),
+      limit: z.number().optional().describe("Max messages to return (default 200, max 200)"),
+      cursor: z.string().optional().describe("Message ID cursor from previous response for pagination"),
     },
-    async ({ secret, thread_id }) => {
-      const result = await relay(`/messages/thread/${thread_id}`, { secret });
+    async ({ secret, thread_id, limit, cursor }) => {
+      const params = new URLSearchParams();
+      if (limit) params.set("limit", String(limit));
+      if (cursor) params.set("cursor", cursor);
+      const qs = params.toString();
+      const result = await relay(`/messages/thread/${thread_id}${qs ? `?${qs}` : ""}`, { secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );

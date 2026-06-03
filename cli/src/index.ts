@@ -680,13 +680,21 @@ server.tool(
 
 server.tool(
   "trunk_thread",
-  "View full thread history.",
-  { thread_id: z.string().describe("Thread ID") },
-  async ({ thread_id }) => {
+  "View the message history of a thread. Supports cursor-based pagination for long threads.",
+  {
+    thread_id: z.string().describe("Thread ID"),
+    limit: z.number().optional().describe("Max messages to return (default 200, max 200)"),
+    cursor: z.string().optional().describe("Message ID cursor from previous response for pagination"),
+  },
+  async ({ thread_id, limit, cursor }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
-    const result = await relay(`/messages/thread/${thread_id}`, { secret: config.secret });
+    const params = new URLSearchParams();
+    if (limit) params.set("limit", String(limit));
+    if (cursor) params.set("cursor", cursor);
+    const qs = params.toString();
+    const result = await relay(`/messages/thread/${thread_id}${qs ? `?${qs}` : ""}`, { secret: config.secret });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );

@@ -490,6 +490,7 @@ export type PaginatedResponse<T> = T & {
 export type MessagesResponse = {
   messages: TrunkMessage[];
   has_more?: boolean;
+  next_cursor?: string | null;
   total?: number;
 };
 
@@ -913,8 +914,12 @@ export class TrunkClient {
     return this.request(`/messages/search${query ? `?${query}` : ""}`);
   }
 
-  thread(threadId: string): Promise<MessagesResponse> {
-    return this.request(`/messages/thread/${encodeURIComponent(threadId)}`);
+  thread(threadId: string, options: { limit?: number; cursor?: string } = {}): Promise<MessagesResponse> {
+    const params = new URLSearchParams();
+    if (options.limit) params.set("limit", String(options.limit));
+    if (options.cursor) params.set("cursor", options.cursor);
+    const qs = params.toString();
+    return this.request(`/messages/thread/${encodeURIComponent(threadId)}${qs ? `?${qs}` : ""}`);
   }
 
   threadSummary(threadId: string): Promise<ThreadSummaryResponse> {

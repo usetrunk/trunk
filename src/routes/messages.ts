@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits, attachments } from "../db/schema.js";
-import { eq, or, and, desc, lt, lte, inArray, isNull, ne } from "drizzle-orm";
+import { eq, or, and, desc, lt, gt, lte, inArray, isNull, ne } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { parsePaginationQuery, paginateResults, type PaginationParams } from "../lib/pagination.js";
@@ -1142,21 +1142,47 @@ app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
     Math.max(1, parseInt(c.req.query("limit") || "200", 10) || 200),
     200
   );
+  const cursorParam = c.req.query("cursor");
+
+  const conditions = [
+    eq(messages.threadId, threadId),
+    or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))!,
+    ne(messages.status, "deleted"),
+  ];
+
+  // Cursor-based pagination: cursor is a message ID — fetch messages after it
+  if (cursorParam) {
+    if (!isValidUUID(cursorParam)) {
+      return c.json({ error: "Invalid cursor format", code: "INVALID_INPUT" }, 400);
+    }
+    // Find the cursor message's timestamp to paginate forward (chronological order)
+    const [cursorMsg] = await db
+      .select({ createdAt: messages.createdAt, id: messages.id })
+      .from(messages)
+      .where(eq(messages.id, cursorParam))
+      .limit(1);
+    if (cursorMsg) {
+      conditions.push(
+        or(
+          gt(messages.createdAt, cursorMsg.createdAt),
+          and(eq(messages.createdAt, cursorMsg.createdAt), gt(messages.id, cursorMsg.id)),
+        )! as ReturnType<typeof eq>
+      );
+    }
+  }
 
   const rows = await db
     .select()
     .from(messages)
-    .where(
-      and(
-        eq(messages.threadId, threadId),
-        or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId)),
-        ne(messages.status, "deleted")
-      )
-    )
+    .where(and(...conditions))
     .orderBy(messages.createdAt)
     .limit(queryLimit + 1);
 
-  return c.json({ messages: rows.slice(0, queryLimit), has_more: rows.length > queryLimit });
+  const page = rows.slice(0, queryLimit);
+  const has_more = rows.length > queryLimit;
+  const next_cursor = has_more && page.length > 0 ? page[page.length - 1].id : null;
+
+  return c.json({ messages: page, has_more, next_cursor });
 });
 
 app.delete("/:id", requireValidUUIDs("id"), async (c) => {

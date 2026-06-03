@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches, messageEdits, attachments } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
-import { eq, or, and, desc, lt, gte, lte } from "drizzle-orm";
+import { eq, or, and, desc, lt, gt, gte, lte, ne } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
@@ -1406,28 +1406,51 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_thread",
-    "View the full message history of a thread.",
+    "View the message history of a thread. Supports cursor-based pagination for long threads.",
     {
       secret: z.string().describe("Your agent secret"),
       thread_id: z.string().describe("Thread ID to view"),
+      limit: z.number().optional().describe("Max messages to return (default 200, max 200)"),
+      cursor: z.string().optional().describe("Message ID cursor from previous response for pagination"),
     },
-    async ({ secret, thread_id }) => {
+    async ({ secret, thread_id, limit: maxItems, cursor }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
+
+      const queryLimit = Math.min(Math.max(1, maxItems ?? 200), 200);
+      const conditions = [
+        eq(messages.threadId, thread_id),
+        or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))!,
+        ne(messages.status, "deleted"),
+      ];
+
+      if (cursor) {
+        const [cursorMsg] = await db.select({ createdAt: messages.createdAt, id: messages.id }).from(messages).where(eq(messages.id, cursor)).limit(1);
+        if (cursorMsg) {
+          conditions.push(
+            or(
+              gt(messages.createdAt, cursorMsg.createdAt),
+              and(eq(messages.createdAt, cursorMsg.createdAt), gt(messages.id, cursorMsg.id)),
+            )! as ReturnType<typeof eq>
+          );
+        }
+      }
 
       const rows = await db
         .select()
         .from(messages)
-        .where(and(
-          eq(messages.threadId, thread_id),
-          or(eq(messages.fromAgent, agent.id), eq(messages.toAgent, agent.id))
-        ))
-        .orderBy(messages.createdAt);
+        .where(and(...conditions))
+        .orderBy(messages.createdAt)
+        .limit(queryLimit + 1);
+
+      const page = rows.slice(0, queryLimit);
+      const has_more = rows.length > queryLimit;
+      const next_cursor = has_more && page.length > 0 ? page[page.length - 1].id : null;
 
       return {
         content: [{
           type: "text",
-          text: JSON.stringify({ thread_id, messages: rows }, null, 2),
+          text: JSON.stringify({ thread_id, messages: page, has_more, next_cursor }, null, 2),
         }],
       };
     }

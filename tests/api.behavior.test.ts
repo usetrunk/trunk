@@ -16860,6 +16860,89 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // --- Thread cursor-based pagination ---
+
+  describe("thread cursor-based pagination", () => {
+    it("returns next_cursor when thread has more messages than limit", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Send initial message
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "msg1" },
+      });
+      // Reply chain to create 3 messages in thread
+      const reply1 = await betaClient.reply(sent.id, { type: "text", payload: { content: "msg2" } });
+      await alphaClient.reply(reply1.id, { type: "text", payload: { content: "msg3" } });
+
+      // Fetch with limit=2 — should get first 2 and a cursor
+      const page1 = await alphaClient.thread(sent.thread_id, { limit: 2 });
+      expect(page1.messages.length).toBe(2);
+      expect(page1.has_more).toBe(true);
+      expect(page1.next_cursor).toBeDefined();
+
+      // Fetch page 2 using cursor
+      const page2 = await alphaClient.thread(sent.thread_id, { limit: 2, cursor: page1.next_cursor! });
+      expect(page2.messages.length).toBe(1);
+      expect(page2.has_more).toBe(false);
+      expect((page2.messages[0].payload as Record<string, unknown>).content).toBe("msg3");
+    });
+
+    it("returns no cursor when all messages fit in one page", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "single" },
+      });
+
+      const result = await alphaClient.thread(sent.thread_id);
+      expect(result.messages.length).toBe(1);
+      expect(result.has_more).toBe(false);
+      expect(result.next_cursor).toBeNull();
+    });
+
+    it("rejects invalid cursor format", async () => {
+      const alpha = await createClient().register({ name: "cursor-alpha", owner: "Test" });
+
+      const fakeThreadId = "00000000-0000-0000-0000-000000000001";
+      const res = await app.request(`/messages/thread/${fakeThreadId}?cursor=not-a-uuid`, {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_INPUT");
+    });
+
+    it("cursor pagination preserves chronological order", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "first" },
+      });
+      const r1 = await betaClient.reply(sent.id, { type: "text", payload: { content: "second" } });
+      const r2 = await alphaClient.reply(r1.id, { type: "text", payload: { content: "third" } });
+      await betaClient.reply(r2.id, { type: "text", payload: { content: "fourth" } });
+
+      // Page through 2 at a time
+      const page1 = await alphaClient.thread(sent.thread_id, { limit: 2 });
+      const page2 = await alphaClient.thread(sent.thread_id, { limit: 2, cursor: page1.next_cursor! });
+
+      const allContents = [
+        ...page1.messages.map((m: TrunkMessage) => (m.payload as Record<string, unknown>).content),
+        ...page2.messages.map((m: TrunkMessage) => (m.payload as Record<string, unknown>).content),
+      ];
+      expect(allContents).toEqual(["first", "second", "third", "fourth"]);
+    });
+  });
+
   // --- Room addressing edge cases ---
 
   describe("room addressing validation", () => {
@@ -17709,6 +17792,15 @@ function evaluateCondition(condition: SQL | undefined, row: unknown): boolean {
     if (rowVal instanceof Date && paramVal instanceof Date) return rowVal.getTime() < paramVal.getTime();
     if (typeof rowVal === "string" && typeof paramVal === "string") return rowVal < paramVal;
     if (typeof rowVal === "number" && typeof paramVal === "number") return rowVal < paramVal;
+    return false;
+  }
+
+  if (chunks.some((chunk) => isStringChunk(chunk, " > "))) {
+    const rowVal = getRowValue(row, column.name);
+    const paramVal = param.value;
+    if (rowVal instanceof Date && paramVal instanceof Date) return rowVal.getTime() > paramVal.getTime();
+    if (typeof rowVal === "string" && typeof paramVal === "string") return rowVal > paramVal;
+    if (typeof rowVal === "number" && typeof paramVal === "number") return rowVal > paramVal;
     return false;
   }
 
