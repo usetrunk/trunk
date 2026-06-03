@@ -2411,7 +2411,7 @@ describe("Hono API behavior", () => {
     expect(body.error).toContain("valid URL");
   });
 
-  it("accepts webhook with http and https URLs", async () => {
+  it("accepts webhook with http and https URLs (public hosts)", async () => {
     const { alpha } = await registerPair();
     const roomRes = await createRoomRaw(alpha.secret, { name: "Good URLs" });
     const room = await roomRes.json();
@@ -2419,7 +2419,7 @@ describe("Hono API behavior", () => {
     const httpRes = await app.request(`/rooms/${room.id}/webhooks`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
-      body: JSON.stringify({ url: "http://localhost:3000/hook" }),
+      body: JSON.stringify({ url: "http://hooks.example.com/hook" }),
     });
     expect(httpRes.status).toBe(201);
 
@@ -2650,6 +2650,196 @@ describe("Hono API behavior", () => {
     const webhook = await res.json();
     // Secret should not be echoed back
     expect(webhook.secret).toBeUndefined();
+  });
+
+  // --- SSRF protection tests ---
+
+  it("rejects webhook URLs pointing to localhost", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "SSRF Localhost" });
+    const room = await roomRes.json();
+
+    const urls = [
+      "http://localhost/hook",
+      "http://localhost:3000/hook",
+      "https://localhost/hook",
+    ];
+    for (const url of urls) {
+      const res = await app.request(`/rooms/${room.id}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ url }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("SSRF_BLOCKED");
+    }
+  });
+
+  it("rejects webhook URLs pointing to private IPv4 ranges", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "SSRF Private" });
+    const room = await roomRes.json();
+
+    const urls = [
+      "http://127.0.0.1/hook",             // loopback
+      "http://127.255.255.255/hook",        // loopback range
+      "http://10.0.0.1/hook",               // 10.0.0.0/8
+      "http://10.255.0.1:8080/hook",        // 10.0.0.0/8
+      "http://172.16.0.1/hook",             // 172.16.0.0/12
+      "http://172.31.255.255/hook",          // 172.16.0.0/12 upper bound
+      "http://192.168.0.1/hook",            // 192.168.0.0/16
+      "http://192.168.1.100:3000/hook",     // 192.168.0.0/16
+      "http://169.254.169.254/latest/meta-data", // AWS metadata
+      "http://0.0.0.0/hook",               // 0.0.0.0/8
+    ];
+    for (const url of urls) {
+      const res = await app.request(`/rooms/${room.id}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ url }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("SSRF_BLOCKED");
+    }
+  });
+
+  it("rejects webhook URLs pointing to IPv6 loopback and private ranges", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "SSRF IPv6" });
+    const room = await roomRes.json();
+
+    const urls = [
+      "http://[::1]/hook",
+      "http://[fe80::1]/hook",
+      "http://[fc00::1]/hook",
+      "http://[fd12:3456::1]/hook",
+    ];
+    for (const url of urls) {
+      const res = await app.request(`/rooms/${room.id}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ url }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("SSRF_BLOCKED");
+    }
+  });
+
+  it("rejects webhook URLs pointing to cloud metadata endpoints", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "SSRF Metadata" });
+    const room = await roomRes.json();
+
+    const urls = [
+      "http://metadata.google.internal/computeMetadata/v1/",
+      "http://instance-data/latest/meta-data/",
+    ];
+    for (const url of urls) {
+      const res = await app.request(`/rooms/${room.id}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ url }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("SSRF_BLOCKED");
+    }
+  });
+
+  it("allows webhook URLs with public IPs outside private ranges", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "SSRF Public OK" });
+    const room = await roomRes.json();
+
+    const urls = [
+      "https://hooks.slack.com/services/T1234/B5678/abc",
+      "https://8.8.8.8/hook",
+      "http://172.15.0.1/hook",    // just below 172.16 range
+      "http://172.32.0.1/hook",    // just above 172.31 range
+    ];
+    for (const url of urls) {
+      testState["rate_limits"].length = 0;
+      const res = await app.request(`/rooms/${room.id}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+        body: JSON.stringify({ url }),
+      });
+      expect(res.status).toBe(201);
+    }
+  });
+
+  // --- Duplicate webhook URL tests ---
+
+  it("rejects duplicate webhook URL in the same room", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Dup URL Room" });
+    const room = await roomRes.json();
+
+    const firstRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/unique" }),
+    });
+    expect(firstRes.status).toBe(201);
+
+    const dupRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/unique" }),
+    });
+    expect(dupRes.status).toBe(409);
+    const body = await dupRes.json();
+    expect(body.code).toBe("DUPLICATE_URL");
+  });
+
+  it("allows same webhook URL in different rooms", async () => {
+    const { alpha } = await registerPair();
+    const room1Res = await createRoomRaw(alpha.secret, { name: "Room A" });
+    const room1 = await room1Res.json();
+    const room2Res = await createRoomRaw(alpha.secret, { name: "Room B" });
+    const room2 = await room2Res.json();
+
+    const res1 = await app.request(`/rooms/${room1.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/shared" }),
+    });
+    expect(res1.status).toBe(201);
+
+    const res2 = await app.request(`/rooms/${room2.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/shared" }),
+    });
+    expect(res2.status).toBe(201);
+  });
+
+  it("allows re-registering a webhook URL after deletion", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Re-register Room" });
+    const room = await roomRes.json();
+
+    const createRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/reuse" }),
+    });
+    const webhook = await createRes.json();
+
+    await app.request(`/rooms/${room.id}/webhooks/${webhook.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+
+    const reCreateRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/reuse" }),
+    });
+    expect(reCreateRes.status).toBe(201);
   });
 
   // --- Room messaging fan-out tests ---
@@ -8595,6 +8785,52 @@ describe("Hono API behavior", () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 
+  it("rejects registration with private IP webhook_url (SSRF)", async () => {
+    const privateUrls = [
+      "http://127.0.0.1/hook",
+      "http://10.0.0.1/hook",
+      "http://192.168.1.1/hook",
+      "http://169.254.169.254/latest/meta-data",
+      "http://localhost/hook",
+    ];
+    for (const url of privateUrls) {
+      await expect(
+        createClient().register({ name: "ssrf-reg", webhook_url: url } as any)
+      ).rejects.toMatchObject({ status: 400 });
+    }
+  });
+
+  it("rejects PATCH with private IP webhook_url (SSRF)", async () => {
+    const { alphaClient } = await registerPair();
+    await expect(
+      alphaClient.updateMe({ webhook_url: "http://127.0.0.1/hook" } as any)
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects PUT /me/webhook with private IP (SSRF)", async () => {
+    const alpha = await createClient().register({ name: "ssrf-webhook-set" });
+    const res = await app.request("/agents/me/webhook", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "http://192.168.0.1:8080/hook" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("SSRF_BLOCKED");
+  });
+
+  it("allows PUT /me/webhook with public URL", async () => {
+    const alpha = await createClient().register({ name: "ssrf-webhook-ok" });
+    const res = await app.request("/agents/me/webhook", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/agent" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.url).toBe("https://hooks.example.com/agent");
+  });
+
   it("rejects status text exceeding 500 characters", async () => {
     const { alphaClient } = await registerPair();
     await expect(
@@ -13478,6 +13714,71 @@ describe("Hono API behavior", () => {
     expect(createRes.status).toBe(201);
     const attachment = await createRes.json();
     expect(attachment.content_type).toBe("application/octet-stream");
+  });
+
+  // --- Attachment access after unpairing ---
+
+  it("message-linked attachment remains accessible to both parties after unpairing", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Alpha sends a message with an attachment to beta
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "Important file attached" },
+    });
+
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "contract.pdf", data: btoa("contract-data"), message_id: sent.id }),
+    });
+    expect(createRes.status).toBe(201);
+    const attachment = await createRes.json();
+
+    // Unpair
+    await alphaClient.unpair(beta.agent_id);
+
+    // Both parties can still access the attachment (messages are immutable)
+    const alphaGet = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(alphaGet.status).toBe(200);
+
+    const betaGet = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(betaGet.status).toBe(200);
+  });
+
+  it("standalone attachment (no message) remains accessible only to uploader after unpairing", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Alpha uploads a standalone attachment
+    const createRes = await app.request("/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ filename: "notes.txt", data: btoa("notes") }),
+    });
+    expect(createRes.status).toBe(201);
+    const attachment = await createRes.json();
+
+    // Unpair
+    await alphaClient.unpair(beta.agent_id);
+
+    // Alpha (uploader) can still access
+    const alphaGet = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(alphaGet.status).toBe(200);
+
+    // Beta cannot access (never could — standalone is uploader-only)
+    const betaGet = await app.request(`/attachments/${attachment.id}`, {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(betaGet.status).toBe(403);
   });
 
   // --- Template CRUD tests ---

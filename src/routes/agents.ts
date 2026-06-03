@@ -7,6 +7,7 @@ import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
 import { canMessage } from "../lib/workspace.js";
+import { validateWebhookUrl } from "../lib/ssrf.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -36,7 +37,8 @@ app.post("/register", async (c) => {
     }
   }
   if (body.webhook_url !== undefined && body.webhook_url !== null) {
-    try { new URL(body.webhook_url); } catch { return c.json({ error: "Invalid webhook URL", code: "INVALID_FIELD" }, 400); }
+    const urlError = validateWebhookUrl(body.webhook_url);
+    if (urlError) return c.json({ error: urlError, code: urlError.includes("private") ? "SSRF_BLOCKED" : "INVALID_FIELD" }, 400);
   }
 
   const secret = generateSecret();
@@ -127,7 +129,8 @@ app.patch("/me", authMiddleware, async (c) => {
   }
 
   if (body.webhook_url !== undefined && body.webhook_url !== null) {
-    try { new URL(body.webhook_url); } catch { return c.json({ error: "Invalid webhook URL", code: "INVALID_FIELD" }, 400); }
+    const urlError = validateWebhookUrl(body.webhook_url);
+    if (urlError) return c.json({ error: urlError, code: urlError.includes("private") ? "SSRF_BLOCKED" : "INVALID_FIELD" }, 400);
   }
 
   const updates: Partial<typeof agents.$inferInsert> = {};
@@ -333,10 +336,9 @@ app.put("/me/webhook", authMiddleware, async (c) => {
     return c.json({ error: "url is required", code: "MISSING_FIELD" }, 400);
   }
 
-  try {
-    new URL(body.url);
-  } catch {
-    return c.json({ error: "Invalid URL", code: "INVALID_INPUT" }, 400);
+  const urlError = validateWebhookUrl(body.url);
+  if (urlError) {
+    return c.json({ error: urlError, code: urlError.includes("private") ? "SSRF_BLOCKED" : "INVALID_INPUT" }, 400);
   }
 
   const [updated] = await db

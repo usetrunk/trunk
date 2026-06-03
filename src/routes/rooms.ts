@@ -7,6 +7,7 @@ import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
+import { isPrivateHostname } from "../lib/ssrf.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -464,6 +465,11 @@ app.post("/:roomId/webhooks", requireValidUUIDs("roomId"), async (c) => {
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
       return c.json({ error: "url must use https or http protocol", code: "INVALID_FIELD" }, 400);
     }
+    // SSRF protection: block private/internal IP ranges
+    const hostname = parsed.hostname.toLowerCase();
+    if (isPrivateHostname(hostname)) {
+      return c.json({ error: "url must not point to a private or internal address", code: "SSRF_BLOCKED" }, 400);
+    }
   } catch {
     return c.json({ error: "url must be a valid URL", code: "INVALID_FIELD" }, 400);
   }
@@ -506,6 +512,11 @@ app.post("/:roomId/webhooks", requireValidUUIDs("roomId"), async (c) => {
 
   if (existing.length >= 20) {
     return c.json({ error: "Maximum 20 webhooks per room", code: "LIMIT_EXCEEDED" }, 400);
+  }
+
+  // Reject duplicate URLs in the same room
+  if (existing.some((w) => w.url === body.url)) {
+    return c.json({ error: "A webhook with this URL already exists in this room", code: "DUPLICATE_URL" }, 409);
   }
 
   const [webhook] = await db
