@@ -16956,19 +16956,26 @@ describe("Hono API behavior", () => {
 
     await alphaClient.putFact(beta.agent_id, "seq", 0);
 
-    // Alpha updates with If-Match, beta also updates — one should get version 2, other should get 3 or 412
-    const alphaPromise = alphaClient.putFact(beta.agent_id, "seq", 1, { ifMatch: 1 });
+    // Alpha updates with If-Match, beta also updates — one should succeed, other may get 412
+    const alphaPromise = alphaClient.putFact(beta.agent_id, "seq", 1, { ifMatch: 1 }).catch(e => e);
     const betaPromise = betaClient.putFact(alpha.agent_id, "seq", 2, { ifMatch: 1 }).catch(e => e);
 
     const [alphaResult, betaResult] = await Promise.all([alphaPromise, betaPromise]);
 
-    // At least one should succeed with version 2
-    if (betaResult.status === 412) {
+    // Either side can win the race — at least one must succeed with version 2
+    const alphaFailed = alphaResult instanceof Error || alphaResult.status === 412;
+    const betaFailed = betaResult instanceof Error || betaResult.status === 412;
+
+    // At least one must succeed
+    expect(alphaFailed && betaFailed).toBe(false);
+
+    if (alphaFailed) {
+      expect(betaResult.version).toBe(2);
+    } else if (betaFailed) {
       expect(alphaResult.version).toBe(2);
     } else {
-      // Both succeeded but one got version 2, other got version 3 (depending on timing)
+      // Both succeeded — they should have sequential versions
       const versions = [alphaResult.version, betaResult.version].sort();
-      // If both passed If-Match check, they should have sequential versions
       expect(versions[0]).toBe(2);
     }
   });
