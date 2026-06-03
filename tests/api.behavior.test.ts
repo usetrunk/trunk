@@ -599,13 +599,13 @@ describe("Hono API behavior", () => {
     const sent = await alphaClient.send({
       to: beta.agent_id,
       type: "handoff",
-      thread_id: "thread-explicit-123",
+      thread_id: "00000000-0000-4000-8000-aaaaaaaaaaaa",
       payload: { content: "Use this thread." },
     });
 
-    expect(sent.thread_id).toBe("thread-explicit-123");
-    await expect(betaClient.thread("thread-explicit-123")).resolves.toMatchObject({
-      messages: [expect.objectContaining({ id: sent.id, threadId: "thread-explicit-123" })],
+    expect(sent.thread_id).toBe("00000000-0000-4000-8000-aaaaaaaaaaaa");
+    await expect(betaClient.thread("00000000-0000-4000-8000-aaaaaaaaaaaa")).resolves.toMatchObject({
+      messages: [expect.objectContaining({ id: sent.id, threadId: "00000000-0000-4000-8000-aaaaaaaaaaaa" })],
     });
   });
 
@@ -975,7 +975,7 @@ describe("Hono API behavior", () => {
       title: "Build auth module",
       start_date: "2026-06-05",
       group: "auth",
-      depends_on: ["fake-task-id-1", "fake-task-id-2"],
+      depends_on: ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"],
       sequence: 1,
       estimate: 8,
     });
@@ -983,7 +983,7 @@ describe("Hono API behavior", () => {
     const task = await res.json();
     expect(task.start_date).toBe("2026-06-05");
     expect(task.group).toBe("auth");
-    expect(task.depends_on).toEqual(["fake-task-id-1", "fake-task-id-2"]);
+    expect(task.depends_on).toEqual(["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]);
     expect(task.sequence).toBe(1);
     expect(task.estimate).toBe(8);
   });
@@ -1071,14 +1071,14 @@ describe("Hono API behavior", () => {
       estimate: 24,
       sequence: 5,
       start_date: "2026-08-01",
-      depends_on: ["dep-1"],
+      depends_on: ["00000000-0000-4000-8000-000000000099"],
     });
 
     expect(updated.group).toBe("infra");
     expect(updated.estimate).toBe(24);
     expect(updated.sequence).toBe(5);
     expect(updated.start_date).toBe("2026-08-01");
-    expect(updated.depends_on).toEqual(["dep-1"]);
+    expect(updated.depends_on).toEqual(["00000000-0000-4000-8000-000000000099"]);
   });
 
   // --- Task deletion tests ---
@@ -7916,6 +7916,191 @@ describe("Hono API behavior", () => {
     const body = await res.json();
     expect(body.code).toBe("INVALID_FIELD");
     expect(body.error).toContain("200");
+  });
+
+  // --- Hardening: inbox status filter, thread_id/reply_to UUID, ttl_seconds cap, depends_on validation ---
+
+  it("rejects inbox status=deleted to prevent soft-deleted message exposure", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send a message and then soft-delete it
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "secret" },
+    });
+
+    // Delete the message
+    const delRes = await app.request(`/messages/${sent.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(delRes.status).toBe(200);
+
+    // Attempting to filter inbox by status=deleted should be rejected
+    const inboxRes = await app.request("/messages/inbox?status=deleted", {
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    expect(inboxRes.status).toBe(400);
+    const body = await inboxRes.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("status");
+  });
+
+  it("allows valid inbox status filters (pending, delivered, processed, replied)", async () => {
+    const alpha = await createClient().register({ name: "inbox-val", owner: "Frank" });
+
+    for (const status of ["pending", "delivered", "processed", "replied"]) {
+      const res = await app.request(`/messages/inbox?status=${status}`, {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it("rejects non-UUID thread_id on message send", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "bad-thread-id",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "test" },
+        thread_id: "not-a-uuid",
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("thread_id");
+  });
+
+  it("rejects non-UUID reply_to on message send", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "bad-reply-to",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "test" },
+        reply_to: "invalid-reply",
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("reply_to");
+  });
+
+  it("caps ttl_seconds to prevent overflow", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "huge-ttl",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "test" },
+        ttl_seconds: 999999999999,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    // Should succeed but expiry should be capped to ~1 year from now
+    const expiresAt = new Date(body.expires_at);
+    const maxExpiry = new Date(Date.now() + 366 * 24 * 60 * 60 * 1000);
+    expect(expiresAt.getTime()).toBeLessThan(maxExpiry.getTime());
+  });
+
+  it("rejects too many attachment_ids", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const fakeIds = Array.from({ length: 21 }, (_, i) =>
+      `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
+    );
+
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "too-many-att",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "test" },
+        attachment_ids: fakeIds,
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("20");
+  });
+
+  it("rejects depends_on with non-UUID values in task creation", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Bad deps task",
+      depends_on: ["not-a-uuid"],
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.error).toContain("depends_on");
+  });
+
+  it("rejects depends_on exceeding 50 entries", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const manyDeps = Array.from({ length: 51 }, (_, i) =>
+      `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
+    );
+
+    const res = await createTaskRaw(alpha.secret, beta.agent_id, {
+      title: "Too many deps",
+      depends_on: manyDeps,
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(body.error).toContain("50");
+  });
+
+  it("rejects non-UUID 'to' filter on sent messages", async () => {
+    const alpha = await createClient().register({ name: "sent-val", owner: "Frank" });
+
+    const res = await app.request("/messages/sent?to=not-a-uuid", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
   });
 
   // --- Saved search validation ---

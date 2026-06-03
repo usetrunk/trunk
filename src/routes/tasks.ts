@@ -8,11 +8,12 @@ import { contactScope, verifyRoomAccess, resolveScopeAccess } from "../lib/conte
 import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middleware.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
-import { requireValidUUIDs } from "../lib/errors.js";
+import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
 const VALID_PRIORITIES = ["critical", "high", "medium", "low"] as const;
+const MAX_DEPENDS_ON = 50;
 
 function isValidStatus(s: string): boolean {
   return (VALID_STATUSES as readonly string[]).includes(s);
@@ -79,6 +80,19 @@ app.post("/", async (c) => {
   if (!body.contact_id && !body.room_id && !body.workspace_id) return c.json({ error: "contact_id, room_id, or workspace_id is required", code: "MISSING_FIELD" }, 400);
   if (body.priority && !isValidPriority(body.priority)) {
     return c.json({ error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+  if (body.depends_on) {
+    if (!Array.isArray(body.depends_on)) {
+      return c.json({ error: "depends_on must be an array", code: "INVALID_FIELD" }, 400);
+    }
+    if (body.depends_on.length > MAX_DEPENDS_ON) {
+      return c.json({ error: `depends_on cannot exceed ${MAX_DEPENDS_ON} entries`, code: "VALIDATION_ERROR" }, 400);
+    }
+    for (const dep of body.depends_on) {
+      if (!isValidUUID(dep)) {
+        return c.json({ error: `Invalid UUID in depends_on: ${dep}`, code: "INVALID_INPUT" }, 400);
+      }
+    }
   }
 
   let scope: string;
@@ -313,6 +327,19 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
   }
   if (body.title !== undefined && body.title.length > 500) {
     return c.json({ error: "title must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.depends_on !== undefined) {
+    if (!Array.isArray(body.depends_on)) {
+      return c.json({ error: "depends_on must be an array", code: "INVALID_FIELD" }, 400);
+    }
+    if (body.depends_on.length > MAX_DEPENDS_ON) {
+      return c.json({ error: `depends_on cannot exceed ${MAX_DEPENDS_ON} entries`, code: "VALIDATION_ERROR" }, 400);
+    }
+    for (const dep of body.depends_on) {
+      if (!isValidUUID(dep)) {
+        return c.json({ error: `Invalid UUID in depends_on: ${dep}`, code: "INVALID_INPUT" }, 400);
+      }
+    }
   }
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };

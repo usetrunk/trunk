@@ -10,8 +10,12 @@ import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import { canMessage, getWorkspaceMembers, isBlocked } from "../lib/workspace.js";
-import { requireValidUUIDs } from "../lib/errors.js";
+import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
+
+const VALID_INBOX_STATUSES = ["pending", "delivered", "processed", "replied"] as const;
+const MAX_TTL_SECONDS = 365 * 24 * 60 * 60; // 1 year
+const MAX_ATTACHMENT_IDS = 20;
 
 const app = new Hono<AgentVariables>();
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -49,6 +53,15 @@ app.post("/", async (c) => {
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
     return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   }
+  if (body.thread_id && !isValidUUID(body.thread_id)) {
+    return c.json({ error: "thread_id must be a valid UUID", code: "INVALID_INPUT" }, 400);
+  }
+  if (body.reply_to && !isValidUUID(body.reply_to)) {
+    return c.json({ error: "reply_to must be a valid UUID", code: "INVALID_INPUT" }, 400);
+  }
+  if (body.attachment_ids && body.attachment_ids.length > MAX_ATTACHMENT_IDS) {
+    return c.json({ error: `Cannot attach more than ${MAX_ATTACHMENT_IDS} files`, code: "VALIDATION_ERROR" }, 400);
+  }
 
   // Validate scheduled_at if provided
   let scheduledAt: Date | undefined;
@@ -73,7 +86,8 @@ app.post("/", async (c) => {
       return c.json({ error: "expires_at must be in the future", code: "INVALID_INPUT" }, 400);
     }
   } else if (body.ttl_seconds && body.ttl_seconds > 0) {
-    expiresAt = new Date(Date.now() + body.ttl_seconds * 1000);
+    const capped = Math.min(body.ttl_seconds, MAX_TTL_SECONDS);
+    expiresAt = new Date(Date.now() + capped * 1000);
   }
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -271,6 +285,22 @@ app.post("/", async (c) => {
     return c.json({ error: "You have been blocked by this agent", code: "BLOCKED" }, 403);
   }
 
+  // Validate attachments BEFORE inserting the message to avoid orphaned rows
+  if (body.attachment_ids && body.attachment_ids.length > 0) {
+    for (const attachmentId of body.attachment_ids) {
+      if (!isValidUUID(attachmentId)) {
+        return c.json({ error: `Invalid attachment ID format: ${attachmentId}`, code: "INVALID_INPUT" }, 400);
+      }
+      const [att] = await db.select().from(attachments).where(eq(attachments.id, attachmentId)).limit(1);
+      if (!att) {
+        return c.json({ error: `Attachment ${attachmentId} not found`, code: "ATTACHMENT_NOT_FOUND" }, 404);
+      }
+      if (att.agentId !== agentId) {
+        return c.json({ error: `Attachment ${attachmentId} not owned by you`, code: "FORBIDDEN" }, 403);
+      }
+    }
+  }
+
   // Create message
   const [message] = await db
     .insert(messages)
@@ -296,16 +326,9 @@ app.post("/", async (c) => {
     message.threadId = message.id;
   }
 
-  // Link attachments to the message if provided
+  // Link pre-validated attachments to the message
   if (body.attachment_ids && body.attachment_ids.length > 0) {
     for (const attachmentId of body.attachment_ids) {
-      const [att] = await db.select().from(attachments).where(eq(attachments.id, attachmentId)).limit(1);
-      if (!att) {
-        return c.json({ error: `Attachment ${attachmentId} not found`, code: "ATTACHMENT_NOT_FOUND" }, 404);
-      }
-      if (att.agentId !== agentId) {
-        return c.json({ error: `Attachment ${attachmentId} not owned by you`, code: "FORBIDDEN" }, 403);
-      }
       await db.update(attachments).set({ messageId: message.id }).where(eq(attachments.id, attachmentId));
     }
   }
@@ -357,6 +380,9 @@ app.get("/inbox", async (c) => {
   }
 
   const status = c.req.query("status");
+  if (status && !(VALID_INBOX_STATUSES as readonly string[]).includes(status)) {
+    return c.json({ error: `Invalid status filter. Must be one of: ${VALID_INBOX_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
@@ -382,7 +408,7 @@ app.get("/inbox", async (c) => {
 
   const now = new Date();
   const visible = (status
-    ? rows.filter((row) => row.status !== "deleted")
+    ? rows
     : rows.filter((row) => row.status === "pending" || row.status === "delivered")
   ).filter((row) => !row.expiresAt || row.expiresAt > now);
 
@@ -541,6 +567,12 @@ app.get("/sent", async (c) => {
 
   const toFilter = c.req.query("to");
   const typeFilter = c.req.query("type");
+  if (toFilter && !isValidUUID(toFilter)) {
+    return c.json({ error: "Invalid 'to' filter — must be a valid UUID", code: "INVALID_INPUT" }, 400);
+  }
+  if (typeFilter && typeFilter.length > 50) {
+    return c.json({ error: "type filter too long", code: "INVALID_FIELD" }, 400);
+  }
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
