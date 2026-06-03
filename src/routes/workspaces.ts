@@ -351,6 +351,27 @@ app.patch("/members/:id/role", requireValidUUIDs("id"), async (c) => {
     return c.json({ error: "Agent is not a member of this workspace", code: "NOT_FOUND" }, 404);
   }
 
+  // Prevent demoting the last admin
+  if (target.workspaceRole === "admin" && body.role === "member") {
+    const otherAdmins = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.workspaceId, agent.workspaceId),
+          eq(agents.workspaceRole, "admin"),
+        ),
+      )
+      .limit(2);
+    const remainingAdmins = otherAdmins.filter((a) => a.id !== targetId);
+    if (remainingAdmins.length === 0) {
+      return c.json({
+        error: "Cannot demote the last admin. Promote another member first.",
+        code: "LAST_ADMIN",
+      }, 400);
+    }
+  }
+
   await db
     .update(agents)
     .set({ workspaceRole: body.role })
@@ -383,26 +404,22 @@ app.delete("/", async (c) => {
 
   const workspaceId = agent.workspaceId;
 
-  // Remove all members from workspace
-  const members = await db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(eq(agents.workspaceId, workspaceId));
-
-  for (const member of members) {
-    await db
+  // Atomic deletion: remove members, contacts, and workspace in one transaction
+  await db.transaction(async (tx) => {
+    // Remove all members from workspace
+    await tx
       .update(agents)
       .set({ workspaceId: null, workspaceRole: null })
-      .where(eq(agents.id, member.id));
-  }
+      .where(eq(agents.workspaceId, workspaceId));
 
-  // Delete workspace contacts
-  await db
-    .delete(workspaceContacts)
-    .where(eq(workspaceContacts.workspaceId, workspaceId));
+    // Delete workspace contacts
+    await tx
+      .delete(workspaceContacts)
+      .where(eq(workspaceContacts.workspaceId, workspaceId));
 
-  // Delete workspace
-  await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    // Delete workspace
+    await tx.delete(workspaces).where(eq(workspaces.id, workspaceId));
+  });
 
   await audit(agentId, "workspace.delete", "workspace", workspaceId);
 

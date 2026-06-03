@@ -2949,6 +2949,73 @@ describe("Hono API behavior", () => {
     });
   });
 
+  it("cannot demote the last admin via role change", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-sole-admin" });
+    const beta = await anon.register({ name: "ws-member" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "LastAdminTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Alpha is the only admin — demoting themselves should fail
+    await expect(alphaClient.changeWorkspaceMemberRole(alpha.agent_id, "member")).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("last admin"),
+    });
+
+    // Verify alpha is still admin
+    const info = await alphaClient.myWorkspace();
+    const alphaMember = info.members.find((m) => m.agent_id === alpha.agent_id);
+    expect(alphaMember?.role).toBe("admin");
+  });
+
+  it("can demote an admin when another admin exists", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin1" });
+    const beta = await anon.register({ name: "ws-admin2" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "TwoAdminTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Promote beta to admin
+    await alphaClient.changeWorkspaceMemberRole(beta.agent_id, "admin");
+
+    // Now demoting alpha should succeed since beta is also admin
+    const result = await betaClient.changeWorkspaceMemberRole(alpha.agent_id, "member");
+    expect(result.ok).toBe(true);
+    expect(result.role).toBe("member");
+  });
+
+  it("cannot demote the last admin by another admin demoting them", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "ws-admin-a" });
+    const beta = await anon.register({ name: "ws-admin-b" });
+    const gamma = await anon.register({ name: "ws-member-c" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    const ws = await alphaClient.createWorkspace({ name: "DemoteLastTeam" });
+    await betaClient.joinWorkspace({ code: ws.pairing_code });
+    await gammaClient.joinWorkspace({ code: ws.pairing_code });
+
+    // Promote beta to admin
+    await alphaClient.changeWorkspaceMemberRole(beta.agent_id, "admin");
+
+    // Demote alpha — succeeds because beta is still admin
+    await betaClient.changeWorkspaceMemberRole(alpha.agent_id, "member");
+
+    // Now beta is the only admin — demoting beta should fail
+    await expect(betaClient.changeWorkspaceMemberRole(beta.agent_id, "member")).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("last admin"),
+    });
+  });
+
   it("admin can delete workspace, removing all members", async () => {
     const anon = createClient();
     const alpha = await anon.register({ name: "ws-admin" });
