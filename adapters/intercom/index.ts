@@ -105,13 +105,20 @@ async function verifyIntercomWebhook(body: string, signature: string): Promise<b
   const key = await crypto.subtle.importKey(
     "raw",
     encoder.encode(INTERCOM_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
+    { name: "HMAC", hash: "SHA-1" },
     false,
     ["sign"]
   );
   const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
   const computed = `sha1=${Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("")}`;
-  return computed === signature;
+
+  // Constant-time comparison
+  if (computed.length !== signature.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < computed.length; i++) {
+    mismatch |= computed.charCodeAt(i) ^ signature.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
 // --- Webhook handler ---
