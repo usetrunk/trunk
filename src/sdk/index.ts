@@ -489,6 +489,8 @@ export type PaginatedResponse<T> = T & {
 
 export type MessagesResponse = {
   messages: TrunkMessage[];
+  has_more?: boolean;
+  total?: number;
 };
 
 export type ThreadSummaryParticipant = {

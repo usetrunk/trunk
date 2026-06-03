@@ -12835,6 +12835,38 @@ describe("Hono API behavior", () => {
     expect(res.headers.get("x-ratelimit-limit")).toBe("60");
   });
 
+  it("GET /messages/thread/:threadId returns has_more and total fields", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({ to: beta.agent_id, type: "text", payload: { content: "thread-limit" } });
+    const res = await app.request(`/messages/thread/${sent.thread_id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.messages).toHaveLength(1);
+    expect(body.has_more).toBe(false);
+    expect(body.total).toBe(1);
+  });
+
+  it("GET /messages/thread/:threadId respects limit query param", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({ to: beta.agent_id, type: "text", payload: { content: "msg1" } });
+    const reply1 = await betaClient.reply(sent.id, { type: "text", payload: { content: "msg2" } });
+    await alphaClient.reply(reply1.id, { type: "text", payload: { content: "msg3" } });
+
+    // Fetch with limit=2
+    const res = await app.request(`/messages/thread/${sent.thread_id}?limit=2`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.messages).toHaveLength(2);
+    expect(body.has_more).toBe(true);
+    expect(body.total).toBe(3);
+  });
+
   it("GET /documents/room/:roomId/:docId includes rate limit headers", async () => {
     const alpha = await createClient().register({ name: "rl-doc-room" });
     const roomRes = await app.request("/rooms", {

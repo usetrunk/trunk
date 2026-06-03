@@ -1017,7 +1017,8 @@ app.get("/thread/:threadId/summary", async (c) => {
         or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
       )
     )
-    .orderBy(messages.createdAt);
+    .orderBy(messages.createdAt)
+    .limit(1000);
 
   const visible = rows.filter((row) => row.status !== "deleted");
   if (visible.length === 0) {
@@ -1108,6 +1109,10 @@ app.get("/thread/:threadId", async (c) => {
     return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   }
   const threadId = c.req.param("threadId");
+  const queryLimit = Math.min(
+    Math.max(1, parseInt(c.req.query("limit") || "200", 10) || 200),
+    200
+  );
 
   const rows = await db
     .select()
@@ -1120,7 +1125,9 @@ app.get("/thread/:threadId", async (c) => {
     )
     .orderBy(messages.createdAt);
 
-  return c.json({ messages: rows.filter((row) => row.status !== "deleted") });
+  const visible = rows.filter((row) => row.status !== "deleted");
+  const limited = visible.slice(0, queryLimit);
+  return c.json({ messages: limited, has_more: visible.length > queryLimit, total: visible.length });
 });
 
 app.delete("/:id", requireValidUUIDs("id"), async (c) => {
