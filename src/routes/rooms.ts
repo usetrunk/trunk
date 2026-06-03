@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { rooms, roomMembers, agents, messages, tasks, sharedFacts, sharedDocuments } from "../db/schema.js";
+import { rooms, roomMembers, roomWebhooks, agents, messages, tasks, sharedFacts, sharedDocuments } from "../db/schema.js";
 import { and, eq, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
@@ -370,6 +370,7 @@ app.delete("/:roomId", requireValidUUIDs("roomId"), async (c) => {
   const deletedTasks = await db.delete(tasks).where(eq(tasks.scope, scope)).returning({ id: tasks.id });
   const deletedFacts = await db.delete(sharedFacts).where(eq(sharedFacts.scope, scope)).returning({ key: sharedFacts.key });
   const deletedDocs = await db.delete(sharedDocuments).where(eq(sharedDocuments.scope, scope)).returning({ id: sharedDocuments.id });
+  const deletedWebhooks = await db.delete(roomWebhooks).where(eq(roomWebhooks.roomId, roomId)).returning({ id: roomWebhooks.id });
   await db.delete(rooms).where(eq(rooms.id, roomId));
 
   await audit(agentId, "room.deleted", "room", roomId, {
@@ -379,6 +380,7 @@ app.delete("/:roomId", requireValidUUIDs("roomId"), async (c) => {
       tasks: deletedTasks.length,
       facts: deletedFacts.length,
       documents: deletedDocs.length,
+      webhooks: deletedWebhooks.length,
     },
   });
 
@@ -430,6 +432,172 @@ app.post("/:roomId/leave", requireValidUUIDs("roomId"), async (c) => {
   await audit(agentId, "room.left", "room", roomId, {});
 
   return c.json({ ok: true, room_id: roomId });
+});
+
+// Register a webhook for a room (creator/admin only)
+app.post("/:roomId/webhooks", requireValidUUIDs("roomId"), async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+
+  const rateLimit = await checkRateLimit(`rooms:write:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  const body = await c.req.json<{
+    url: string;
+    secret?: string;
+    filter_group?: string;
+    filter_priority?: string;
+    filter_status?: string;
+  }>();
+
+  if (!body.url || typeof body.url !== "string") {
+    return c.json({ error: "url is required", code: "MISSING_FIELD" }, 400);
+  }
+  if (body.url.length > 2000) {
+    return c.json({ error: "url must be 2000 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.secret && body.secret.length > 500) {
+    return c.json({ error: "secret must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  const validPriorities = ["critical", "high", "medium", "low"];
+  if (body.filter_priority && !validPriorities.includes(body.filter_priority)) {
+    return c.json({ error: `filter_priority must be one of: ${validPriorities.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+  const validStatuses = ["open", "in-progress", "done", "blocked"];
+  if (body.filter_status && !validStatuses.includes(body.filter_status)) {
+    return c.json({ error: `filter_status must be one of: ${validStatuses.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+  if (body.filter_group && body.filter_group.length > 200) {
+    return c.json({ error: "filter_group must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+
+  // Verify creator/admin role
+  const [membership] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
+
+  if (!membership) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
+  if (membership.role !== "creator" && membership.role !== "admin") {
+    return c.json({ error: "Only creators and admins can manage webhooks", code: "INSUFFICIENT_ROLE" }, 403);
+  }
+
+  // Limit webhooks per room
+  const existing = await db
+    .select()
+    .from(roomWebhooks)
+    .where(eq(roomWebhooks.roomId, roomId))
+    .limit(25);
+
+  if (existing.length >= 20) {
+    return c.json({ error: "Maximum 20 webhooks per room", code: "LIMIT_EXCEEDED" }, 400);
+  }
+
+  const [webhook] = await db
+    .insert(roomWebhooks)
+    .values({
+      roomId,
+      url: body.url,
+      secret: body.secret,
+      filterGroup: body.filter_group,
+      filterPriority: body.filter_priority,
+      filterStatus: body.filter_status,
+      createdBy: agentId,
+    })
+    .returning();
+
+  await audit(agentId, "room.webhook_created", "room", roomId, { webhook_id: webhook.id, url: body.url });
+
+  return c.json({
+    id: webhook.id,
+    room_id: webhook.roomId,
+    url: webhook.url,
+    filter_group: webhook.filterGroup,
+    filter_priority: webhook.filterPriority,
+    filter_status: webhook.filterStatus,
+    active: webhook.active === 1,
+    created_by: webhook.createdBy,
+    created_at: webhook.createdAt,
+  }, 201);
+});
+
+// List webhooks for a room (any member can view)
+app.get("/:roomId/webhooks", requireValidUUIDs("roomId"), async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  const [membership] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
+
+  if (!membership) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
+
+  const webhooks = await db
+    .select()
+    .from(roomWebhooks)
+    .where(eq(roomWebhooks.roomId, roomId))
+    .limit(100);
+
+  return c.json({
+    webhooks: webhooks.map((w) => ({
+      id: w.id,
+      room_id: w.roomId,
+      url: w.url,
+      filter_group: w.filterGroup,
+      filter_priority: w.filterPriority,
+      filter_status: w.filterStatus,
+      active: w.active === 1,
+      created_by: w.createdBy,
+      created_at: w.createdAt,
+    })),
+  });
+});
+
+// Delete a webhook (creator/admin only)
+app.delete("/:roomId/webhooks/:webhookId", requireValidUUIDs("roomId", "webhookId"), async (c) => {
+  const agentId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+  const webhookId = c.req.param("webhookId");
+
+  const rateLimit = await checkRateLimit(`rooms:write:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  const [membership] = await db
+    .select()
+    .from(roomMembers)
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, agentId)))
+    .limit(1);
+
+  if (!membership) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
+  if (membership.role !== "creator" && membership.role !== "admin") {
+    return c.json({ error: "Only creators and admins can manage webhooks", code: "INSUFFICIENT_ROLE" }, 403);
+  }
+
+  const [deleted] = await db
+    .delete(roomWebhooks)
+    .where(and(eq(roomWebhooks.id, webhookId), eq(roomWebhooks.roomId, roomId)))
+    .returning();
+
+  if (!deleted) return c.json({ error: "Webhook not found", code: "NOT_FOUND" }, 404);
+
+  await audit(agentId, "room.webhook_deleted", "room", roomId, { webhook_id: webhookId });
+
+  return c.json({ ok: true, deleted_id: webhookId });
 });
 
 export default app;

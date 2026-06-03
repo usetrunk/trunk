@@ -317,6 +317,21 @@ export const sharedDocumentVersions = pgTable("shared_document_versions", {
   index("shared_doc_versions_idx").on(table.documentId, table.version),
 ]);
 
+export const roomWebhooks = pgTable("room_webhooks", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  roomId: text("room_id").notNull().references(() => rooms.id),
+  url: text("url").notNull(),
+  secret: text("secret"),
+  filterGroup: text("filter_group"), // null = match all groups
+  filterPriority: text("filter_priority"), // null = match all priorities
+  filterStatus: text("filter_status"), // null = match all statuses
+  active: integer("active").notNull().default(1), // 1 = active, 0 = inactive
+  createdBy: text("created_by").notNull().references(() => agents.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("room_webhooks_room_idx").on(table.roomId),
+]);
+
 export const attachments = pgTable("attachments", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   messageId: text("message_id").references(() => messages.id),

@@ -134,6 +134,13 @@
       "when": 1780443848574,
       "tag": "0018_careful_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1780525793738,
+      "tag": "0019_huge_valeria_richards",
+      "breakpoints": true
     }
   ]
 }

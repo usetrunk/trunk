@@ -270,6 +270,19 @@ type AttachmentRow = {
   createdAt: Date;
 };
 
+type RoomWebhookRow = {
+  id: string;
+  roomId: string;
+  url: string;
+  secret: string | null;
+  filterGroup: string | null;
+  filterPriority: string | null;
+  filterStatus: string | null;
+  active: number;
+  createdBy: string;
+  createdAt: Date;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -295,7 +308,8 @@ type TableName =
   | "contact_tags"
   | "saved_searches"
   | "message_edits"
-  | "attachments";
+  | "attachments"
+  | "room_webhooks";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -323,12 +337,17 @@ const testState = vi.hoisted(() => ({
   "saved_searches": [] as SavedSearchRow[],
   "message_edits": [] as MessageEditRow[],
   attachments: [] as AttachmentRow[],
+  "room_webhooks": [] as RoomWebhookRow[],
   idCounter: 0,
 }));
 
 vi.mock("../src/lib/webhook.js", () => ({
   notifyPushWorker: vi.fn(async () => undefined),
   deliverWebhook: vi.fn(async () => true),
+}));
+
+vi.mock("../src/lib/room-webhook.js", () => ({
+  fireRoomTaskWebhooks: vi.fn(async () => undefined),
 }));
 
 vi.mock("../src/db/index.js", () => ({
@@ -362,6 +381,7 @@ describe("Hono API behavior", () => {
     testState["saved_searches"].length = 0;
     testState["message_edits"].length = 0;
     testState.attachments.length = 0;
+    testState["room_webhooks"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -2054,6 +2074,269 @@ describe("Hono API behavior", () => {
 
     const rooms = await alphaClient.listRooms();
     expect(rooms.rooms.some(r => r.id === room.id)).toBe(false);
+  });
+
+  // --- Room webhook tests ---
+
+  it("room creator can register a webhook", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Webhook Room" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({
+        url: "https://hooks.slack.com/test",
+        filter_group: "human",
+        filter_priority: "critical",
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const webhook = await res.json();
+    expect(webhook.id).toEqual(expect.any(String));
+    expect(webhook.url).toBe("https://hooks.slack.com/test");
+    expect(webhook.filter_group).toBe("human");
+    expect(webhook.filter_priority).toBe("critical");
+    expect(webhook.filter_status).toBeNull();
+    expect(webhook.active).toBe(true);
+    expect(webhook.room_id).toBe(room.id);
+  });
+
+  it("room member cannot register a webhook (insufficient role)", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Restricted Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ url: "https://hooks.slack.com/blocked" }),
+    });
+
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("INSUFFICIENT_ROLE");
+  });
+
+  it("room admin can register a webhook", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Admin Webhook Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Promote beta to admin
+    await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ role: "admin" }),
+    });
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${beta.secret}`,
+      },
+      body: JSON.stringify({ url: "https://hooks.slack.com/admin" }),
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("lists webhooks for a room", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "List Webhooks Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    // Create two webhooks
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.slack.com/one" }),
+    });
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.slack.com/two", filter_priority: "critical" }),
+    });
+
+    // Member can list
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      headers: { "Authorization": `Bearer ${beta.secret}` },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.webhooks).toHaveLength(2);
+    expect(body.webhooks[0].url).toBe("https://hooks.slack.com/one");
+    expect(body.webhooks[1].url).toBe("https://hooks.slack.com/two");
+    expect(body.webhooks[1].filter_priority).toBe("critical");
+  });
+
+  it("non-member cannot list webhooks", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Private Webhook Room" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      headers: { "Authorization": `Bearer ${beta.secret}` },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("creator can delete a webhook", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Delete Webhook Room" });
+    const room = await roomRes.json();
+
+    const createRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.slack.com/deleteme" }),
+    });
+    const webhook = await createRes.json();
+
+    const deleteRes = await app.request(`/rooms/${room.id}/webhooks/${webhook.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+
+    expect(deleteRes.status).toBe(200);
+    const body = await deleteRes.json();
+    expect(body.ok).toBe(true);
+    expect(body.deleted_id).toBe(webhook.id);
+
+    // Verify it's gone
+    const listRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    const listBody = await listRes.json();
+    expect(listBody.webhooks).toHaveLength(0);
+  });
+
+  it("member cannot delete a webhook (insufficient role)", async () => {
+    const { alpha, beta } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "No Delete Webhook" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const createRes = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.slack.com/protected" }),
+    });
+    const webhook = await createRes.json();
+
+    const deleteRes = await app.request(`/rooms/${room.id}/webhooks/${webhook.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${beta.secret}` },
+    });
+
+    expect(deleteRes.status).toBe(403);
+  });
+
+  it("rejects webhook with invalid filter_priority", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Bad Priority" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.slack.com/test", filter_priority: "urgent" }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+  });
+
+  it("rejects webhook with invalid filter_status", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Bad Status" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.slack.com/test", filter_status: "pending" }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects webhook without url", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "No URL" });
+    const room = await roomRes.json();
+
+    const res = await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("MISSING_FIELD");
+  });
+
+  it("deleting a room cascades webhook deletion", async () => {
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Cascade Room" });
+    const room = await roomRes.json();
+
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.slack.com/cascade" }),
+    });
+
+    const deleteRes = await app.request(`/rooms/${room.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+
+    expect(deleteRes.status).toBe(200);
+    // Webhooks should be gone (testState check)
+    expect(testState["room_webhooks"].length).toBe(0);
+  });
+
+  it("task creation in room triggers fireRoomTaskWebhooks", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Task Webhook Room" });
+    const room = await roomRes.json();
+
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, {
+      title: "Critical escalation",
+      priority: "critical",
+      group: "human",
+    });
+
+    expect(taskRes.status).toBe(201);
+    expect(fireRoomTaskWebhooks).toHaveBeenCalledWith(
+      room.id,
+      expect.objectContaining({
+        title: "Critical escalation",
+        priority: "critical",
+        group: "human",
+      })
+    );
   });
 
   // --- Room messaging fan-out tests ---
@@ -18372,6 +18655,23 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "room_webhooks") {
+      const row: RoomWebhookRow = {
+        id: nextId("roomwh"),
+        roomId: iv.roomId as string,
+        url: iv.url as string,
+        secret: (iv.secret as string | undefined) ?? null,
+        filterGroup: (iv.filterGroup as string | undefined) ?? null,
+        filterPriority: (iv.filterPriority as string | undefined) ?? null,
+        filterStatus: (iv.filterStatus as string | undefined) ?? null,
+        active: (iv.active as number | undefined) ?? 1,
+        createdBy: iv.createdBy as string,
+        createdAt: new Date(),
+      };
+      testState["room_webhooks"].push(row);
+      return row;
+    }
+
     const row: MessageRow = {
       id: nextId("message"),
       fromAgent: iv.fromAgent as string,
@@ -18471,7 +18771,7 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow> {
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow> {
   return testState[table];
 }
 
@@ -18512,7 +18812,8 @@ function getTableName(table: unknown): TableName {
     name === "contact_tags" ||
     name === "saved_searches" ||
     name === "message_edits" ||
-    name === "attachments"
+    name === "attachments" ||
+    name === "room_webhooks"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }

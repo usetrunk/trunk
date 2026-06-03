@@ -9,6 +9,7 @@ import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middlewa
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
+import { fireRoomTaskWebhooks } from "../lib/room-webhook.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
@@ -191,6 +192,21 @@ app.post("/", async (c) => {
       metadata: body.metadata || {},
     })
     .returning();
+
+  // Fire room webhooks for matching criteria (best-effort, non-blocking)
+  if (body.room_id) {
+    fireRoomTaskWebhooks(body.room_id, {
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      owner: task.owner,
+      created_by: task.createdBy,
+      group: task.group,
+      scope: task.scope,
+    }).catch(() => {});
+  }
 
   return c.json({ scope: task.scope, ...taskToJson(task) }, 201);
 });
