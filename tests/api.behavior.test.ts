@@ -10487,6 +10487,68 @@ describe("Hono API behavior", () => {
     expect(body.code).toBe("VALIDATION_ERROR");
   });
 
+  it("rejects search with invalid contact UUID", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/search?contact=not-a-uuid", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  it("accepts search with valid contact UUID", async () => {
+    const { alpha, beta } = await registerPair();
+    const res = await app.request(`/messages/search?contact=${beta.agent_id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects whitespace-only tag", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request(`/contacts/${beta.agent_id}/tags`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${alpha.secret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ tag: "   " }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("trims whitespace from tags before storing", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const result = await alphaClient.addContactTag(beta.agent_id, "  team  ");
+    expect(result.tag).toBe("team");
+  });
+
+  it("threads endpoint returns projected fields correctly", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create a thread
+    const msg = await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "thread test" } });
+
+    const res = await app.request("/messages/threads", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.threads.length).toBeGreaterThanOrEqual(1);
+    const thread = body.threads.find((t: { thread_id: string }) => t.thread_id === msg.id);
+    expect(thread).toBeDefined();
+    expect(thread.last_message.type).toBe("question");
+    expect(thread.last_message.preview).toBe("thread test");
+  });
+
   it("rooms list endpoint includes rate limit headers", async () => {
     const { alpha } = await registerPair();
     const res = await app.request("/rooms", {

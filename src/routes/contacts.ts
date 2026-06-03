@@ -602,7 +602,10 @@ app.post("/:id/tags", requireValidUUIDs("id"), async (c) => {
     return c.json({ error: "tag is required", code: "MISSING_FIELD" }, 400);
   }
 
-  const tag = body.tag.toLowerCase().slice(0, 50);
+  const tag = body.tag.trim().toLowerCase().slice(0, 50);
+  if (!tag) {
+    return c.json({ error: "tag must not be empty or whitespace-only", code: "VALIDATION_ERROR" }, 400);
+  }
 
   // Check if already tagged
   const [existing] = await db

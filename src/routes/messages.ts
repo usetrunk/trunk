@@ -465,9 +465,18 @@ app.get("/threads", async (c) => {
   const limit = isNaN(limitParam) ? 20 : Math.min(Math.max(1, limitParam), 50);
   const cursorParam = c.req.query("cursor");
 
-  // Get recent messages where agent is sender or recipient (capped to prevent memory exhaustion)
+  // Get recent messages where agent is sender or recipient (projection reduces memory)
   const rows = await db
-    .select()
+    .select({
+      id: messages.id,
+      fromAgent: messages.fromAgent,
+      toAgent: messages.toAgent,
+      threadId: messages.threadId,
+      type: messages.type,
+      status: messages.status,
+      payload: messages.payload,
+      createdAt: messages.createdAt,
+    })
     .from(messages)
     .where(
       or(eq(messages.fromAgent, agentId), eq(messages.toAgent, agentId))
@@ -615,6 +624,9 @@ app.get("/search", async (c) => {
   const q = c.req.query("q")?.slice(0, 500).toLowerCase();
   const type = c.req.query("type");
   const contact = c.req.query("contact");
+  if (contact && !isValidUUID(contact)) {
+    return c.json({ error: "Invalid 'contact' filter — must be a valid UUID", code: "INVALID_INPUT" }, 400);
+  }
   const after = c.req.query("after");
   const before = c.req.query("before");
 
