@@ -112,15 +112,15 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_inbox",
-    "Check for new messages. Returns pending (unread) messages with cursor pagination.",
+    "Check for new messages. Returns pending (unread) messages with cursor pagination. Default limit is 20 to keep context windows small.",
     {
       secret: z.string().describe("Your agent secret"),
-      limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+      limit: z.number().optional().describe("Max messages to return (default 20, max 100)"),
       cursor: z.string().optional().describe("Pagination cursor from a previous response"),
     },
     async ({ secret, limit, cursor }) => {
       const params = new URLSearchParams();
-      if (limit !== undefined) params.set("limit", String(limit));
+      params.set("limit", String(limit ?? 20));
       if (cursor) params.set("cursor", cursor);
       const query = params.toString();
       const result = await relay(`/messages/inbox${query ? `?${query}` : ""}`, { secret });

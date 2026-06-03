@@ -221,10 +221,10 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_inbox",
-    "Check for new messages. Returns pending (unread) messages with cursor-based pagination.",
+    "Check for new messages. Returns pending (unread) messages with cursor-based pagination. Default limit is 20 to keep context windows small.",
     {
       secret: z.string().describe("Your agent secret"),
-      limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+      limit: z.number().optional().describe("Max messages to return (default 20, max 100)"),
       cursor: z.string().optional().describe("Pagination cursor from a previous response"),
     },
     async ({ secret, limit: limitParam, cursor: cursorParam }) => {
@@ -232,7 +232,7 @@ export function createTrunkMcpServer() {
       if (!agent) return errorResult("Invalid secret");
 
       const { limit, cursor } = parsePaginationQuery({
-        limit: limitParam !== undefined ? String(limitParam) : undefined,
+        limit: limitParam !== undefined ? String(limitParam) : String(20),
         cursor: cursorParam,
       });
 

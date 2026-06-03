@@ -215,7 +215,7 @@ server.tool(
   "trunk_inbox",
   "Check for new messages. Also returns any real-time messages that arrived via push. Supports cursor pagination.",
   {
-    limit: z.number().optional().describe("Max messages to return (default 50, max 100)"),
+    limit: z.number().optional().describe("Max messages to return (default 20, max 100)"),
     cursor: z.string().optional().describe("Pagination cursor from a previous response"),
   },
   async ({ limit, cursor }) => {
@@ -223,7 +223,7 @@ server.tool(
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
     const params = new URLSearchParams();
-    if (limit !== undefined) params.set("limit", String(limit));
+    params.set("limit", String(limit ?? 20));
     if (cursor) params.set("cursor", cursor);
     const query = params.toString();
 
