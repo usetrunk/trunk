@@ -6,6 +6,7 @@ import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -222,7 +223,7 @@ app.post("/leave", async (c) => {
 });
 
 // List members of a workspace
-app.get("/:id/members", async (c) => {
+app.get("/:id/members", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -293,7 +294,7 @@ app.post("/kick", async (c) => {
 });
 
 // Change a member's role (admin only)
-app.patch("/members/:id/role", async (c) => {
+app.patch("/members/:id/role", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);

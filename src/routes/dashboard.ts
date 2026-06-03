@@ -6,6 +6,7 @@ import { agents, contacts, messages, roomMembers, rooms, tasks, workspaceContact
 import { and, eq, or, desc, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();

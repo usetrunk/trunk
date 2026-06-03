@@ -5,6 +5,7 @@ import { eq, desc, or, and, gte } from "drizzle-orm";
 import { authMiddleware, generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import { canMessage } from "../lib/workspace.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -253,7 +254,7 @@ app.get("/presence", authMiddleware, async (c) => {
 });
 
 // Get another agent's public profile (caller must be a contact or workspace co-member)
-app.get("/:id", authMiddleware, async (c) => {
+app.get("/:id", requireValidUUIDs("id"), authMiddleware, async (c) => {
   const myId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${myId}`, 60, 60 * 1000);
@@ -397,7 +398,7 @@ app.get("/me/webhook/deliveries", authMiddleware, async (c) => {
 });
 
 // Retry a failed webhook delivery
-app.post("/me/webhook/deliveries/:id/retry", authMiddleware, async (c) => {
+app.post("/me/webhook/deliveries/:id/retry", requireValidUUIDs("id"), authMiddleware, async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);

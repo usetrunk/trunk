@@ -5,6 +5,7 @@ import { and, eq, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -129,7 +130,7 @@ app.get("/", async (c) => {
 });
 
 // List members of a room
-app.get("/:roomId/members", async (c) => {
+app.get("/:roomId/members", requireValidUUIDs("roomId"), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -173,7 +174,7 @@ app.get("/:roomId/members", async (c) => {
 });
 
 // Update a room (creator/admin only)
-app.patch("/:roomId", async (c) => {
+app.patch("/:roomId", requireValidUUIDs("roomId"), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 
@@ -227,7 +228,7 @@ app.patch("/:roomId", async (c) => {
 });
 
 // Kick a member from a room (creator/admin only)
-app.post("/:roomId/kick", async (c) => {
+app.post("/:roomId/kick", requireValidUUIDs("roomId"), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 
@@ -276,7 +277,7 @@ app.post("/:roomId/kick", async (c) => {
 });
 
 // Change a member's role (creator only)
-app.put("/:roomId/members/:agentId/role", async (c) => {
+app.put("/:roomId/members/:agentId/role", requireValidUUIDs("roomId", "agentId"), async (c) => {
   const callerId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const targetId = c.req.param("agentId");
@@ -327,7 +328,7 @@ app.put("/:roomId/members/:agentId/role", async (c) => {
 });
 
 // Delete a room (creator only)
-app.delete("/:roomId", async (c) => {
+app.delete("/:roomId", requireValidUUIDs("roomId"), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 
@@ -357,7 +358,7 @@ app.delete("/:roomId", async (c) => {
 });
 
 // Leave a room
-app.post("/:roomId/leave", async (c) => {
+app.post("/:roomId/leave", requireValidUUIDs("roomId"), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 

@@ -5,6 +5,7 @@ import { eq, or, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -280,7 +281,7 @@ app.get("/blocked", async (c) => {
 });
 
 // Update contact alias
-app.patch("/:agentId", async (c) => {
+app.patch("/:agentId", requireValidUUIDs("agentId"), async (c) => {
   const myId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
@@ -329,7 +330,7 @@ app.patch("/:agentId", async (c) => {
 });
 
 // Unpair
-app.delete("/:agentId", async (c) => {
+app.delete("/:agentId", requireValidUUIDs("agentId"), async (c) => {
   const myId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
@@ -354,7 +355,7 @@ app.delete("/:agentId", async (c) => {
 });
 
 // Block an agent
-app.post("/:agentId/block", async (c) => {
+app.post("/:agentId/block", requireValidUUIDs("agentId"), async (c) => {
   const myId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
@@ -391,7 +392,7 @@ app.post("/:agentId/block", async (c) => {
 });
 
 // Unblock an agent
-app.delete("/:agentId/block", async (c) => {
+app.delete("/:agentId/block", requireValidUUIDs("agentId"), async (c) => {
   const myId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
@@ -412,7 +413,7 @@ app.delete("/:agentId/block", async (c) => {
 });
 
 // Add or update a private note about a contact
-app.put("/:agentId/notes", async (c) => {
+app.put("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
   const myId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
@@ -456,7 +457,7 @@ app.put("/:agentId/notes", async (c) => {
 });
 
 // Get note about a contact
-app.get("/:agentId/notes", async (c) => {
+app.get("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
   const myId = c.get("agentId");
   const targetId = c.req.param("agentId");
 
@@ -470,7 +471,7 @@ app.get("/:agentId/notes", async (c) => {
 });
 
 // Delete note about a contact
-app.delete("/:agentId/notes", async (c) => {
+app.delete("/:agentId/notes", requireValidUUIDs("agentId"), async (c) => {
   const myId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${myId}`, 30, 60 * 1000);
@@ -493,7 +494,7 @@ app.delete("/:agentId/notes", async (c) => {
 // --- Notification preferences ---
 
 // Get notification preferences for a contact
-app.get("/:id/notifications", async (c) => {
+app.get("/:id/notifications", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("id");
 
@@ -518,7 +519,7 @@ app.get("/:id/notifications", async (c) => {
 });
 
 // Set notification preferences for a contact
-app.put("/:id/notifications", async (c) => {
+app.put("/:id/notifications", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${agentId}`, 30, 60 * 1000);
@@ -585,7 +586,7 @@ app.put("/:id/notifications", async (c) => {
 // --- Contact tags ---
 
 // Add a tag to a contact
-app.post("/:id/tags", async (c) => {
+app.post("/:id/tags", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${agentId}`, 30, 60 * 1000);
@@ -628,7 +629,7 @@ app.post("/:id/tags", async (c) => {
 });
 
 // Remove a tag from a contact
-app.delete("/:id/tags/:tag", async (c) => {
+app.delete("/:id/tags/:tag", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`contacts:write:${agentId}`, 30, 60 * 1000);
@@ -655,7 +656,7 @@ app.delete("/:id/tags/:tag", async (c) => {
 });
 
 // List tags for a specific contact
-app.get("/:id/tags", async (c) => {
+app.get("/:id/tags", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("id");
 

@@ -27,6 +27,7 @@ const app = new Hono();
 app.use("*", logger());
 app.use("*", cors());
 
+
 // Public landing page
 app.get("/", (c) => c.html(landingPage()));
 

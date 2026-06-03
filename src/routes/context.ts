@@ -7,6 +7,7 @@ import { audit } from "../lib/audit.js";
 import { contactScope, roomScope, workspaceScope, isValidFactKey, verifyContactAccess } from "../lib/context.js";
 import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middleware.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -15,7 +16,7 @@ app.use("/*", authMiddleware);
 
 // --- Room-scoped fact endpoints (must be before /:contactId to avoid route conflicts) ---
 
-app.get("/room/:roomId/facts", requireRoomMember(), async (c) => {
+app.get("/room/:roomId/facts", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -44,7 +45,7 @@ app.get("/room/:roomId/facts", requireRoomMember(), async (c) => {
   });
 });
 
-app.get("/room/:roomId/facts/:key", requireRoomMember(), async (c) => {
+app.get("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const key = c.req.param("key");
@@ -61,7 +62,7 @@ app.get("/room/:roomId/facts/:key", requireRoomMember(), async (c) => {
   return c.json({ key: fact.key, value: fact.value, version: fact.version, updated_by: fact.updatedBy, updated_at: fact.updatedAt });
 });
 
-app.put("/room/:roomId/facts/:key", requireRoomMember(), async (c) => {
+app.put("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const key = c.req.param("key");
@@ -104,7 +105,7 @@ app.put("/room/:roomId/facts/:key", requireRoomMember(), async (c) => {
   return c.json({ key, value: body.value, version: 1, updated_by: agentId });
 });
 
-app.delete("/room/:roomId/facts/:key", requireRoomMember(), async (c) => {
+app.delete("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const key = c.req.param("key");
@@ -124,7 +125,7 @@ app.delete("/room/:roomId/facts/:key", requireRoomMember(), async (c) => {
 
 // --- Workspace-scoped fact endpoints ---
 
-app.get("/workspace/:workspaceId/facts", requireWorkspaceMember(), async (c) => {
+app.get("/workspace/:workspaceId/facts", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -143,7 +144,7 @@ app.get("/workspace/:workspaceId/facts", requireWorkspaceMember(), async (c) => 
   });
 });
 
-app.get("/workspace/:workspaceId/facts/:key", requireWorkspaceMember(), async (c) => {
+app.get("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const key = c.req.param("key");
@@ -155,7 +156,7 @@ app.get("/workspace/:workspaceId/facts/:key", requireWorkspaceMember(), async (c
   return c.json({ key: fact.key, value: fact.value, version: fact.version, updated_by: fact.updatedBy, updated_at: fact.updatedAt });
 });
 
-app.put("/workspace/:workspaceId/facts/:key", requireWorkspaceMember(), async (c) => {
+app.put("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const key = c.req.param("key");
@@ -191,7 +192,7 @@ app.put("/workspace/:workspaceId/facts/:key", requireWorkspaceMember(), async (c
   return c.json({ key, value: body.value, version: 1, updated_by: agentId });
 });
 
-app.delete("/workspace/:workspaceId/facts/:key", requireWorkspaceMember(), async (c) => {
+app.delete("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const key = c.req.param("key");
@@ -209,7 +210,7 @@ app.delete("/workspace/:workspaceId/facts/:key", requireWorkspaceMember(), async
 
 // --- Contact-scoped fact endpoints ---
 
-app.get("/:contactId/facts", async (c) => {
+app.get("/:contactId/facts", requireValidUUIDs("contactId"), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -240,7 +241,7 @@ app.get("/:contactId/facts", async (c) => {
   });
 });
 
-app.get("/:contactId/facts/:key", async (c) => {
+app.get("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
   const key = c.req.param("key");
@@ -258,7 +259,7 @@ app.get("/:contactId/facts/:key", async (c) => {
   return c.json({ key: fact.key, value: fact.value, version: fact.version, updated_by: fact.updatedBy, updated_at: fact.updatedAt });
 });
 
-app.put("/:contactId/facts/:key", async (c) => {
+app.put("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
   const key = c.req.param("key");
@@ -302,7 +303,7 @@ app.put("/:contactId/facts/:key", async (c) => {
   return c.json({ key, value: body.value, version: 1, updated_by: agentId });
 });
 
-app.delete("/:contactId/facts/:key", async (c) => {
+app.delete("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
   const key = c.req.param("key");

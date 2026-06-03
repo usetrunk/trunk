@@ -1,4 +1,4 @@
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 
 /** Structured error codes used across the Trunk API */
 export const ErrorCode = {
@@ -44,6 +44,26 @@ export const ErrorCode = {
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Returns true if the string is a valid UUID v4 format */
+export function isValidUUID(s: string): boolean {
+  return UUID_RE.test(s);
+}
+
+/** Middleware that validates named path params are valid UUIDs */
+export function requireValidUUIDs(...paramNames: string[]): MiddlewareHandler {
+  return async (c, next) => {
+    for (const name of paramNames) {
+      const value = c.req.param(name as never);
+      if (value && !isValidUUID(value)) {
+        return c.json({ error: `Invalid ${name} format`, code: "INVALID_INPUT" }, 400);
+      }
+    }
+    await next();
+  };
+}
 
 /** Return a structured JSON error response */
 export function apiError(

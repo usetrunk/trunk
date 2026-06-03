@@ -8,6 +8,7 @@ import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middlewa
 import { audit } from "../lib/audit.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -19,7 +20,7 @@ app.use("/*", authMiddleware);
 
 // --- Room-scoped document endpoints (must be before /:contactId to avoid route conflicts) ---
 
-app.post("/room/:roomId", requireRoomMember(), async (c) => {
+app.post("/room/:roomId", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
 
@@ -67,7 +68,7 @@ app.post("/room/:roomId", requireRoomMember(), async (c) => {
   }, 201);
 });
 
-app.get("/room/:roomId", requireRoomMember(), async (c) => {
+app.get("/room/:roomId", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -115,7 +116,7 @@ app.get("/room/:roomId", requireRoomMember(), async (c) => {
   });
 });
 
-app.get("/room/:roomId/:docId", requireRoomMember(), async (c) => {
+app.get("/room/:roomId/:docId", requireValidUUIDs("roomId", "docId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
@@ -140,7 +141,7 @@ app.get("/room/:roomId/:docId", requireRoomMember(), async (c) => {
   });
 });
 
-app.put("/room/:roomId/:docId", requireRoomMember(), async (c) => {
+app.put("/room/:roomId/:docId", requireValidUUIDs("roomId", "docId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -198,7 +199,7 @@ app.put("/room/:roomId/:docId", requireRoomMember(), async (c) => {
 });
 
 // Room document version history
-app.get("/room/:roomId/:docId/versions", requireRoomMember(), async (c) => {
+app.get("/room/:roomId/:docId/versions", requireValidUUIDs("roomId", "docId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
@@ -223,7 +224,7 @@ app.get("/room/:roomId/:docId/versions", requireRoomMember(), async (c) => {
 });
 
 // Room document specific version
-app.get("/room/:roomId/:docId/versions/:version", requireRoomMember(), async (c) => {
+app.get("/room/:roomId/:docId/versions/:version", requireValidUUIDs("roomId", "docId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const roomId = c.req.param("roomId");
   const docId = c.req.param("docId");
@@ -252,7 +253,7 @@ app.get("/room/:roomId/:docId/versions/:version", requireRoomMember(), async (c)
   });
 });
 
-app.delete("/room/:roomId/:docId", requireRoomMember(), async (c) => {
+app.delete("/room/:roomId/:docId", requireValidUUIDs("roomId", "docId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -280,7 +281,7 @@ app.delete("/room/:roomId/:docId", requireRoomMember(), async (c) => {
 
 // --- Workspace-scoped document endpoints ---
 
-app.post("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
+app.post("/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
 
@@ -309,7 +310,7 @@ app.post("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   return c.json({ id: doc.id, name: doc.name, content_type: doc.contentType, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt }, 201);
 });
 
-app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
+app.get("/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -336,7 +337,7 @@ app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
   });
 });
 
-app.get("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) => {
+app.get("/workspace/:workspaceId/:docId", requireValidUUIDs("workspaceId", "docId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
@@ -347,7 +348,7 @@ app.get("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) =>
   return c.json({ id: doc.id, name: doc.name, content_type: doc.contentType, body: doc.body, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt, updated_at: doc.updatedAt });
 });
 
-app.put("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) => {
+app.put("/workspace/:workspaceId/:docId", requireValidUUIDs("workspaceId", "docId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -376,7 +377,7 @@ app.put("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) =>
 });
 
 // Workspace document version history
-app.get("/workspace/:workspaceId/:docId/versions", requireWorkspaceMember(), async (c) => {
+app.get("/workspace/:workspaceId/:docId/versions", requireValidUUIDs("workspaceId", "docId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
@@ -401,7 +402,7 @@ app.get("/workspace/:workspaceId/:docId/versions", requireWorkspaceMember(), asy
 });
 
 // Workspace document specific version
-app.get("/workspace/:workspaceId/:docId/versions/:version", requireWorkspaceMember(), async (c) => {
+app.get("/workspace/:workspaceId/:docId/versions/:version", requireValidUUIDs("workspaceId", "docId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
@@ -430,7 +431,7 @@ app.get("/workspace/:workspaceId/:docId/versions/:version", requireWorkspaceMemb
   });
 });
 
-app.delete("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c) => {
+app.delete("/workspace/:workspaceId/:docId", requireValidUUIDs("workspaceId", "docId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -453,7 +454,7 @@ app.delete("/workspace/:workspaceId/:docId", requireWorkspaceMember(), async (c)
 // --- Contact-scoped document endpoints ---
 
 // Create a document
-app.post("/:contactId", async (c) => {
+app.post("/:contactId", requireValidUUIDs("contactId"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
 
@@ -505,7 +506,7 @@ app.post("/:contactId", async (c) => {
 });
 
 // List documents for a contact pair
-app.get("/:contactId", async (c) => {
+app.get("/:contactId", requireValidUUIDs("contactId"), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -556,7 +557,7 @@ app.get("/:contactId", async (c) => {
 });
 
 // Get a document (latest version)
-app.get("/:contactId/:docId", async (c) => {
+app.get("/:contactId/:docId", requireValidUUIDs("contactId", "docId"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
@@ -584,7 +585,7 @@ app.get("/:contactId/:docId", async (c) => {
 });
 
 // Update a document (creates new version)
-app.put("/:contactId/:docId", async (c) => {
+app.put("/:contactId/:docId", requireValidUUIDs("contactId", "docId"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -646,7 +647,7 @@ app.put("/:contactId/:docId", async (c) => {
 });
 
 // Get version history
-app.get("/:contactId/:docId/versions", async (c) => {
+app.get("/:contactId/:docId/versions", requireValidUUIDs("contactId", "docId"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
@@ -670,7 +671,7 @@ app.get("/:contactId/:docId/versions", async (c) => {
 });
 
 // Get a specific version
-app.get("/:contactId/:docId/versions/:version", async (c) => {
+app.get("/:contactId/:docId/versions/:version", requireValidUUIDs("contactId", "docId"), async (c) => {
   const agentId = c.get("agentId");
   const contactId = c.req.param("contactId");
   const docId = c.req.param("docId");
@@ -699,7 +700,7 @@ app.get("/:contactId/:docId/versions/:version", async (c) => {
 });
 
 // Delete a document and all its versions
-app.delete("/:contactId/:docId", async (c) => {
+app.delete("/:contactId/:docId", requireValidUUIDs("contactId", "docId"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`docs:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);

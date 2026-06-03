@@ -10,6 +10,7 @@ import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import { canMessage, getWorkspaceMembers, isBlocked } from "../lib/workspace.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -712,7 +713,7 @@ app.post("/searches", async (c) => {
 });
 
 // Delete a saved search
-app.delete("/searches/:id", async (c) => {
+app.delete("/searches/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -737,6 +738,11 @@ app.delete("/searches/:id", async (c) => {
 // List scheduled messages (pending future delivery)
 app.get("/scheduled", async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const { limit, cursor } = parsePaginationQuery({
     limit: c.req.query("limit"),
     cursor: c.req.query("cursor"),
@@ -772,10 +778,17 @@ app.get("/by-label/:label", async (c) => {
     cursor: c.req.query("cursor"),
   });
 
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
   const labelRows = await db
     .select()
     .from(messageLabels)
-    .where(and(eq(messageLabels.agentId, agentId), eq(messageLabels.label, label)));
+    .where(and(eq(messageLabels.agentId, agentId), eq(messageLabels.label, label)))
+    .limit(1000);
 
   const messageIds = labelRows.map((r) => r.messageId);
   if (messageIds.length === 0) {
@@ -830,7 +843,7 @@ app.get("/labels/all", async (c) => {
 });
 
 // Cancel a scheduled message (only sender, only if still scheduled)
-app.post("/:id/cancel", async (c) => {
+app.post("/:id/cancel", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1059,7 +1072,7 @@ app.get("/thread/:threadId", async (c) => {
   return c.json({ messages: rows.filter((row) => row.status !== "deleted") });
 });
 
-app.delete("/:id", async (c) => {
+app.delete("/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1085,7 +1098,7 @@ app.delete("/:id", async (c) => {
 });
 
 // Edit a sent message (only sender can edit, only payload)
-app.patch("/:id", async (c) => {
+app.patch("/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1152,7 +1165,7 @@ app.patch("/:id", async (c) => {
 });
 
 // Get edit history for a message
-app.get("/:id/edits", async (c) => {
+app.get("/:id/edits", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const messageId = c.req.param("id");
 
@@ -1370,7 +1383,7 @@ app.post("/label-bulk", async (c) => {
 });
 
 // Mark a message as read (without processing/acking)
-app.post("/:id/read", async (c) => {
+app.post("/:id/read", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1397,7 +1410,7 @@ app.post("/:id/read", async (c) => {
 });
 
 // Acknowledge a message (mark as read)
-app.post("/:id/ack", async (c) => {
+app.post("/:id/ack", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1426,7 +1439,7 @@ app.post("/:id/ack", async (c) => {
 });
 
 // Reply (ack + send in one call)
-app.post("/:id/reply", async (c) => {
+app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const messageId = c.req.param("id");
   const body = await c.req.json<{
@@ -1512,7 +1525,7 @@ app.post("/:id/reply", async (c) => {
 });
 
 // Forward a message to another contact
-app.post("/:id/forward", async (c) => {
+app.post("/:id/forward", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`messages:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1612,7 +1625,7 @@ app.post("/:id/forward", async (c) => {
 });
 
 // Add a reaction to a message
-app.post("/:id/react", async (c) => {
+app.post("/:id/react", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1675,7 +1688,7 @@ app.post("/:id/react", async (c) => {
 });
 
 // Remove a reaction from a message
-app.delete("/:id/react/:emoji", async (c) => {
+app.delete("/:id/react/:emoji", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1716,7 +1729,7 @@ app.delete("/:id/react/:emoji", async (c) => {
 });
 
 // List reactions for a message
-app.get("/:id/reactions", async (c) => {
+app.get("/:id/reactions", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1767,7 +1780,7 @@ app.get("/:id/reactions", async (c) => {
 });
 
 // Pin a message in a thread — either sender or recipient can pin
-app.post("/:id/pin", async (c) => {
+app.post("/:id/pin", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1800,7 +1813,7 @@ app.post("/:id/pin", async (c) => {
 });
 
 // Unpin a message
-app.post("/:id/unpin", async (c) => {
+app.post("/:id/unpin", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1879,7 +1892,7 @@ app.get("/thread/:threadId/pins", async (c) => {
 });
 
 // Add a label to a message
-app.post("/:id/labels", async (c) => {
+app.post("/:id/labels", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1918,7 +1931,7 @@ app.post("/:id/labels", async (c) => {
 });
 
 // Remove a label from a message
-app.delete("/:id/labels/:label", async (c) => {
+app.delete("/:id/labels/:label", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
@@ -1939,7 +1952,7 @@ app.delete("/:id/labels/:label", async (c) => {
 });
 
 // List labels on a message (only the requesting agent's labels)
-app.get("/:id/labels", async (c) => {
+app.get("/:id/labels", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);

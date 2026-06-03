@@ -5,6 +5,7 @@ import { eq, and } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -109,8 +110,13 @@ app.post("/", async (c) => {
 });
 
 // Get a specific template
-app.get("/:id", async (c) => {
+app.get("/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const templateId = c.req.param("id");
 
   const [template] = await db
@@ -133,7 +139,7 @@ app.get("/:id", async (c) => {
 });
 
 // Update a template
-app.patch("/:id", async (c) => {
+app.patch("/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const templateId = c.req.param("id");
 
@@ -209,7 +215,7 @@ app.patch("/:id", async (c) => {
 });
 
 // Delete a template
-app.delete("/:id", async (c) => {
+app.delete("/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const templateId = c.req.param("id");
 

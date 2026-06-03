@@ -8,6 +8,7 @@ import { contactScope, verifyRoomAccess, resolveScopeAccess } from "../lib/conte
 import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middleware.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
@@ -120,7 +121,7 @@ app.post("/", async (c) => {
 });
 
 // List tasks for a contact pair
-app.get("/:contactId", async (c) => {
+app.get("/:contactId", requireValidUUIDs("contactId"), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -174,7 +175,7 @@ app.get("/:contactId", async (c) => {
 });
 
 // List tasks for a room
-app.get("/room/:roomId", requireRoomMember(), async (c) => {
+app.get("/room/:roomId", requireValidUUIDs("roomId"), requireRoomMember(), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -225,7 +226,7 @@ app.get("/room/:roomId", requireRoomMember(), async (c) => {
 });
 
 // List tasks for a workspace
-app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
+app.get("/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -276,7 +277,7 @@ app.get("/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
 });
 
 // Update a task (works for contact, room, and workspace scoped tasks)
-app.patch("/:scopeId/:taskId", async (c) => {
+app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c) => {
   const agentId = c.get("agentId");
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");
@@ -363,7 +364,7 @@ app.patch("/:scopeId/:taskId", async (c) => {
 });
 
 // Gantt data endpoint — returns tasks with dependency info for visualization
-app.get("/gantt/workspace/:workspaceId", requireWorkspaceMember(), async (c) => {
+app.get("/gantt/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
@@ -427,7 +428,7 @@ app.get("/gantt/workspace/:workspaceId", requireWorkspaceMember(), async (c) => 
 });
 
 // Delete a task (works for contact, room, and workspace scoped tasks)
-app.delete("/:scopeId/:taskId", async (c) => {
+app.delete("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c) => {
   const agentId = c.get("agentId");
   const scopeId = c.req.param("scopeId");
   const taskId = c.req.param("taskId");

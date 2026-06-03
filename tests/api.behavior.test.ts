@@ -737,7 +737,7 @@ describe("Hono API behavior", () => {
     const alpha = await createClient().register({ name: "solo-sum", owner: "Frank" });
     const alphaClient = createClient(alpha.secret);
 
-    await expect(alphaClient.threadSummary("nonexistent-thread-id")).rejects.toThrow();
+    await expect(alphaClient.threadSummary("00000000-0000-0000-0000-000000000099")).rejects.toThrow();
   });
 
   it("three-agent coordination: planner, developer, reviewer", async () => {
@@ -1109,7 +1109,7 @@ describe("Hono API behavior", () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
 
-    const deleteRes = await app.request(`/tasks/${beta.agent_id}/nonexistent-id`, {
+    const deleteRes = await app.request(`/tasks/${beta.agent_id}/00000000-0000-0000-0000-000000000099`, {
       method: "DELETE",
       headers: { "Authorization": `Bearer ${alpha.secret}` },
     });
@@ -1120,7 +1120,7 @@ describe("Hono API behavior", () => {
     const { alpha, beta } = await registerPair();
     // Not paired
 
-    const deleteRes = await app.request(`/tasks/${beta.agent_id}/some-id`, {
+    const deleteRes = await app.request(`/tasks/${beta.agent_id}/00000000-0000-0000-0000-000000000099`, {
       method: "DELETE",
       headers: { "Authorization": `Bearer ${alpha.secret}` },
     });
@@ -3428,7 +3428,7 @@ describe("Hono API behavior", () => {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${alpha.secret}`,
         },
-        body: JSON.stringify({ message_ids: ["nonexistent-id"] }),
+        body: JSON.stringify({ message_ids: ["00000000-0000-0000-0000-000000000099"] }),
       });
       expect(res.status).toBe(200);
     }
@@ -3440,7 +3440,7 @@ describe("Hono API behavior", () => {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${alpha.secret}`,
       },
-      body: JSON.stringify({ message_ids: ["nonexistent-id"] }),
+      body: JSON.stringify({ message_ids: ["00000000-0000-0000-0000-000000000099"] }),
     });
     expect(res.status).toBe(429);
     const body = await res.json();
@@ -4979,7 +4979,7 @@ describe("Hono API behavior", () => {
     const { beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
 
-    await expect(alphaClient.deleteDocument(beta.agent_id, "non-existent-id")).rejects.toMatchObject({ status: 404 });
+    await expect(alphaClient.deleteDocument(beta.agent_id, "00000000-0000-0000-0000-ffffffffffff")).rejects.toMatchObject({ status: 404 });
   });
 
   // --- Pagination ---
@@ -5189,7 +5189,7 @@ describe("Hono API behavior", () => {
     const { beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
 
-    await expect(alphaClient.forward("nonexistent-id", beta.agent_id)).rejects.toMatchObject({ status: 404 });
+    await expect(alphaClient.forward("00000000-0000-0000-0000-000000000099", beta.agent_id)).rejects.toMatchObject({ status: 404 });
   });
 
   it("sender can forward their own sent message", async () => {
@@ -5291,7 +5291,7 @@ describe("Hono API behavior", () => {
   it("react returns 404 for messages the agent cannot see", async () => {
     const { alphaClient } = await registerPair();
 
-    await expect(alphaClient.react("nonexistent-id", "👍")).rejects.toMatchObject({ status: 404 });
+    await expect(alphaClient.react("00000000-0000-0000-0000-000000000099", "👍")).rejects.toMatchObject({ status: 404 });
   });
 
   it("react rejects emoji longer than 32 chars", async () => {
@@ -5361,7 +5361,7 @@ describe("Hono API behavior", () => {
   it("reactions returns 404 for messages the agent cannot see", async () => {
     const { alphaClient } = await registerPair();
 
-    await expect(alphaClient.reactions("nonexistent-id")).rejects.toMatchObject({ status: 404 });
+    await expect(alphaClient.reactions("00000000-0000-0000-0000-000000000099")).rejects.toMatchObject({ status: 404 });
   });
 
   // --- Presence ---
@@ -5542,7 +5542,7 @@ describe("Hono API behavior", () => {
 
   it("pin returns 404 for messages the agent cannot see", async () => {
     const { alphaClient } = await registerPair();
-    await expect(alphaClient.pin("nonexistent-id")).rejects.toMatchObject({ status: 404 });
+    await expect(alphaClient.pin("00000000-0000-0000-0000-000000000099")).rejects.toMatchObject({ status: 404 });
   });
 
   // --- Webhook test ---
@@ -5632,7 +5632,7 @@ describe("Hono API behavior", () => {
 
     // Manually insert a delivery record to simulate webhook delivery logging
     testState["webhook_deliveries"].push({
-      id: "whd_test_1",
+      id: "a0000000-0000-0000-0000-000000000001",
       agentId: alpha.agent_id,
       messageId: null,
       url: "https://example.com/hook",
@@ -5648,7 +5648,7 @@ describe("Hono API behavior", () => {
     const result = await client.webhookDeliveries();
     expect(result.count).toBe(1);
     expect(result.deliveries[0]).toMatchObject({
-      id: "whd_test_1",
+      id: "a0000000-0000-0000-0000-000000000001",
       url: "https://example.com/hook",
       event: "webhook.test",
       success: true,
@@ -5688,7 +5688,7 @@ describe("Hono API behavior", () => {
     const client = createClient(alpha.secret);
     await client.updateWebhook("https://example.com/hook");
 
-    await expect(client.retryWebhookDelivery("nonexistent-id")).rejects.toMatchObject({ status: 404 });
+    await expect(client.retryWebhookDelivery("00000000-0000-0000-0000-000000000099")).rejects.toMatchObject({ status: 404 });
   });
 
   it("retryWebhookDelivery returns 409 for already-succeeded delivery", async () => {
@@ -5697,7 +5697,7 @@ describe("Hono API behavior", () => {
     await client.updateWebhook("https://example.com/hook");
 
     testState["webhook_deliveries"].push({
-      id: "whd_success_1",
+      id: "a0000000-0000-0000-0000-000000000002",
       agentId: alpha.agent_id,
       messageId: "msg_123",
       url: "https://example.com/hook",
@@ -5710,7 +5710,7 @@ describe("Hono API behavior", () => {
       createdAt: new Date(),
     });
 
-    await expect(client.retryWebhookDelivery("whd_success_1")).rejects.toMatchObject({ status: 409 });
+    await expect(client.retryWebhookDelivery("a0000000-0000-0000-0000-000000000002")).rejects.toMatchObject({ status: 409 });
   });
 
   it("retryWebhookDelivery returns 400 when no webhook URL configured", async () => {
@@ -5718,7 +5718,7 @@ describe("Hono API behavior", () => {
     const client = createClient(alpha.secret);
 
     testState["webhook_deliveries"].push({
-      id: "whd_nourl_1",
+      id: "a0000000-0000-0000-0000-000000000003",
       agentId: alpha.agent_id,
       messageId: "msg_456",
       url: "https://old-url.com/hook",
@@ -5731,7 +5731,7 @@ describe("Hono API behavior", () => {
       createdAt: new Date(),
     });
 
-    await expect(client.retryWebhookDelivery("whd_nourl_1")).rejects.toMatchObject({ status: 400 });
+    await expect(client.retryWebhookDelivery("a0000000-0000-0000-0000-000000000003")).rejects.toMatchObject({ status: 400 });
   });
 
   it("retryWebhookDelivery returns 400 for test deliveries without message_id", async () => {
@@ -5740,7 +5740,7 @@ describe("Hono API behavior", () => {
     await client.updateWebhook("https://example.com/hook");
 
     testState["webhook_deliveries"].push({
-      id: "whd_test_only",
+      id: "a0000000-0000-0000-0000-000000000004",
       agentId: alpha.agent_id,
       messageId: null,
       url: "https://example.com/hook",
@@ -5753,7 +5753,7 @@ describe("Hono API behavior", () => {
       createdAt: new Date(),
     });
 
-    await expect(client.retryWebhookDelivery("whd_test_only")).rejects.toMatchObject({ status: 400 });
+    await expect(client.retryWebhookDelivery("a0000000-0000-0000-0000-000000000004")).rejects.toMatchObject({ status: 400 });
   });
 
   it("retryWebhookDelivery returns 404 when original message no longer exists", async () => {
@@ -5762,7 +5762,7 @@ describe("Hono API behavior", () => {
     await client.updateWebhook("https://example.com/hook");
 
     testState["webhook_deliveries"].push({
-      id: "whd_orphan_1",
+      id: "a0000000-0000-0000-0000-000000000005",
       agentId: alpha.agent_id,
       messageId: "msg_deleted_999",
       url: "https://example.com/hook",
@@ -5775,7 +5775,7 @@ describe("Hono API behavior", () => {
       createdAt: new Date(),
     });
 
-    await expect(client.retryWebhookDelivery("whd_orphan_1")).rejects.toMatchObject({ status: 404 });
+    await expect(client.retryWebhookDelivery("a0000000-0000-0000-0000-000000000005")).rejects.toMatchObject({ status: 404 });
   });
 
   it("retryWebhookDelivery cannot retry another agent's delivery", async () => {
@@ -5785,7 +5785,7 @@ describe("Hono API behavior", () => {
     await clientA.updateWebhook("https://example.com/hook");
 
     testState["webhook_deliveries"].push({
-      id: "whd_other_agent",
+      id: "a0000000-0000-0000-0000-000000000006",
       agentId: beta.agent_id,
       messageId: "msg_789",
       url: "https://beta.example.com/hook",
@@ -5798,7 +5798,7 @@ describe("Hono API behavior", () => {
       createdAt: new Date(),
     });
 
-    await expect(clientA.retryWebhookDelivery("whd_other_agent")).rejects.toMatchObject({ status: 404 });
+    await expect(clientA.retryWebhookDelivery("a0000000-0000-0000-0000-000000000006")).rejects.toMatchObject({ status: 404 });
   });
 
   it("retryWebhookDelivery attempts re-delivery and logs new delivery record", async () => {
@@ -5815,7 +5815,7 @@ describe("Hono API behavior", () => {
 
     // Manually mark as failed delivery
     testState["webhook_deliveries"].push({
-      id: "whd_retry_test",
+      id: "a0000000-0000-0000-0000-000000000007",
       agentId: beta.agent_id,
       messageId: receipt.id,
       url: "https://beta.example.com/hook",
@@ -5829,7 +5829,7 @@ describe("Hono API behavior", () => {
     });
 
     // Retry — fetch will fail in test env (no real server), so expect 502
-    const res = await app.request(`/agents/me/webhook/deliveries/whd_retry_test/retry`, {
+    const res = await app.request(`/agents/me/webhook/deliveries/a0000000-0000-0000-0000-000000000007/retry`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${beta.secret}` },
     });
@@ -5837,7 +5837,7 @@ describe("Hono API behavior", () => {
 
     // Should return a response (either success or 502 depending on fetch behavior)
     expect(body).toHaveProperty("delivery_id");
-    expect(body).toHaveProperty("original_delivery_id", "whd_retry_test");
+    expect(body).toHaveProperty("original_delivery_id", "a0000000-0000-0000-0000-000000000007");
     expect(body).toHaveProperty("message_id", receipt.id);
 
     // A new delivery record should be logged
@@ -10373,7 +10373,8 @@ describe("Hono API behavior", () => {
     const results: number[] = [];
     for (let i = 0; i < 21; i++) {
       const roomRes = await createRoomRaw(alpha.secret, { name: `RL Del Room ${i}` });
-      const room = await roomRes.json();
+      const room = await roomRes.json() as { id?: string };
+      if (!room.id) { results.push(roomRes.status); continue; }
       const res = await app.request(`/rooms/${room.id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${alpha.secret}` },
@@ -10389,7 +10390,8 @@ describe("Hono API behavior", () => {
     const results: number[] = [];
     for (let i = 0; i < 21; i++) {
       const roomRes = await createRoomRaw(alpha.secret, { name: `RL Leave Room ${i}` });
-      const room = await roomRes.json();
+      const room = await roomRes.json() as { id?: string };
+      if (!room.id) { results.push(roomRes.status); continue; }
       const res = await app.request(`/rooms/${room.id}/leave`, {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}` },
@@ -10871,7 +10873,7 @@ describe("Hono API behavior", () => {
     const { alpha, alphaClient } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      const res = await app.request("/messages/nonexistent/cancel", {
+      const res = await app.request("/messages/00000000-0000-0000-0000-000000000099/cancel", {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -10879,7 +10881,7 @@ describe("Hono API behavior", () => {
       // 404 is fine — rate limit counts regardless
     }
 
-    const blocked = await app.request("/messages/nonexistent/cancel", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/cancel", {
       method: "POST",
       headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({}),
@@ -10891,13 +10893,13 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099", {
         method: "DELETE",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099", {
       method: "DELETE",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -10908,14 +10910,14 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099", {
         method: "PATCH",
         headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
         body: JSON.stringify({ payload: { content: "test" } }),
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099", {
       method: "PATCH",
       headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({ payload: { content: "test" } }),
@@ -10927,13 +10929,13 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent/read", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/read", {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/read", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/read", {
       method: "POST",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -10944,13 +10946,13 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent/ack", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/ack", {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/ack", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/ack", {
       method: "POST",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -10962,14 +10964,14 @@ describe("Hono API behavior", () => {
 
     // Exhaust the messages rate limit (60/min)
     for (let i = 0; i < 60; i++) {
-      await app.request("/messages/nonexistent/forward", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/forward", {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json", "Idempotency-Key": `fwd-${i}` },
         body: JSON.stringify({ to: "someone" }),
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/forward", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/forward", {
       method: "POST",
       headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json", "Idempotency-Key": "fwd-overflow" },
       body: JSON.stringify({ to: "someone" }),
@@ -10981,14 +10983,14 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent/react", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/react", {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
         body: JSON.stringify({ emoji: "👍" }),
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/react", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/react", {
       method: "POST",
       headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({ emoji: "👍" }),
@@ -11000,13 +11002,13 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent/react/%F0%9F%91%8D", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/react/%F0%9F%91%8D", {
         method: "DELETE",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/react/%F0%9F%91%8D", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/react/%F0%9F%91%8D", {
       method: "DELETE",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -11017,13 +11019,13 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent/pin", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/pin", {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/pin", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/pin", {
       method: "POST",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -11034,13 +11036,13 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent/unpin", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/unpin", {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/unpin", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/unpin", {
       method: "POST",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -11051,14 +11053,14 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent/labels", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/labels", {
         method: "POST",
         headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
         body: JSON.stringify({ label: "test" }),
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/labels", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/labels", {
       method: "POST",
       headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({ label: "test" }),
@@ -11070,13 +11072,13 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/nonexistent/labels/test", {
+      await app.request("/messages/00000000-0000-0000-0000-000000000099/labels/test", {
         method: "DELETE",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/messages/nonexistent/labels/test", {
+    const blocked = await app.request("/messages/00000000-0000-0000-0000-000000000099/labels/test", {
       method: "DELETE",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -11106,13 +11108,13 @@ describe("Hono API behavior", () => {
     const { alpha } = await registerPair();
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/messages/searches/nonexistent", {
+      await app.request("/messages/searches/00000000-0000-0000-0000-000000000099", {
         method: "DELETE",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/messages/searches/nonexistent", {
+    const blocked = await app.request("/messages/searches/00000000-0000-0000-0000-000000000099", {
       method: "DELETE",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -11274,14 +11276,14 @@ describe("Hono API behavior", () => {
     const alpha = await createClient().register({ name: "ws-role-rl" });
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/workspaces/members/nonexistent/role", {
+      await app.request("/workspaces/members/00000000-0000-0000-0000-000000000099/role", {
         method: "PATCH",
         headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
         body: JSON.stringify({ role: "member" }),
       });
     }
 
-    const blocked = await app.request("/workspaces/members/nonexistent/role", {
+    const blocked = await app.request("/workspaces/members/00000000-0000-0000-0000-000000000099/role", {
       method: "PATCH",
       headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({ role: "member" }),
@@ -11312,14 +11314,14 @@ describe("Hono API behavior", () => {
     const alpha = await createClient().register({ name: "doc-update-rl" });
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/documents/nonexistent/nonexistent", {
+      await app.request("/documents/00000000-0000-0000-0000-000000000098/00000000-0000-0000-0000-000000000099", {
         method: "PUT",
         headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
         body: JSON.stringify({ body: "test content" }),
       });
     }
 
-    const blocked = await app.request("/documents/nonexistent/nonexistent", {
+    const blocked = await app.request("/documents/00000000-0000-0000-0000-000000000098/00000000-0000-0000-0000-000000000099", {
       method: "PUT",
       headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({ body: "test content" }),
@@ -11331,13 +11333,13 @@ describe("Hono API behavior", () => {
     const alpha = await createClient().register({ name: "doc-del-rl" });
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/documents/nonexistent/nonexistent", {
+      await app.request("/documents/00000000-0000-0000-0000-000000000098/00000000-0000-0000-0000-000000000099", {
         method: "DELETE",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/documents/nonexistent/nonexistent", {
+    const blocked = await app.request("/documents/00000000-0000-0000-0000-000000000098/00000000-0000-0000-0000-000000000099", {
       method: "DELETE",
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
@@ -11350,14 +11352,128 @@ describe("Hono API behavior", () => {
     const alpha = await createClient().register({ name: "att-del-rl" });
 
     for (let i = 0; i < 30; i++) {
-      await app.request("/attachments/nonexistent", {
+      await app.request("/attachments/00000000-0000-0000-0000-000000000099", {
         method: "DELETE",
         headers: { Authorization: `Bearer ${alpha.secret}` },
       });
     }
 
-    const blocked = await app.request("/attachments/nonexistent", {
+    const blocked = await app.request("/attachments/00000000-0000-0000-0000-000000000099", {
       method: "DELETE",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  // --- Hardening: UUID validation on path params ---
+
+  it("rejects invalid UUID in path params with 400", async () => {
+    const alpha = await createClient().register({ name: "uuid-val" });
+
+    // Tasks endpoint with invalid contactId
+    const tasksRes = await app.request("/tasks/not-a-uuid", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(tasksRes.status).toBe(400);
+    const tasksBody = await tasksRes.json() as { code: string };
+    expect(tasksBody.code).toBe("INVALID_INPUT");
+
+    // Rooms endpoint with invalid roomId
+    const roomRes = await app.request("/rooms/not-a-uuid/members", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(roomRes.status).toBe(400);
+
+    // Messages endpoint with invalid messageId
+    const msgRes = await app.request("/messages/not-a-uuid/ack", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(msgRes.status).toBe(400);
+
+    // Templates endpoint with invalid id
+    const tmplRes = await app.request("/templates/;;;drop-table", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(tmplRes.status).toBe(400);
+
+    // Attachments endpoint with invalid id
+    const attRes = await app.request("/attachments/xyz", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(attRes.status).toBe(400);
+  });
+
+  it("accepts valid UUIDs in path params", async () => {
+    const alpha = await createClient().register({ name: "uuid-ok" });
+    const validUUID = "00000000-0000-0000-0000-000000000000";
+
+    // Should get past UUID validation (404 means the resource wasn't found, not a validation error)
+    const res = await app.request(`/tasks/${validUUID}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).not.toBe(400);
+  });
+
+  // --- Hardening: rate limits on previously unprotected read endpoints ---
+
+  it("rate limits scheduled messages listing at 60/min", async () => {
+    const alpha = await createClient().register({ name: "sched-rl" });
+
+    for (let i = 0; i < 60; i++) {
+      await app.request("/messages/scheduled", {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/scheduled", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits messages by-label at 60/min", async () => {
+    const alpha = await createClient().register({ name: "label-rl" });
+
+    for (let i = 0; i < 60; i++) {
+      await app.request("/messages/by-label/test-label", {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request("/messages/by-label/test-label", {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits template get-by-id at 60/min", async () => {
+    const alpha = await createClient().register({ name: "tmpl-rl" });
+    const fakeId = "00000000-0000-0000-0000-000000000001";
+
+    for (let i = 0; i < 60; i++) {
+      await app.request(`/templates/${fakeId}`, {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request(`/templates/${fakeId}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rate limits attachment list-by-message at 60/min", async () => {
+    const alpha = await createClient().register({ name: "attmsg-rl" });
+    const fakeId = "00000000-0000-0000-0000-000000000002";
+
+    for (let i = 0; i < 60; i++) {
+      await app.request(`/attachments/message/${fakeId}`, {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+    }
+
+    const blocked = await app.request(`/attachments/message/${fakeId}`, {
       headers: { Authorization: `Bearer ${alpha.secret}` },
     });
     expect(blocked.status).toBe(429);
@@ -12058,9 +12174,10 @@ function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow |
   return testState[table];
 }
 
-function nextId(prefix: string): string {
+function nextId(_prefix: string): string {
   testState.idCounter += 1;
-  return `${prefix}_${testState.idCounter}`;
+  const hex = testState.idCounter.toString(16).padStart(12, "0");
+  return `00000000-0000-0000-0000-${hex}`;
 }
 
 function getTableName(table: unknown): TableName {

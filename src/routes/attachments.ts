@@ -5,6 +5,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { canMessage } from "../lib/workspace.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
+import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -86,7 +87,7 @@ app.post("/", async (c) => {
 });
 
 // Download an attachment
-app.get("/:id", async (c) => {
+app.get("/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const attachmentId = c.req.param("id");
 
@@ -119,8 +120,13 @@ app.get("/:id", async (c) => {
 });
 
 // List attachments for a message
-app.get("/message/:messageId", async (c) => {
+app.get("/message/:messageId", requireValidUUIDs("messageId"), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
   const messageId = c.req.param("messageId");
 
   const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
@@ -148,7 +154,7 @@ app.get("/message/:messageId", async (c) => {
 });
 
 // Delete an attachment (only uploader can delete)
-app.delete("/:id", async (c) => {
+app.delete("/:id", requireValidUUIDs("id"), async (c) => {
   const agentId = c.get("agentId");
   const rateLimit = await checkRateLimit(`write:${agentId}`, 30, 60 * 1000);
   setRateLimitHeaders(c, rateLimit);
