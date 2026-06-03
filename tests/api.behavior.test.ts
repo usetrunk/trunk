@@ -20145,6 +20145,27 @@ describe("Hono API behavior", () => {
       expect(body.code).toBe("SELF_ACTION");
     });
 
+    it("rejects invalid role value", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "room-badrole-a" });
+      const beta = await anon.register({ name: "room-badrole-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const room = await clientA.createRoom({ name: "bad-role-room" });
+      await clientB.joinRoom({ code: room.pairing_code });
+
+      const res = await app.request(`/rooms/${room.id}/members/${beta.agent_id}/role`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ role: "superadmin" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
     it("room delete cascades all scoped data", async () => {
       const anon = createClient();
       const alpha = await anon.register({ name: "room-cascade-a" });
@@ -20175,6 +20196,183 @@ describe("Hono API behavior", () => {
         headers: { "Authorization": `Bearer ${alpha.secret}` },
       });
       expect(listRes.status).toBe(403);
+    });
+  });
+
+  describe("document hardening", () => {
+    it("rejects whitespace-only name on room document create", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-ws-name" });
+      const client = createClient(alpha.secret);
+      const room = await client.createRoom({ name: "doc-room" });
+
+      await expect(client.createRoomDocument(room.id, { name: "   ", body: "content" }))
+        .rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects whitespace-only name on room document update", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-ws-upd" });
+      const client = createClient(alpha.secret);
+      const room = await client.createRoom({ name: "doc-upd-room" });
+      const doc = await client.createRoomDocument(room.id, { name: "valid", body: "content" });
+
+      await expect(client.updateRoomDocument(room.id, doc.id, { body: "updated", name: "   " }))
+        .rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects whitespace-only name on contact document create", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-ct-ws-a" });
+      const beta = await anon.register({ name: "doc-ct-ws-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+      await clientB.pair({ code: alpha.pairing_code });
+
+      await expect(clientA.createDocument(beta.agent_id, { name: "   ", body: "content" }))
+        .rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects whitespace-only name on workspace document create", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-wk-ws" });
+      const client = createClient(alpha.secret);
+      const ws = await client.createWorkspace({ name: "DocWsTest" });
+
+      await expect(client.createWorkspaceDocument(ws.id, { name: "   ", body: "content" }))
+        .rejects.toMatchObject({ status: 400 });
+    });
+
+    it("non-member cannot access room documents", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-nonmem-a" });
+      const beta = await anon.register({ name: "doc-nonmem-b" });
+      const clientA = createClient(alpha.secret);
+
+      const room = await clientA.createRoom({ name: "private-docs" });
+      await clientA.createRoomDocument(room.id, { name: "secret", body: "top secret" });
+
+      const res = await app.request(`/documents/room/${room.id}`, {
+        headers: { "Authorization": `Bearer ${beta.secret}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("non-member cannot access workspace documents", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-wsnm-a" });
+      const beta = await anon.register({ name: "doc-wsnm-b" });
+      const clientA = createClient(alpha.secret);
+
+      const ws = await clientA.createWorkspace({ name: "PrivateDocs" });
+      await clientA.createWorkspaceDocument(ws.id, { name: "internal", body: "private data" });
+
+      const res = await app.request(`/documents/workspace/${ws.id}`, {
+        headers: { "Authorization": `Bearer ${beta.secret}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("document delete also removes version history", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-del-ver" });
+      const client = createClient(alpha.secret);
+      const room = await client.createRoom({ name: "ver-room" });
+
+      const doc = await client.createRoomDocument(room.id, { name: "versioned", body: "v1" });
+      await client.updateRoomDocument(room.id, doc.id, { body: "v2" });
+      await client.updateRoomDocument(room.id, doc.id, { body: "v3" });
+
+      await client.deleteRoomDocument(room.id, doc.id);
+
+      // Document should be gone
+      await expect(client.getRoomDocument(room.id, doc.id)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("document version history is returned in order", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-ver-ord" });
+      const client = createClient(alpha.secret);
+      const room = await client.createRoom({ name: "order-room" });
+
+      const doc = await client.createRoomDocument(room.id, { name: "ordered", body: "v1" });
+      await client.updateRoomDocument(room.id, doc.id, { body: "v2-longer" });
+
+      const res = await app.request(`/documents/room/${room.id}/${doc.id}/versions`, {
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+      expect(res.status).toBe(200);
+      const versions = await res.json() as { versions: { version: number }[] };
+      expect(versions.versions.length).toBe(2);
+      // Most recent first
+      expect(versions.versions[0].version).toBe(2);
+      expect(versions.versions[1].version).toBe(1);
+    });
+
+    it("rejects document name exceeding 255 characters", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "doc-long-name" });
+      const client = createClient(alpha.secret);
+      const room = await client.createRoom({ name: "longname-room" });
+
+      await expect(client.createRoomDocument(room.id, { name: "a".repeat(256), body: "content" }))
+        .rejects.toMatchObject({ status: 400 });
+    });
+  });
+
+  describe("billing hardening", () => {
+    it("billing status requires workspace membership", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "bill-no-ws" });
+      const client = createClient(alpha.secret);
+
+      const res = await app.request("/billing/status", {
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("billing checkout requires workspace membership", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "bill-no-ws-co" });
+
+      const res = await app.request("/billing/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("billing portal requires workspace membership", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "bill-no-ws-po" });
+
+      const res = await app.request("/billing/portal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("billing endpoints require authentication", async () => {
+      const statusRes = await app.request("/billing/status");
+      expect(statusRes.status).toBe(401);
+
+      const checkoutRes = await app.request("/billing/checkout", { method: "POST" });
+      expect(checkoutRes.status).toBe(401);
+
+      const portalRes = await app.request("/billing/portal", { method: "POST" });
+      expect(portalRes.status).toBe(401);
     });
   });
 });

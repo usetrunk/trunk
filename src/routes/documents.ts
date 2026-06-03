@@ -15,8 +15,24 @@ const app = new Hono<AgentVariables>();
 const MAX_DOC_NAME_LENGTH = 255;
 const MAX_DOC_BODY_BYTES = 1024 * 1024; // 1MB
 const MAX_CONTENT_TYPE_LENGTH = 100;
+const MAX_DOCS_PER_SCOPE = 200;
 
 app.use("/*", authMiddleware);
+
+function validateDocName(name: string): string | null {
+  if (!name.trim()) return "name must not be blank";
+  if (name.length > MAX_DOC_NAME_LENGTH) return `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`;
+  return null;
+}
+
+async function checkDocCountLimit(scope: string): Promise<boolean> {
+  const docs = await db
+    .select({ id: sharedDocuments.id })
+    .from(sharedDocuments)
+    .where(eq(sharedDocuments.scope, scope))
+    .limit(MAX_DOCS_PER_SCOPE + 1);
+  return docs.length < MAX_DOCS_PER_SCOPE;
+}
 
 // --- Room-scoped document endpoints (must be before /:contactId to avoid route conflicts) ---
 
@@ -32,11 +48,13 @@ app.post("/room/:roomId", requireValidUUIDs("roomId"), requireRoomMember(), asyn
 
   const body = await c.req.json<{ name: string; body: string; content_type?: string }>();
   if (!body.name || !body.body) return c.json({ error: "name and body are required", code: "MISSING_FIELD" }, 400);
-  if (body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
+  const nameErr = validateDocName(body.name);
+  if (nameErr) return c.json({ error: nameErr, code: "INVALID_FIELD" }, 400);
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   if (body.content_type && body.content_type.length > MAX_CONTENT_TYPE_LENGTH) return c.json({ error: `content_type must be ${MAX_CONTENT_TYPE_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
   const scope = roomScope(roomId);
+  if (!(await checkDocCountLimit(scope))) return c.json({ error: "Too many documents in this scope (max 200)", code: "LIMIT_EXCEEDED" }, 400);
 
   const doc = await db.transaction(async (tx) => {
     const [created] = await tx
@@ -163,6 +181,7 @@ app.put("/room/:roomId/:docId", requireValidUUIDs("roomId", "docId"), requireRoo
   const body = await c.req.json<{ body: string; name?: string }>();
   if (!body.body) return c.json({ error: "body is required", code: "MISSING_FIELD" }, 400);
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
+  if (body.name !== undefined && body.name !== null && !String(body.name).trim()) return c.json({ error: "name must not be blank", code: "INVALID_FIELD" }, 400);
   if (body.name && body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
   const result = await db.transaction(async (tx) => {
@@ -335,11 +354,13 @@ app.post("/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWor
 
   const body = await c.req.json<{ name: string; body: string; content_type?: string }>();
   if (!body.name || !body.body) return c.json({ error: "name and body are required", code: "MISSING_FIELD" }, 400);
-  if (body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
+  const nameErr2 = validateDocName(body.name);
+  if (nameErr2) return c.json({ error: nameErr2, code: "INVALID_FIELD" }, 400);
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   if (body.content_type && body.content_type.length > MAX_CONTENT_TYPE_LENGTH) return c.json({ error: `content_type must be ${MAX_CONTENT_TYPE_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
   const scope = workspaceScope(workspaceId);
+  if (!(await checkDocCountLimit(scope))) return c.json({ error: "Too many documents in this scope (max 200)", code: "LIMIT_EXCEEDED" }, 400);
 
   const doc = await db.transaction(async (tx) => {
     const [created] = await tx
@@ -411,6 +432,7 @@ app.put("/workspace/:workspaceId/:docId", requireValidUUIDs("workspaceId", "docI
   const body = await c.req.json<{ body: string; name?: string }>();
   if (!body.body) return c.json({ error: "body is required", code: "MISSING_FIELD" }, 400);
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
+  if (body.name !== undefined && body.name !== null && !String(body.name).trim()) return c.json({ error: "name must not be blank", code: "INVALID_FIELD" }, 400);
   if (body.name && body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
   const result = await db.transaction(async (tx) => {
@@ -550,11 +572,13 @@ app.post("/:contactId", requireValidUUIDs("contactId"), async (c) => {
 
   const body = await c.req.json<{ name: string; body: string; content_type?: string }>();
   if (!body.name || !body.body) return c.json({ error: "name and body are required", code: "MISSING_FIELD" }, 400);
-  if (body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
+  const nameErr3 = validateDocName(body.name);
+  if (nameErr3) return c.json({ error: nameErr3, code: "INVALID_FIELD" }, 400);
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   if (body.content_type && body.content_type.length > MAX_CONTENT_TYPE_LENGTH) return c.json({ error: `content_type must be ${MAX_CONTENT_TYPE_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
   const scope = contactScope(agentId, contactId);
+  if (!(await checkDocCountLimit(scope))) return c.json({ error: "Too many documents in this scope (max 200)", code: "LIMIT_EXCEEDED" }, 400);
 
   const doc = await db.transaction(async (tx) => {
     const [created] = await tx
@@ -691,6 +715,7 @@ app.put("/:contactId/:docId", requireValidUUIDs("contactId", "docId"), async (c)
   const body = await c.req.json<{ body: string; name?: string }>();
   if (!body.body) return c.json({ error: "body is required", code: "MISSING_FIELD" }, 400);
   if (body.body.length > MAX_DOC_BODY_BYTES) return c.json({ error: "body exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
+  if (body.name !== undefined && body.name !== null && !String(body.name).trim()) return c.json({ error: "name must not be blank", code: "INVALID_FIELD" }, 400);
   if (body.name && body.name.length > MAX_DOC_NAME_LENGTH) return c.json({ error: `name must be ${MAX_DOC_NAME_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
 
   const scope = contactScope(agentId, contactId);

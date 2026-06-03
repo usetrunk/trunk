@@ -83,6 +83,13 @@ app.post("/checkout", async (c) => {
     }
   }
 
+  if (body.success_url && body.success_url.length > 2000) {
+    return c.json({ error: "success_url must be 2000 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.cancel_url && body.cancel_url.length > 2000) {
+    return c.json({ error: "cancel_url must be 2000 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.workspaceId) {
     return c.json({ error: "Not in a workspace", code: "VALIDATION_ERROR" }, 400);
