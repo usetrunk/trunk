@@ -29,7 +29,7 @@ app.post("/pair", async (c) => {
   if (!body.code || typeof body.code !== "string") {
     return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
   }
-  if (body.code.length > 20) {
+  if (body.code.length > 20 || !/^[A-Za-z0-9]+$/.test(body.code)) {
     return c.json({ error: "Invalid code format", code: "INVALID_INPUT" }, 400);
   }
   if (body.alias && (typeof body.alias !== "string" || body.alias.length > 100)) {

@@ -22678,6 +22678,90 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // ── Saved search query validation ───────────────────────────────────
+  describe("saved search query validation", () => {
+    it("rejects non-string values in query object", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.saveSearch("bad-search", { key: 123 as unknown as string });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("rejects array as query value", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.saveSearch("bad-search", ["not", "an", "object"] as unknown as Record<string, string>);
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("rejects query with more than 20 keys", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      const query: Record<string, string> = {};
+      for (let i = 0; i < 21; i++) query[`key${i}`] = "value";
+
+      try {
+        await client.saveSearch("big-search", query);
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+  });
+
+  // ── Pairing code format validation ─────────────────────────────────
+  describe("pairing code format", () => {
+    it("rejects pairing code with special characters", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.pair({ code: "../../../etc" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe("INVALID_INPUT");
+      }
+    });
+
+    it("rejects pairing code with null bytes", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.pair({ code: "ABC\x00DEF" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe("INVALID_INPUT");
+      }
+    });
+
+    it("rejects pairing code with spaces", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.pair({ code: "ABC DEF" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe("INVALID_INPUT");
+      }
+    });
+  });
+
   // ── Document body byte-length validation ───────────────────────────
   describe("document body byte-length", () => {
     it("rejects document body exceeding 1MB in UTF-8 bytes", async () => {

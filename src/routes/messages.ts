@@ -757,6 +757,18 @@ app.post("/searches", async (c) => {
   if (body.name.length > 200) {
     return c.json({ error: "name must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
+  if (typeof body.query !== "object" || body.query === null || Array.isArray(body.query)) {
+    return c.json({ error: "query must be a plain object", code: "VALIDATION_ERROR" }, 400);
+  }
+  const queryKeys = Object.keys(body.query);
+  if (queryKeys.length > 20) {
+    return c.json({ error: "query must have 20 or fewer keys", code: "VALIDATION_ERROR" }, 400);
+  }
+  for (const [k, v] of Object.entries(body.query)) {
+    if (typeof v !== "string") {
+      return c.json({ error: `query value for key '${k}' must be a string`, code: "VALIDATION_ERROR" }, 400);
+    }
+  }
   if (JSON.stringify(body.query).length > 10000) {
     return c.json({ error: "query is too large", code: "VALIDATION_ERROR" }, 400);
   }
