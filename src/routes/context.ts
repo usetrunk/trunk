@@ -32,7 +32,7 @@ app.get("/room/:roomId/facts", requireValidUUIDs("roomId"), requireRoomMember(),
     .select()
     .from(sharedFacts)
     .where(eq(sharedFacts.scope, scope))
-    .limit(1000);
+    .limit(200);
 
   return c.json({
     facts: facts.map((f) => ({
@@ -148,7 +148,7 @@ app.get("/workspace/:workspaceId/facts", requireValidUUIDs("workspaceId"), requi
   const workspaceId = c.req.param("workspaceId");
 
   const scope = workspaceScope(workspaceId);
-  const facts = await db.select().from(sharedFacts).where(eq(sharedFacts.scope, scope)).limit(1000);
+  const facts = await db.select().from(sharedFacts).where(eq(sharedFacts.scope, scope)).limit(200);
 
   return c.json({
     facts: facts.map((f) => ({ key: f.key, value: f.value, version: f.version, updated_by: f.updatedBy, updated_at: f.updatedAt })),
@@ -247,7 +247,7 @@ app.get("/:contactId/facts", requireValidUUIDs("contactId"), async (c) => {
     .select()
     .from(sharedFacts)
     .where(eq(sharedFacts.scope, scope))
-    .limit(1000);
+    .limit(200);
 
   return c.json({
     facts: facts.map((f) => ({

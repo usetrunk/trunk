@@ -9,7 +9,7 @@ import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
-import { canMessage, canMessageWorkspace, getWorkspaceMembers, isBlocked } from "../lib/workspace.js";
+import { canMessage, canMessageWorkspace, getWorkspaceMembers, isBlocked, getBlockedRecipients } from "../lib/workspace.js";
 import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -152,8 +152,13 @@ app.post("/", async (c) => {
     const threadId = body.thread_id ?? crypto.randomUUID();
     const created: MessageRow[] = [];
 
+    // Batch-fetch blocked recipients and webhook agents to avoid N+1
+    const blockedSet = await getBlockedRecipients(agentId, recipients);
+    const recipientAgents = await db.select().from(agents).where(inArray(agents.id, recipients));
+    const agentMap = new Map(recipientAgents.map((a) => [a.id, a]));
+
     for (const recipientId of recipients) {
-      if (await isBlocked(agentId, recipientId)) continue;
+      if (blockedSet.has(recipientId)) continue;
 
       const [message] = await db
         .insert(messages)
@@ -177,7 +182,7 @@ app.post("/", async (c) => {
         .where(eq(messages.id, message.id));
       message.status = "delivered";
 
-      const [recipient] = await db.select().from(agents).where(eq(agents.id, recipientId)).limit(1);
+      const recipient = agentMap.get(recipientId);
       if (recipient?.webhookUrl) {
         deliverWebhook(message, recipient).catch(() => {});
       }
@@ -244,8 +249,13 @@ app.post("/", async (c) => {
     const threadId = body.thread_id ?? crypto.randomUUID();
     const created: MessageRow[] = [];
 
+    // Batch-fetch blocked recipients and webhook agents to avoid N+1
+    const blockedSet = await getBlockedRecipients(agentId, recipients);
+    const recipientAgents = await db.select().from(agents).where(inArray(agents.id, recipients));
+    const agentMap = new Map(recipientAgents.map((a) => [a.id, a]));
+
     for (const recipientId of recipients) {
-      if (await isBlocked(agentId, recipientId)) continue;
+      if (blockedSet.has(recipientId)) continue;
 
       const [message] = await db
         .insert(messages)
@@ -269,7 +279,7 @@ app.post("/", async (c) => {
         .where(eq(messages.id, message.id));
       message.status = "delivered";
 
-      const [recipient] = await db.select().from(agents).where(eq(agents.id, recipientId)).limit(1);
+      const recipient = agentMap.get(recipientId);
       if (recipient?.webhookUrl) {
         deliverWebhook(message, recipient).catch(() => {});
       }

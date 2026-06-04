@@ -22130,7 +22130,7 @@ describe("Hono API behavior", () => {
 
       try {
         await client.send({
-          to: `workspace:${ws.workspace_id}`,
+          to: `workspace:${ws.id}`,
           type: "broadcast",
           payload: { content: "echo?" },
         });
@@ -22154,7 +22154,7 @@ describe("Hono API behavior", () => {
 
       try {
         await alphaClient.send({
-          to: `workspace:${ws.workspace_id}`,
+          to: `workspace:${ws.id}`,
           type: "broadcast",
           payload: { content: "hello?" },
         });
@@ -22178,6 +22178,136 @@ describe("Hono API behavior", () => {
         expect.unreachable("should have thrown");
       } catch (err: any) {
         expect(err.status).toBe(400);
+      }
+    });
+  });
+
+  // ── Fan-out batched blocking and multi-recipient delivery ──────────
+  describe("fan-out batched delivery", () => {
+    it("workspace fan-out delivers to multiple unblocked members and skips blocked ones", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "batch-ws-alpha" });
+      const beta = await anon.register({ name: "batch-ws-beta" });
+      const gamma = await anon.register({ name: "batch-ws-gamma" });
+      const delta = await anon.register({ name: "batch-ws-delta" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const gammaClient = createClient(gamma.secret);
+      const deltaClient = createClient(delta.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "BatchTeam" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+      await gammaClient.joinWorkspace({ code: ws.pairing_code });
+      await deltaClient.joinWorkspace({ code: ws.pairing_code });
+
+      // Delta blocks alpha
+      await deltaClient.blockContact(alpha.agent_id);
+
+      // Alpha sends to workspace — should reach beta and gamma but not delta
+      const sent = await alphaClient.send({
+        to: `workspace:${ws.id}`,
+        type: "update",
+        payload: { content: "batch test" },
+      });
+
+      expect(sent.status).toBe("delivered");
+      expect(sent.recipients).toBe(2); // beta + gamma, not delta
+
+      const betaInbox = await betaClient.inbox();
+      const gammaInbox = await gammaClient.inbox();
+      const deltaInbox = await deltaClient.inbox();
+      expect(betaInbox.messages).toHaveLength(1);
+      expect(gammaInbox.messages).toHaveLength(1);
+      expect(deltaInbox.messages).toHaveLength(0);
+    });
+
+    it("room fan-out delivers to multiple unblocked members and skips blocked ones", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "batch-room-alpha" });
+      const beta = await anon.register({ name: "batch-room-beta" });
+      const gamma = await anon.register({ name: "batch-room-gamma" });
+      const delta = await anon.register({ name: "batch-room-delta" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const gammaClient = createClient(gamma.secret);
+      const deltaClient = createClient(delta.secret);
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "BatchRoom" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+      await joinRoomRaw(gamma.secret, room.pairing_code);
+      await joinRoomRaw(delta.secret, room.pairing_code);
+
+      // Delta blocks alpha
+      await deltaClient.blockContact(alpha.agent_id);
+
+      // Alpha sends to room — should reach beta and gamma but not delta
+      const sent = await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "update",
+        payload: { content: "room batch test" },
+      });
+
+      expect(sent.status).toBe("delivered");
+      expect(sent.recipients).toBe(2); // beta + gamma
+
+      const betaInbox = await betaClient.inbox();
+      const gammaInbox = await gammaClient.inbox();
+      const deltaInbox = await deltaClient.inbox();
+      expect(betaInbox.messages).toHaveLength(1);
+      expect(gammaInbox.messages).toHaveLength(1);
+      expect(deltaInbox.messages).toHaveLength(0);
+    });
+
+    it("workspace fan-out with no blocked recipients delivers to all members", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "noblock-alpha" });
+      const beta = await anon.register({ name: "noblock-beta" });
+      const gamma = await anon.register({ name: "noblock-gamma" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const gammaClient = createClient(gamma.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "NoBlockTeam" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+      await gammaClient.joinWorkspace({ code: ws.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: `workspace:${ws.id}`,
+        type: "update",
+        payload: { content: "all members" },
+      });
+
+      expect(sent.status).toBe("delivered");
+      expect(sent.recipients).toBe(2); // beta + gamma
+    });
+
+    it("fan-out with multiple blocked recipients returns 403", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "allblocked-alpha" });
+      const beta = await anon.register({ name: "allblocked-beta" });
+      const gamma = await anon.register({ name: "allblocked-gamma" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const gammaClient = createClient(gamma.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "AllBlockedTeam" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+      await gammaClient.joinWorkspace({ code: ws.pairing_code });
+
+      // Both members block alpha
+      await betaClient.blockContact(alpha.agent_id);
+      await gammaClient.blockContact(alpha.agent_id);
+
+      try {
+        await alphaClient.send({
+          to: `workspace:${ws.id}`,
+          type: "update",
+          payload: { content: "nobody listens" },
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect([400, 403]).toContain(err.status);
       }
     });
   });

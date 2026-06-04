@@ -1,7 +1,7 @@
 // Workspace identity groups for multi-agent teams
 import { db } from "../db/index.js";
 import { agents, contacts, workspaces, workspaceContacts, blockedContacts } from "../db/schema.js";
-import { eq, or, and } from "drizzle-orm";
+import { eq, or, and, inArray } from "drizzle-orm";
 
 /**
  * Check if agentA can message agentB.
@@ -69,6 +69,19 @@ export async function isBlocked(sender: string, recipient: string): Promise<bool
     .where(and(eq(blockedContacts.agentId, recipient), eq(blockedContacts.blockedAgentId, sender)))
     .limit(1);
   return !!block;
+}
+
+/**
+ * Batch-check which recipients have blocked the sender.
+ * Returns a Set of recipient IDs that have blocked the sender.
+ */
+export async function getBlockedRecipients(sender: string, recipientIds: string[]): Promise<Set<string>> {
+  if (recipientIds.length === 0) return new Set();
+  const blocks = await db
+    .select({ agentId: blockedContacts.agentId })
+    .from(blockedContacts)
+    .where(and(eq(blockedContacts.blockedAgentId, sender), inArray(blockedContacts.agentId, recipientIds)));
+  return new Set(blocks.map((b) => b.agentId));
 }
 
 /**
