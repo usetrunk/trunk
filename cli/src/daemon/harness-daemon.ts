@@ -36,6 +36,8 @@ type AgentConfig = {
   gooseProvider?: string;
   gooseModel?: string;
   maxTurns?: number;
+  poll?: boolean;           // run on a timer instead of event-driven
+  pollInterval?: number;    // seconds between polls (default: 120)
 };
 
 type HarnessConfig = {
@@ -98,12 +100,12 @@ function routeEvent(event: TaskEvent, agents: AgentConfig[]): AgentConfig | null
         });
         return assigned || builder || null;
       }
-      if (task.group === "bugs") return qa || builder || null;
-      if (task.group === "tests") return qa || null;
+      if (task.group === "bugs") return builder || qa || null;
+      if (task.group === "tests") return qa || builder || null;
       if (task.group === "docs") return docs || null;
       if (task.group === "security") return builder || null;
       if (task.group === "human") return null; // Human escalation — don't wake an agent
-      return planner || builder || null;
+      return builder || planner || null;
 
     case "task.updated":
       // Task status changed — route based on new status
@@ -404,6 +406,28 @@ for (const agent of config.agents) {
 }
 
 console.log(`[daemon] ${connectedProfiles.size} WebSocket connections established`);
+
+// Start polling loops for agents with poll: true
+const pollingAgents = config.agents.filter(a => a.poll);
+for (const agent of pollingAgents) {
+  const interval = (agent.pollInterval ?? 120) * 1000;
+  console.log(`[daemon] ${agent.name} will poll every ${agent.pollInterval ?? 120}s`);
+
+  // Run immediately on startup, then on interval
+  spawnAgent(agent, "Scheduled poll — check the room for tasks that need attention.");
+
+  setInterval(() => {
+    if (!activeAgents.get(agent.profile)) {
+      console.log(`[daemon] polling: waking ${agent.name}`);
+      spawnAgent(agent, "Scheduled poll — check the room for tasks that need attention.");
+    } else {
+      console.log(`[daemon] polling: ${agent.name} still running, skipping`);
+    }
+  }, interval);
+}
+
+const eventAgents = config.agents.filter(a => !a.poll);
+console.log(`[daemon] ${eventAgents.length} event-driven, ${pollingAgents.length} polling`);
 console.log(`[daemon] Listening for task events... (Ctrl+C to stop)`);
 console.log(`[daemon] Agents will spawn in zellij session "${SESSION_NAME}" on demand`);
 console.log(``);
