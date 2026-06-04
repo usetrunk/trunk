@@ -520,14 +520,38 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
 
     const doneIds = new Set(allScopeTasks.filter(t => t.status === "done").map(t => t.id));
 
+    const toUnblock: typeof allScopeTasks = [];
     for (const t of allScopeTasks) {
       const deps = (t.dependsOn as string[]) || [];
       if (deps.includes(taskId) && t.status === "blocked") {
         if (deps.every(d => doneIds.has(d))) {
-          await db
-            .update(tasks)
-            .set({ status: "open", updatedAt: new Date() })
-            .where(eq(tasks.id, t.id));
+          toUnblock.push(t);
+        }
+      }
+    }
+
+    if (toUnblock.length > 0) {
+      const unblockIds = toUnblock.map(t => t.id);
+      await db
+        .update(tasks)
+        .set({ status: "open", updatedAt: new Date() })
+        .where(inArray(tasks.id, unblockIds));
+
+      // Fire webhooks for auto-unblocked room tasks
+      if (updated.scope.startsWith("room:")) {
+        const roomId = updated.scope.slice(5);
+        for (const t of toUnblock) {
+          fireRoomTaskWebhooks(roomId, {
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            status: "open",
+            priority: t.priority,
+            owner: t.owner,
+            created_by: t.createdBy,
+            group: t.group,
+            scope: t.scope,
+          }, "task.updated").catch(() => {});
         }
       }
     }

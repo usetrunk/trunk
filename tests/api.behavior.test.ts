@@ -3056,6 +3056,57 @@ describe("Hono API behavior", () => {
     );
   });
 
+  it("auto-unblock fires task.updated webhooks for newly unblocked room tasks", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Auto-Unblock Webhook Room" });
+    const room = await roomRes.json();
+
+    // Create webhook
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/auto-unblock" }),
+    });
+
+    // Create dependency task
+    const depRes = await createRoomTaskRaw(alpha.secret, room.id, { title: "Dependency" });
+    const dep = await depRes.json();
+
+    // Create task depending on dep, then set it to blocked
+    const blockedRes = await createRoomTaskRaw(alpha.secret, room.id, {
+      title: "Blocked downstream",
+      depends_on: [dep.id],
+    });
+    expect(blockedRes.status).toBe(201);
+    const blocked = await blockedRes.json();
+    // Update to blocked status
+    await app.request(`/tasks/${room.id}/${blocked.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "blocked" }),
+    });
+    vi.mocked(fireRoomTaskWebhooks).mockClear();
+
+    // Mark dependency as done — should auto-unblock downstream and fire webhook
+    const doneRes = await app.request(`/tasks/${room.id}/${dep.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(doneRes.status).toBe(200);
+
+    // Should have fired: 1 for the dep being updated, 1 for the auto-unblocked task
+    const calls = vi.mocked(fireRoomTaskWebhooks).mock.calls;
+    expect(calls.length).toBe(2);
+    // First call: the dep task marked done
+    expect(calls[0][2]).toBe("task.updated");
+    expect(calls[0][1]).toEqual(expect.objectContaining({ id: dep.id, status: "done" }));
+    // Second call: the auto-unblocked task
+    expect(calls[1][2]).toBe("task.updated");
+    expect(calls[1][1]).toEqual(expect.objectContaining({ id: blocked.id, status: "open" }));
+  });
+
   // --- Room messaging fan-out tests ---
 
   it("sends a message to room:<id> and fans out to all other members", async () => {
