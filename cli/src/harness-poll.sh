@@ -206,30 +206,71 @@ Follow CLAUDE.md rules. Create a feature branch from main (git fetch origin main
 }
 
 handle_reviewer() {
-  echo "[poll:$PROFILE] Checking for review tasks..."
-  local tasks_json
-  tasks_json=$(get_tasks "open" "$AGENT_ID")
+  echo "[poll:$PROFILE] Checking for PRs to review..."
 
-  local task_count
-  task_count=$(echo "$tasks_json" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('tasks',[])))" 2>/dev/null)
+  # Get open PRs that haven't been reviewed yet
+  local prs_json
+  prs_json=$(gh pr list --repo SuperkeyHQ/superkey --state open --json number,title,author,reviewDecision,additions,deletions,changedFiles --limit 5 2>/dev/null || echo "[]")
 
-  if [ "$task_count" = "0" ]; then
-    # Also check PRs directly
-    local prs
-    prs=$(gh pr list --repo SuperkeyHQ/superkey --state open --json number --limit 1 2>/dev/null | python3 -c "import sys,json; prs=json.load(sys.stdin); print(len(prs))" 2>/dev/null)
-    if [ "$prs" = "0" ]; then
-      echo "[poll:$PROFILE] No PRs to review"
-      return
-    fi
+  local unreviewd
+  unreviewd=$(echo "$prs_json" | python3 -c "
+import sys, json
+prs = json.load(sys.stdin)
+# Only review PRs that haven't been approved yet
+for pr in prs:
+    if pr.get('reviewDecision') != 'APPROVED':
+        print(f\"{pr['number']}|{pr['title']}|+{pr.get('additions',0)}/-{pr.get('deletions',0)}|{pr.get('changedFiles',0)} files\")
+" 2>/dev/null)
+
+  if [ -z "$unreviewd" ]; then
+    echo "[poll:$PROFILE] No PRs need review"
+    return
   fi
 
-  local prompt="Review open PRs for SuperkeyHQ/superkey. Run: gh pr list --repo SuperkeyHQ/superkey --state open. For each PR, read the diff with gh pr diff <number>, check code quality and test coverage. Approve good PRs with gh pr review <number> --approve. Request changes on bad ones. Review at most 2 PRs."
+  # Review the first unreviewed PR
+  local pr_num pr_title pr_stats pr_files
+  IFS='|' read -r pr_num pr_title pr_stats pr_files <<< "$(echo "$unreviewd" | head -1)"
+  echo "[poll:$PROFILE] Reviewing PR #$pr_num: $pr_title ($pr_stats, $pr_files)"
 
-  if [ "$RUNTIME" = "ollama" ]; then
-    run_ollama "$prompt"
+  # Fetch the diff
+  local diff
+  diff=$(gh pr diff "$pr_num" --repo SuperkeyHQ/superkey 2>/dev/null | head -500)
+
+  if [ -z "$diff" ]; then
+    echo "[poll:$PROFILE] Could not fetch diff for #$pr_num"
+    return
+  fi
+
+  # Ask the model to review
+  local prompt="You are a code reviewer for a TypeScript/Hono/Drizzle application. Review this PR diff and give a brief assessment.
+
+PR #$pr_num: $pr_title
+Stats: $pr_stats, $pr_files
+
+Diff (first 500 lines):
+$diff
+
+Assess:
+1. Does the code look correct?
+2. Any obvious bugs, security issues, or missing error handling?
+3. Is the change well-scoped (not too broad)?
+4. Verdict: APPROVE or REQUEST_CHANGES (with specific reason)
+
+Be concise — 5 sentences max."
+
+  local verdict
+  verdict=$(run_ollama "$prompt" 2>/dev/null)
+  echo "[poll:$PROFILE] Model verdict:"
+  echo "$verdict" | sed 's/^/  /'
+
+  # If the model says approve, approve it
+  if echo "$verdict" | grep -qi "APPROVE" && ! echo "$verdict" | grep -qi "REQUEST_CHANGES"; then
+    echo "[poll:$PROFILE] Approving PR #$pr_num"
+    gh pr review "$pr_num" --repo SuperkeyHQ/superkey --approve --body "Automated review: code looks good. $pr_title" 2>&1 || echo "[poll:$PROFILE] Approve failed"
   else
-    local cwd="${REVIEWER_CWD:-$HOME/dev/superkey/worktrees/sk-review}"
-    run_claude "$prompt" "$cwd"
+    echo "[poll:$PROFILE] Not auto-approving — needs human or more detailed review"
+    gh pr review "$pr_num" --repo SuperkeyHQ/superkey --comment --body "Automated review flagged concerns — please check:
+$(echo "$verdict" | head -5)" 2>&1 || echo "[poll:$PROFILE] Comment failed"
   fi
 }
 
