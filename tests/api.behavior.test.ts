@@ -23339,6 +23339,102 @@ describe("Hono API behavior", () => {
       expect(body.code).toBe("INVALID_BODY");
     });
   });
+
+  describe("connect routes", () => {
+    it("returns HTML page for valid agent pairing code", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "connect-agent" });
+
+      const res = await app.request(`/connect/${alpha.pairing_code}`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("<!DOCTYPE html>");
+      expect(html).toContain(alpha.pairing_code);
+      expect(html).toContain("wants to connect");
+      expect(html).toContain("data-trunk-pairing-code=");
+    });
+
+    it("returns not-found page for invalid agent pairing code", async () => {
+      const res = await app.request("/connect/ZZZZNOEXIST");
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("Invalid pairing code");
+      expect(html).toContain("ZZZZNOEXIST");
+    });
+
+    it("rejects overly long pairing codes", async () => {
+      const res = await app.request(`/connect/${"A".repeat(21)}`);
+      expect(res.status).toBe(400);
+    });
+
+    it("returns HTML page for valid room join code", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "connect-room-creator" });
+      const client = createClient(alpha.secret);
+      const room = await client.createRoom({ name: "Connect Test Room" });
+
+      const res = await app.request(`/connect/room/${room.pairing_code}`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("<!DOCTYPE html>");
+      expect(html).toContain("Connect Test Room");
+      expect(html).toContain(room.pairing_code);
+      expect(html).toContain("data-trunk-room-code=");
+      expect(html).toContain("member");
+    });
+
+    it("returns not-found page for invalid room code", async () => {
+      const res = await app.request("/connect/room/NOROOM123");
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("Invalid room code");
+      expect(html).toContain("NOROOM123");
+    });
+
+    it("rejects overly long room codes", async () => {
+      const res = await app.request(`/connect/room/${"B".repeat(21)}`);
+      expect(res.status).toBe(400);
+    });
+
+    it("pairing code lookup is case-insensitive", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "connect-case" });
+
+      const lowerRes = await app.request(`/connect/${alpha.pairing_code.toLowerCase()}`);
+      expect(lowerRes.status).toBe(200);
+      const html = await lowerRes.text();
+      expect(html).toContain("wants to connect");
+    });
+
+    it("room code lookup is case-insensitive", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "connect-room-case" });
+      const client = createClient(alpha.secret);
+      const room = await client.createRoom({ name: "Case Room" });
+
+      const lowerRes = await app.request(`/connect/room/${room.pairing_code.toLowerCase()}`);
+      expect(lowerRes.status).toBe(200);
+      const html = await lowerRes.text();
+      expect(html).toContain("Case Room");
+    });
+
+    it("connect page renders room name for multi-member rooms", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "connect-count-a" });
+      const beta = await anon.register({ name: "connect-count-b" });
+      const clientA = createClient(alpha.secret);
+      const clientB = createClient(beta.secret);
+
+      const room = await clientA.createRoom({ name: "Multi Member Room" });
+      await clientB.joinRoom({ code: room.pairing_code });
+
+      const res = await app.request(`/connect/room/${room.pairing_code}`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("Multi Member Room");
+      expect(html).toContain("data-trunk-room-name=");
+    });
+  });
 });
 
 async function registerPair(): Promise<{
