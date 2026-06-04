@@ -239,11 +239,13 @@ echo "[daemon] Waiting for next event..."
     return;
   }
 
-  // Check if the zellij session exists
+  // Check if the zellij session exists and is alive
   let sessionExists = false;
   try {
     const output = execSync(`${ZELLIJ_BIN} list-sessions 2>/dev/null`, { encoding: "utf-8" });
-    sessionExists = output.includes(SESSION_NAME);
+    // Only count it as existing if it's not EXITED
+    const line = output.split("\n").find(l => l.includes(SESSION_NAME));
+    sessionExists = !!line && !line.includes("EXITED");
   } catch {}
 
   if (!sessionExists) {
@@ -261,6 +263,14 @@ echo "[daemon] Waiting for next event..."
       stdio: "ignore",
     });
     child.unref();
+    // Wait for session to be ready
+    for (let i = 0; i < 10; i++) {
+      execSync("sleep 0.5");
+      try {
+        const out = execSync(`${ZELLIJ_BIN} list-sessions 2>/dev/null`, { encoding: "utf-8" });
+        if (out.includes(SESSION_NAME)) break;
+      } catch {}
+    }
   } else {
     // Add a tab to existing session
     const tabLayoutPath = join(STATE_DIR, `daemon-tab-${config.profile}.kdl`);
