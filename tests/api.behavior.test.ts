@@ -10955,6 +10955,188 @@ describe("Hono API behavior", () => {
     expect(expiresAt.getTime()).toBeLessThan(maxExpiry.getTime());
   });
 
+  it("ignores zero or negative ttl_seconds", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    for (const ttl of [0, -1, -100]) {
+      const res = await app.request("/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${alpha.secret}`,
+          "Idempotency-Key": `zero-ttl-${ttl}`,
+        },
+        body: JSON.stringify({
+          to: beta.agent_id,
+          type: "update",
+          payload: { content: "test" },
+          ttl_seconds: ttl,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      // Zero/negative TTL should not set an expiry
+      expect(body.expires_at).toBeUndefined();
+    }
+  });
+
+  it("ttl_seconds 60 sets expiry approximately 60 seconds from now", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const before = Date.now();
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "ttl-60s",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "ephemeral" },
+        ttl_seconds: 60,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    const expiresAt = new Date(body.expires_at).getTime();
+    // Should be ~60s from now (allow 5s tolerance)
+    expect(expiresAt).toBeGreaterThan(before + 55000);
+    expect(expiresAt).toBeLessThan(before + 65000);
+  });
+
+  it("rejects expires_at in the past", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const pastDate = new Date(Date.now() - 60000).toISOString();
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "past-expires",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "test" },
+        expires_at: pastDate,
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("future");
+  });
+
+  it("rejects expires_at beyond 1 year", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const farFuture = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000).toISOString();
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "far-expires",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "test" },
+        expires_at: farFuture,
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("1 year");
+  });
+
+  it("rejects invalid expires_at date format", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+        "Idempotency-Key": "bad-expires",
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "test" },
+        expires_at: "not-a-date",
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("ISO 8601");
+  });
+
+  it("malformed cursor is ignored gracefully in inbox pagination", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send a message first
+    await alphaClient.send({
+      to: beta.agent_id,
+      type: "update",
+      payload: { content: "cursor test" },
+    });
+
+    // Malformed cursors should not cause errors, just be ignored
+    const badCursors = [
+      "not-base64!!!",
+      Buffer.from("no-pipe-separator").toString("base64url"),
+      Buffer.from("invalid-date|some-id").toString("base64url"),
+      Buffer.from("|empty-date").toString("base64url"),
+      "",
+    ];
+
+    for (const cursor of badCursors) {
+      if (!cursor) continue; // skip empty
+      const inbox = await betaClient.inbox({ cursor });
+      // Should still return valid response, just may not filter correctly
+      expect(inbox.messages).toBeDefined();
+    }
+  });
+
+  it("valid cursor round-trips correctly through pagination", async () => {
+    const { beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Send 3 messages
+    for (let i = 0; i < 3; i++) {
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: `msg-${i}` },
+      });
+    }
+
+    // Fetch with limit=2 to get a cursor
+    const page1 = await betaClient.inbox({ limit: 2 });
+    expect(page1.messages.length).toBe(2);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_cursor).toBeTruthy();
+
+    // Fetch page 2 with the cursor
+    const page2 = await betaClient.inbox({ cursor: page1.next_cursor!, limit: 2 });
+    expect(page2.messages.length).toBe(1);
+    expect(page2.has_more).toBe(false);
+
+    // No overlap between pages
+    const page1Ids = page1.messages.map((m: { id: string }) => m.id);
+    const page2Ids = page2.messages.map((m: { id: string }) => m.id);
+    expect(page1Ids.every((id: string) => !page2Ids.includes(id))).toBe(true);
+  });
+
   it("rejects too many attachment_ids", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
