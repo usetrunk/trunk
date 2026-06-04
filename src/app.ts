@@ -28,6 +28,14 @@ const app = new Hono();
 app.use("*", logger());
 app.use("*", cors());
 
+app.onError((err, c) => {
+  if (err instanceof SyntaxError && err.message.includes("JSON")) {
+    return c.json({ error: "Invalid JSON body", code: "INVALID_BODY" }, 400);
+  }
+  console.error("Unhandled error:", err);
+  return c.json({ error: "Internal server error", code: "INTERNAL_ERROR" }, 500);
+});
+
 
 // Public landing page
 app.get("/", (c) => c.html(landingPage()));

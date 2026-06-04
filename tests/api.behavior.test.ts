@@ -23167,6 +23167,92 @@ describe("Hono API behavior", () => {
       }
     });
   });
+
+  // ── Global error handler: malformed JSON bodies ───────────────────
+  describe("malformed JSON body handling", () => {
+    it("returns 400 INVALID_BODY for malformed JSON on POST /messages", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "badjson-msg" });
+
+      const res = await app.request("/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: "{not valid json!!!",
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_BODY");
+    });
+
+    it("returns 400 INVALID_BODY for malformed JSON on POST /agents/register", async () => {
+      const res = await app.request("/agents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{{broken",
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_BODY");
+    });
+
+    it("returns 400 INVALID_BODY for malformed JSON on POST /rooms", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "badjson-room" });
+
+      const res = await app.request("/rooms", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: "not json at all",
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_BODY");
+    });
+
+    it("returns 400 INVALID_BODY for malformed JSON on POST /tasks", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "badjson-task" });
+      const beta = await anon.register({ name: "badjson-task-b" });
+      const alphaClient = createClient(alpha.secret);
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: "[invalid json",
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_BODY");
+    });
+
+    it("returns 400 INVALID_BODY for malformed JSON on POST /workspaces", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "badjson-ws" });
+
+      const res = await app.request("/workspaces", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: "{nope}",
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_BODY");
+    });
+  });
 });
 
 async function registerPair(): Promise<{
