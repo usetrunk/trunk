@@ -1569,25 +1569,27 @@ app.post("/label-bulk", async (c) => {
 
   let labeled = 0;
   if (ownedIds.length > 0) {
-    // Find which already have this label
-    const existingLabels = await db
-      .select({ messageId: messageLabels.messageId })
-      .from(messageLabels)
-      .where(and(
-        inArray(messageLabels.messageId, ownedIds),
-        eq(messageLabels.agentId, agentId),
-        eq(messageLabels.label, body.label),
-      ));
-    const alreadyLabeled = new Set(existingLabels.map((l) => l.messageId));
+    // Use a transaction to prevent TOCTOU race on the check-then-insert
+    labeled = await db.transaction(async (tx) => {
+      const existingLabels = await tx
+        .select({ messageId: messageLabels.messageId })
+        .from(messageLabels)
+        .where(and(
+          inArray(messageLabels.messageId, ownedIds),
+          eq(messageLabels.agentId, agentId),
+          eq(messageLabels.label, body.label),
+        ));
+      const alreadyLabeled = new Set(existingLabels.map((l) => l.messageId));
 
-    const toInsert = ownedIds
-      .filter((id) => !alreadyLabeled.has(id))
-      .map((messageId) => ({ messageId, agentId, label: body.label }));
+      const toInsert = ownedIds
+        .filter((id) => !alreadyLabeled.has(id))
+        .map((messageId) => ({ messageId, agentId, label: body.label }));
 
-    if (toInsert.length > 0) {
-      await db.insert(messageLabels).values(toInsert);
-      labeled = toInsert.length;
-    }
+      if (toInsert.length > 0) {
+        await tx.insert(messageLabels).values(toInsert);
+      }
+      return toInsert.length;
+    });
   }
 
   await audit(agentId, "message.label_bulk", "message", null, { count: labeled, label: body.label });

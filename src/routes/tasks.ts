@@ -210,8 +210,8 @@ app.post("/", async (c) => {
       group: task.group,
       scope: task.scope,
     };
-    fireRoomTaskWebhooks(body.room_id, taskData).catch(() => {});
-    notifyRoomTaskEvent(body.room_id, "task.created", taskData).catch(() => {});
+    fireRoomTaskWebhooks(body.room_id, taskData).catch((e) => console.error("[webhook]", e));
+    notifyRoomTaskEvent(body.room_id, "task.created", taskData).catch((e) => console.error("[push]", e));
   }
 
   return c.json({ scope: task.scope, ...taskToJson(task) }, 201);
