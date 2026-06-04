@@ -216,9 +216,10 @@ handle_reviewer() {
   unreviewd=$(echo "$prs_json" | python3 -c "
 import sys, json
 prs = json.load(sys.stdin)
-# Only review PRs that haven't been approved yet
+# Skip approved PRs and PRs that already have changes requested
 for pr in prs:
-    if pr.get('reviewDecision') != 'APPROVED':
+    decision = pr.get('reviewDecision', '')
+    if decision not in ('APPROVED', 'CHANGES_REQUESTED'):
         print(f\"{pr['number']}|{pr['title']}|+{pr.get('additions',0)}/-{pr.get('deletions',0)}|{pr.get('changedFiles',0)} files\")
 " 2>/dev/null)
 
