@@ -268,9 +268,15 @@ Be concise — 5 sentences max."
     echo "[poll:$PROFILE] Approving PR #$pr_num"
     gh pr review "$pr_num" --repo SuperkeyHQ/superkey --approve --body "Automated review: code looks good. $pr_title" 2>&1 || echo "[poll:$PROFILE] Approve failed"
   else
-    echo "[poll:$PROFILE] Not auto-approving — needs human or more detailed review"
-    gh pr review "$pr_num" --repo SuperkeyHQ/superkey --comment --body "Automated review flagged concerns — please check:
-$(echo "$verdict" | head -5)" 2>&1 || echo "[poll:$PROFILE] Comment failed"
+    echo "[poll:$PROFILE] Requesting changes on PR #$pr_num"
+    local review_body
+    review_body=$(echo "$verdict" | head -10)
+    gh pr review "$pr_num" --repo SuperkeyHQ/superkey --request-changes --body "Review flagged issues:
+$review_body" 2>&1 || echo "[poll:$PROFILE] Review comment failed"
+
+    # Create a task so the builder knows what to fix
+    create_task "Fix review feedback on PR #$pr_num: $pr_title" "bugs" "PR #$pr_num was rejected during review. Issues found: $review_body" > /dev/null
+    echo "[poll:$PROFILE] Created fix task for builder"
   fi
 }
 
