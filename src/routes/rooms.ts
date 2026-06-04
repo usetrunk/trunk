@@ -7,7 +7,7 @@ import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { isValidUUID, requireValidUUIDs, validateMetadata } from "../lib/errors.js";
-import { isPrivateHostname } from "../lib/ssrf.js";
+import { validateWebhookUrl } from "../lib/ssrf.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -466,18 +466,10 @@ app.post("/:roomId/webhooks", requireValidUUIDs("roomId"), async (c) => {
   if (body.url.length > 2000) {
     return c.json({ error: "url must be 2000 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
-  try {
-    const parsed = new URL(body.url);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-      return c.json({ error: "url must use https or http protocol", code: "INVALID_FIELD" }, 400);
-    }
-    // SSRF protection: block private/internal IP ranges
-    const hostname = parsed.hostname.toLowerCase();
-    if (isPrivateHostname(hostname)) {
-      return c.json({ error: "url must not point to a private or internal address", code: "SSRF_BLOCKED" }, 400);
-    }
-  } catch {
-    return c.json({ error: "url must be a valid URL", code: "INVALID_FIELD" }, 400);
+  const urlError = validateWebhookUrl(body.url);
+  if (urlError) {
+    const code = urlError.includes("private") ? "SSRF_BLOCKED" : "INVALID_FIELD";
+    return c.json({ error: urlError, code }, 400);
   }
   if (body.secret && body.secret.length < 16) {
     return c.json({ error: "secret must be at least 16 characters", code: "INVALID_FIELD" }, 400);
