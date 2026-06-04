@@ -213,14 +213,19 @@ app.get("/", async (c) => {
       .from(workspaceContacts)
       .where(eq(workspaceContacts.workspaceId, callerAgent.workspaceId));
 
-    for (const wc of externalPairings) {
-      if (!seenIds.has(wc.agentId) && wc.agentId !== agentId) {
-        const [extAgent] = await db
-          .select({ id: agents.id, name: agents.name, owner: agents.owner })
-          .from(agents)
-          .where(eq(agents.id, wc.agentId))
-          .limit(1);
-        if (extAgent) {
+    // Batch-resolve external agents to avoid N+1
+    const unseenExternals = externalPairings.filter((wc) => !seenIds.has(wc.agentId) && wc.agentId !== agentId);
+    if (unseenExternals.length > 0) {
+      const extAgentIds = unseenExternals.map((wc) => wc.agentId);
+      const extAgents = await db
+        .select({ id: agents.id, name: agents.name, owner: agents.owner })
+        .from(agents)
+        .where(or(...extAgentIds.map((id) => eq(agents.id, id))));
+      const extMap = new Map(extAgents.map((a) => [a.id, a]));
+
+      for (const wc of unseenExternals) {
+        const extAgent = extMap.get(wc.agentId);
+        if (extAgent && !seenIds.has(extAgent.id)) {
           result.push({
             agent_id: extAgent.id,
             name: extAgent.name,
