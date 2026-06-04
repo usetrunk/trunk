@@ -1,13 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches, messageEdits, attachments } from "../db/schema.js";
+import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, roomWebhooks, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches, messageEdits, attachments } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gt, gte, lte, ne } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
+import { validateWebhookUrl } from "../lib/ssrf.js";
 
 export function createTrunkMcpServer() {
   const server = new McpServer({
@@ -2015,6 +2016,90 @@ export function createTrunkMcpServer() {
         await db.delete(roomMembers).where(eq(roomMembers.roomId, room_id));
         await db.delete(rooms).where(eq(rooms.id, room_id));
         return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: room_id }) }] };
+      }
+
+      return errorResult("Unknown action");
+    }
+  );
+
+  server.tool(
+    "trunk_room_webhook",
+    "Manage room webhooks. Actions: create (register a URL to receive task events), list (show webhooks), delete (remove a webhook).",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["create", "list", "delete"]).describe("What to do"),
+      room_id: z.string().describe("Room ID"),
+      url: z.string().optional().describe("Webhook URL (for create, must be HTTPS)"),
+      webhook_secret: z.string().optional().describe("Optional signing secret (for create)"),
+      webhook_id: z.string().optional().describe("Webhook ID (for delete)"),
+      filter_group: z.string().optional().describe("Only fire for tasks in this group (for create)"),
+      filter_priority: z.string().optional().describe("Only fire for tasks with this priority (for create)"),
+      filter_status: z.string().optional().describe("Only fire for tasks with this status (for create)"),
+    },
+    async ({ secret, action, room_id, url, webhook_secret, webhook_id, filter_group, filter_priority, filter_status }) => {
+      const agent = await resolveAgent(secret);
+      if (!agent) return errorResult("Invalid secret");
+
+      // Verify room membership
+      const [membership] = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
+      if (!membership) return errorResult("Not a member of this room");
+
+      if (action === "create") {
+        if (!url) return errorResult("url is required for create");
+        if (membership.role !== "creator" && membership.role !== "admin") return errorResult("Only creators and admins can create webhooks");
+        const urlErr = validateWebhookUrl(url);
+        if (urlErr) return errorResult(urlErr);
+        // Check for duplicate URL
+        const [existing] = await db.select({ id: roomWebhooks.id }).from(roomWebhooks).where(and(eq(roomWebhooks.roomId, room_id), eq(roomWebhooks.url, url))).limit(1);
+        if (existing) return errorResult("A webhook with this URL already exists in this room");
+        // Check limit
+        const count = await db.select({ id: roomWebhooks.id }).from(roomWebhooks).where(eq(roomWebhooks.roomId, room_id)).limit(21);
+        if (count.length >= 20) return errorResult("Maximum 20 webhooks per room");
+        const [webhook] = await db.insert(roomWebhooks).values({
+          roomId: room_id,
+          url,
+          secret: webhook_secret || null,
+          filterGroup: filter_group || null,
+          filterPriority: filter_priority || null,
+          filterStatus: filter_status || null,
+          createdBy: agent.id,
+        }).returning();
+        return { content: [{ type: "text", text: JSON.stringify({
+          id: webhook.id,
+          room_id: webhook.roomId,
+          url: webhook.url,
+          filter_group: webhook.filterGroup,
+          filter_priority: webhook.filterPriority,
+          filter_status: webhook.filterStatus,
+          active: webhook.active === 1,
+          created_by: webhook.createdBy,
+          created_at: webhook.createdAt,
+        }, null, 2) }] };
+      }
+
+      if (action === "list") {
+        const webhooks = await db.select().from(roomWebhooks).where(eq(roomWebhooks.roomId, room_id)).limit(20);
+        return { content: [{ type: "text", text: JSON.stringify({
+          webhooks: webhooks.map(w => ({
+            id: w.id,
+            room_id: w.roomId,
+            url: w.url,
+            filter_group: w.filterGroup,
+            filter_priority: w.filterPriority,
+            filter_status: w.filterStatus,
+            active: w.active === 1,
+            created_by: w.createdBy,
+            created_at: w.createdAt,
+          })),
+        }, null, 2) }] };
+      }
+
+      if (action === "delete") {
+        if (!webhook_id) return errorResult("webhook_id is required for delete");
+        if (membership.role !== "creator" && membership.role !== "admin") return errorResult("Only creators and admins can delete webhooks");
+        const [deleted] = await db.delete(roomWebhooks).where(and(eq(roomWebhooks.id, webhook_id), eq(roomWebhooks.roomId, room_id))).returning();
+        if (!deleted) return errorResult("Webhook not found");
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted_id: deleted.id }) }] };
       }
 
       return errorResult("Unknown action");

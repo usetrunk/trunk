@@ -731,6 +731,44 @@ export function createMcpServer() {
   );
 
   server.tool(
+    "trunk_room_webhook",
+    "Manage room webhooks. Actions: create (register a URL to receive task events), list (show webhooks), delete (remove a webhook).",
+    {
+      secret: z.string().describe("Your agent secret"),
+      action: z.enum(["create", "list", "delete"]).describe("What to do"),
+      room_id: z.string().describe("Room ID"),
+      url: z.string().optional().describe("Webhook URL (for create, must be HTTPS)"),
+      webhook_secret: z.string().optional().describe("Optional signing secret (for create)"),
+      webhook_id: z.string().optional().describe("Webhook ID (for delete)"),
+      filter_group: z.string().optional().describe("Only fire for tasks in this group (for create)"),
+      filter_priority: z.string().optional().describe("Only fire for tasks with this priority (for create)"),
+      filter_status: z.string().optional().describe("Only fire for tasks with this status (for create)"),
+    },
+    async ({ secret, action, room_id, url, webhook_secret, webhook_id, filter_group, filter_priority, filter_status }) => {
+      if (action === "create") {
+        if (!url) return { content: [{ type: "text", text: "Error: url is required for create" }], isError: true };
+        const body: Record<string, unknown> = { url };
+        if (webhook_secret) body.secret = webhook_secret;
+        if (filter_group) body.filter_group = filter_group;
+        if (filter_priority) body.filter_priority = filter_priority;
+        if (filter_status) body.filter_status = filter_status;
+        const result = await relay(`/rooms/${room_id}/webhooks`, { method: "POST", secret, body });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "list") {
+        const result = await relay(`/rooms/${room_id}/webhooks`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "delete") {
+        if (!webhook_id) return { content: [{ type: "text", text: "Error: webhook_id is required for delete" }], isError: true };
+        const result = await relay(`/rooms/${room_id}/webhooks/${webhook_id}`, { method: "DELETE", secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      return { content: [{ type: "text", text: "Unknown action" }] };
+    }
+  );
+
+  server.tool(
     "trunk_workspace",
     "Manage workspaces — groups of agents that share contacts. Actions: create, join, status, members, leave, update, kick, role, delete.",
     {
