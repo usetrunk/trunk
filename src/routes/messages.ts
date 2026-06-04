@@ -155,53 +155,61 @@ app.post("/", async (c) => {
       return c.json({ error: "Not a workspace member or contact. Pair with the workspace first.", code: "NOT_MEMBER" }, 403);
     }
 
-    // Fan-out: create a message for each recipient
+    // Fan-out: create a message for each recipient atomically
     const threadId = body.thread_id ?? crypto.randomUUID();
-    const created: MessageRow[] = [];
 
     // Batch-fetch blocked recipients and webhook agents to avoid N+1
     const blockedSet = await getBlockedRecipients(agentId, recipients);
     const recipientAgents = await db.select().from(agents).where(inArray(agents.id, recipients));
     const agentMap = new Map(recipientAgents.map((a) => [a.id, a]));
 
-    for (const recipientId of recipients) {
-      if (blockedSet.has(recipientId)) continue;
+    const eligibleRecipients = recipients.filter((id) => !blockedSet.has(id));
+    if (eligibleRecipients.length === 0) {
+      return c.json({ error: "All recipients have blocked you", code: "BLOCKED" }, 403);
+    }
 
-      const [message] = await db
-        .insert(messages)
-        .values({
-          fromAgent: agentId,
-          toAgent: recipientId,
-          toWorkspace: workspaceId,
-          threadId,
-          replyTo: body.reply_to,
-          idempotencyKey: `${idempotencyKey}:${recipientId}`,
-          type: body.type,
-          payload: body.payload,
-          ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
-          ...(expiresAt ? { expiresAt } : {}),
-        })
-        .returning();
+    // Insert all fan-out messages in a single transaction
+    const created = await db.transaction(async (tx) => {
+      const inserted: MessageRow[] = [];
+      for (const recipientId of eligibleRecipients) {
+        const [message] = await tx
+          .insert(messages)
+          .values({
+            fromAgent: agentId,
+            toAgent: recipientId,
+            toWorkspace: workspaceId,
+            threadId,
+            replyTo: body.reply_to,
+            idempotencyKey: `${idempotencyKey}:${recipientId}`,
+            type: body.type,
+            payload: body.payload,
+            ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
+            ...(expiresAt ? { expiresAt } : {}),
+          })
+          .returning();
 
-      if (!scheduledAt) {
-        await notifyRealtime(recipientId, message);
-        await db
-          .update(messages)
-          .set({ status: "delivered", deliveredAt: new Date() })
-          .where(eq(messages.id, message.id));
-        message.status = "delivered";
+        if (!scheduledAt) {
+          await tx
+            .update(messages)
+            .set({ status: "delivered", deliveredAt: new Date() })
+            .where(eq(messages.id, message.id));
+          message.status = "delivered";
+        }
 
-        const recipient = agentMap.get(recipientId);
+        inserted.push(message);
+      }
+      return inserted;
+    });
+
+    // Notify and deliver webhooks after transaction commits
+    if (!scheduledAt) {
+      for (const message of created) {
+        await notifyRealtime(message.toAgent, message);
+        const recipient = agentMap.get(message.toAgent);
         if (recipient?.webhookUrl) {
           deliverWebhook(message, recipient).catch(() => {});
         }
       }
-
-      created.push(message);
-    }
-
-    if (created.length === 0) {
-      return c.json({ error: "All recipients have blocked you", code: "BLOCKED" }, 403);
     }
 
     await audit(agentId, scheduledAt ? "message.schedule_workspace" : "message.send_workspace", "workspace", workspaceId, {
@@ -260,53 +268,61 @@ app.post("/", async (c) => {
       return c.json({ error: "No other members in room", code: "VALIDATION_ERROR" }, 400);
     }
 
-    // Fan-out: create a message for each recipient
+    // Fan-out: create a message for each recipient atomically
     const threadId = body.thread_id ?? crypto.randomUUID();
-    const created: MessageRow[] = [];
 
     // Batch-fetch blocked recipients and webhook agents to avoid N+1
     const blockedSet = await getBlockedRecipients(agentId, recipients);
     const recipientAgents = await db.select().from(agents).where(inArray(agents.id, recipients));
     const agentMap = new Map(recipientAgents.map((a) => [a.id, a]));
 
-    for (const recipientId of recipients) {
-      if (blockedSet.has(recipientId)) continue;
+    const eligibleRecipients = recipients.filter((id) => !blockedSet.has(id));
+    if (eligibleRecipients.length === 0) {
+      return c.json({ error: "All recipients have blocked you", code: "BLOCKED" }, 403);
+    }
 
-      const [message] = await db
-        .insert(messages)
-        .values({
-          fromAgent: agentId,
-          toAgent: recipientId,
-          toRoom: roomId,
-          threadId,
-          replyTo: body.reply_to,
-          idempotencyKey: `${idempotencyKey}:${recipientId}`,
-          type: body.type,
-          payload: body.payload,
-          ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
-          ...(expiresAt ? { expiresAt } : {}),
-        })
-        .returning();
+    // Insert all fan-out messages in a single transaction
+    const created = await db.transaction(async (tx) => {
+      const inserted: MessageRow[] = [];
+      for (const recipientId of eligibleRecipients) {
+        const [message] = await tx
+          .insert(messages)
+          .values({
+            fromAgent: agentId,
+            toAgent: recipientId,
+            toRoom: roomId,
+            threadId,
+            replyTo: body.reply_to,
+            idempotencyKey: `${idempotencyKey}:${recipientId}`,
+            type: body.type,
+            payload: body.payload,
+            ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
+            ...(expiresAt ? { expiresAt } : {}),
+          })
+          .returning();
 
-      if (!scheduledAt) {
-        await notifyRealtime(recipientId, message);
-        await db
-          .update(messages)
-          .set({ status: "delivered", deliveredAt: new Date() })
-          .where(eq(messages.id, message.id));
-        message.status = "delivered";
+        if (!scheduledAt) {
+          await tx
+            .update(messages)
+            .set({ status: "delivered", deliveredAt: new Date() })
+            .where(eq(messages.id, message.id));
+          message.status = "delivered";
+        }
 
-        const recipient = agentMap.get(recipientId);
+        inserted.push(message);
+      }
+      return inserted;
+    });
+
+    // Notify and deliver webhooks after transaction commits
+    if (!scheduledAt) {
+      for (const message of created) {
+        await notifyRealtime(message.toAgent, message);
+        const recipient = agentMap.get(message.toAgent);
         if (recipient?.webhookUrl) {
           deliverWebhook(message, recipient).catch(() => {});
         }
       }
-
-      created.push(message);
-    }
-
-    if (created.length === 0) {
-      return c.json({ error: "All recipients have blocked you", code: "BLOCKED" }, 403);
     }
 
     await audit(agentId, scheduledAt ? "message.schedule_room" : "message.send_room", "room", roomId, {

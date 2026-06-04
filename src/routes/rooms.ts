@@ -386,26 +386,28 @@ app.delete("/:roomId", requireValidUUIDs("roomId"), async (c) => {
     return c.json({ error: "Only the creator can delete a room", code: "INSUFFICIENT_ROLE" }, 403);
   }
 
-  // Cascade delete all room-scoped data and track counts
+  // Atomic deletion: remove all room-scoped data and the room in one transaction
   const scope = `room:${roomId}`;
-  const deletedMessages = await db.delete(messages).where(eq(messages.toRoom, roomId)).returning({ id: messages.id });
-  const deletedMembers = await db.delete(roomMembers).where(eq(roomMembers.roomId, roomId)).returning({ agentId: roomMembers.agentId });
-  const deletedTasks = await db.delete(tasks).where(eq(tasks.scope, scope)).returning({ id: tasks.id });
-  const deletedFacts = await db.delete(sharedFacts).where(eq(sharedFacts.scope, scope)).returning({ key: sharedFacts.key });
-  const deletedDocs = await db.delete(sharedDocuments).where(eq(sharedDocuments.scope, scope)).returning({ id: sharedDocuments.id });
-  const deletedWebhooks = await db.delete(roomWebhooks).where(eq(roomWebhooks.roomId, roomId)).returning({ id: roomWebhooks.id });
-  await db.delete(rooms).where(eq(rooms.id, roomId));
+  const cascade = await db.transaction(async (tx) => {
+    const deletedMessages = await tx.delete(messages).where(eq(messages.toRoom, roomId)).returning({ id: messages.id });
+    const deletedMembers = await tx.delete(roomMembers).where(eq(roomMembers.roomId, roomId)).returning({ agentId: roomMembers.agentId });
+    const deletedTasks = await tx.delete(tasks).where(eq(tasks.scope, scope)).returning({ id: tasks.id });
+    const deletedFacts = await tx.delete(sharedFacts).where(eq(sharedFacts.scope, scope)).returning({ key: sharedFacts.key });
+    const deletedDocs = await tx.delete(sharedDocuments).where(eq(sharedDocuments.scope, scope)).returning({ id: sharedDocuments.id });
+    const deletedWebhooks = await tx.delete(roomWebhooks).where(eq(roomWebhooks.roomId, roomId)).returning({ id: roomWebhooks.id });
+    await tx.delete(rooms).where(eq(rooms.id, roomId));
 
-  await audit(agentId, "room.deleted", "room", roomId, {
-    cascade: {
+    return {
       messages: deletedMessages.length,
       members: deletedMembers.length,
       tasks: deletedTasks.length,
       facts: deletedFacts.length,
       documents: deletedDocs.length,
       webhooks: deletedWebhooks.length,
-    },
+    };
   });
+
+  await audit(agentId, "room.deleted", "room", roomId, { cascade });
 
   return c.json({ ok: true, deleted: roomId });
 });
