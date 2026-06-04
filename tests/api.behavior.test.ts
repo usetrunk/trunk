@@ -13023,6 +13023,25 @@ describe("Hono API behavior", () => {
 
   // --- Workspace PATCH validation ---
 
+  it("rejects workspace update with blank name (whitespace only)", async () => {
+    const alpha = await createClient().register({ name: "ws-blank-name" });
+    const client = createClient(alpha.secret);
+    await client.createWorkspace({ name: "My WS" });
+
+    const res = await app.request("/workspaces/me", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${alpha.secret}`,
+      },
+      body: JSON.stringify({ name: "   " }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_FIELD");
+    expect(body.error).toContain("blank");
+  });
+
   it("rejects workspace update with name exceeding 100 characters", async () => {
     const alpha = await createClient().register({ name: "ws-patch-val" });
     const client = createClient(alpha.secret);
