@@ -149,21 +149,21 @@ app.get("/", async (c) => {
     ? await db
         .select()
         .from(rooms)
-        .where(or(...roomIds.map((id) => eq(rooms.id, id))))
+        .where(inArray(rooms.id, roomIds))
         .limit(200)
     : [];
   const memberRows = roomIds.length > 0
     ? await db
         .select()
         .from(roomMembers)
-        .where(or(...roomIds.map((id) => eq(roomMembers.roomId, id))))
+        .where(inArray(roomMembers.roomId, roomIds))
         .limit(2000)
     : [];
   const roomTaskRows = roomIds.length > 0
     ? await db
         .select()
         .from(tasks)
-        .where(or(...roomIds.map((id) => eq(tasks.scope, `room:${id}`))))
+        .where(inArray(tasks.scope, roomIds.map((id) => `room:${id}`)))
         .orderBy(desc(tasks.createdAt))
         .limit(500)
     : [];
@@ -185,7 +185,7 @@ app.get("/", async (c) => {
   const visibleAgents = visibleAgentIds.length > 0
     ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner })
         .from(agents)
-        .where(or(...visibleAgentIds.map((id) => eq(agents.id, id))))
+        .where(inArray(agents.id, visibleAgentIds))
     : [];
   const agentNames = new Map(visibleAgents.map((visibleAgent) => [visibleAgent.id, visibleAgent.name]));
   const contactAgents = contactIds.map((contactId) => ({
@@ -404,7 +404,7 @@ app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
   // Resolve agent names
   const agentIds = [...new Set(threadMessages.flatMap(m => [m.fromAgent, m.toAgent]))];
   const agentRows = agentIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map(id => eq(agents.id, id))))
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, agentIds))
     : [];
   const nameMap = Object.fromEntries(agentRows.map(a => [a.id, a.name]));
 
@@ -481,7 +481,7 @@ app.get("/inbox", async (c) => {
   // Resolve sender names
   const senderIds = [...new Set(inboxMessages.map(m => m.fromAgent))];
   const senderRows = senderIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...senderIds.map(id => eq(agents.id, id))))
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, senderIds))
     : [];
   const nameMap = Object.fromEntries(senderRows.map(a => [a.id, a.name]));
 
@@ -586,7 +586,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     ...roomTasks.map(t => t.createdBy).filter(Boolean) as string[],
   ]);
   const agentRows = allAgentIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...allAgentIds.map(id => eq(agents.id, id))))
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, allAgentIds))
     : [];
   const nameMap = new Map(agentRows.map(a => [a.id, a.name]));
 
@@ -684,13 +684,13 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
   const allMemberships = await db.select().from(roomMembers).where(eq(roomMembers.agentId, agentId));
   const allRoomIds = allMemberships.map(m => m.roomId);
   const allRooms = allRoomIds.length > 0
-    ? await db.select().from(rooms).where(or(...allRoomIds.map(id => eq(rooms.id, id))))
+    ? await db.select().from(rooms).where(inArray(rooms.id, allRoomIds))
     : [];
   const allRoomMembers = allRoomIds.length > 0
-    ? await db.select().from(roomMembers).where(or(...allRoomIds.map(id => eq(roomMembers.roomId, id))))
+    ? await db.select().from(roomMembers).where(inArray(roomMembers.roomId, allRoomIds))
     : [];
   const allRoomTasks = allRoomIds.length > 0
-    ? await db.select().from(tasks).where(or(...allRoomIds.map(id => eq(tasks.scope, `room:${id}`))))
+    ? await db.select().from(tasks).where(inArray(tasks.scope, allRoomIds.map(id => `room:${id}`)))
     : [];
 
   return c.html(html`<!DOCTYPE html>
@@ -1081,7 +1081,7 @@ app.get("/gantt", async (c) => {
     ? await db
         .select()
         .from(tasks)
-        .where(or(...wsIds.map(id => eq(tasks.scope, `workspace:${id}`))))
+        .where(inArray(tasks.scope, wsIds.map(id => `workspace:${id}`)))
         .orderBy(tasks.sequence, tasks.createdAt)
     : [];
 
@@ -1095,12 +1095,12 @@ app.get("/gantt", async (c) => {
     ? await db
         .select()
         .from(tasks)
-        .where(or(...roomIds.map(id => eq(tasks.scope, `room:${id}`))))
+        .where(inArray(tasks.scope, roomIds.map(id => `room:${id}`)))
         .orderBy(tasks.sequence, tasks.createdAt)
     : [];
 
   const roomRows = roomIds.length > 0
-    ? await db.select().from(rooms).where(or(...roomIds.map(id => eq(rooms.id, id))))
+    ? await db.select().from(rooms).where(inArray(rooms.id, roomIds))
     : [];
   const roomNameMap = new Map(roomRows.map(r => [r.id, r.name]));
 
@@ -1112,7 +1112,7 @@ app.get("/gantt", async (c) => {
   // Resolve owner names
   const ownerIds = [...new Set(mergedTasks.map(t => t.owner).filter(Boolean))] as string[];
   const ownerRows = ownerIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...ownerIds.map(id => eq(agents.id, id))))
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, ownerIds))
     : [];
   const ownerNames = new Map(ownerRows.map(a => [a.id, a.name]));
 
@@ -1120,7 +1120,7 @@ app.get("/gantt", async (c) => {
   const creatorIds = [...new Set(mergedTasks.map(t => t.createdBy).filter(Boolean))] as string[];
   const allAgentIds = [...new Set([...ownerIds, ...creatorIds])];
   const allAgentRows = allAgentIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...allAgentIds.map(id => eq(agents.id, id))))
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, allAgentIds))
     : [];
   const agentNameMap = new Map(allAgentRows.map(a => [a.id, a.name]));
 

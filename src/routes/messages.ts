@@ -914,7 +914,7 @@ app.get("/by-label/:label", async (c) => {
     return c.json({ messages: [], next_cursor: null, has_more: false });
   }
 
-  const conditions = [or(...messageIds.map((id) => eq(messages.id, id)))!];
+  const conditions = [inArray(messages.id, messageIds)];
   if (cursor) {
     conditions.push(
       or(
@@ -2092,7 +2092,7 @@ app.get("/thread/:threadId/pins", requireValidUUIDs("threadId"), async (c) => {
 
   const agentIds = [...new Set(pinned.flatMap((m) => [m.fromAgent, m.toAgent, m.pinnedBy].filter((x): x is string => !!x)))];
   const agentList = agentIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, agentIds))
     : [];
   const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
 

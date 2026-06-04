@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, contacts, workspaces, workspaceContacts, blockedContacts, contactNotes, notificationPreferences, contactTags } from "../db/schema.js";
-import { eq, or, and, desc, lt } from "drizzle-orm";
+import { eq, or, and, desc, lt, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
@@ -165,7 +165,7 @@ app.get("/", async (c) => {
     const contactAgents = await db
       .select({ id: agents.id, name: agents.name, owner: agents.owner })
       .from(agents)
-      .where(or(...directIds.map((id) => eq(agents.id, id))));
+      .where(inArray(agents.id, directIds));
 
     for (const a of contactAgents) {
       const row = rows.find((r) => r.agentA === a.id || r.agentB === a.id);
@@ -220,7 +220,7 @@ app.get("/", async (c) => {
       const extAgents = await db
         .select({ id: agents.id, name: agents.name, owner: agents.owner })
         .from(agents)
-        .where(or(...extAgentIds.map((id) => eq(agents.id, id))));
+        .where(inArray(agents.id, extAgentIds));
       const extMap = new Map(extAgents.map((a) => [a.id, a]));
 
       for (const wc of unseenExternals) {
@@ -278,7 +278,7 @@ app.get("/blocked", async (c) => {
 
   const agentIds = rows.map((r) => r.blockedAgentId);
   const agentRows = agentIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, agentIds))
     : [];
   const nameMap = new Map(agentRows.map((a) => [a.id, a.name]));
 
@@ -820,7 +820,7 @@ app.get("/by-tag/:tag", async (c) => {
 
   const agentIds = items.map((r) => r.contactAgentId);
   const agentList = agentIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, agentIds))
     : [];
   const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
 
