@@ -5036,6 +5036,123 @@ describe("Hono API behavior", () => {
     await expect(res.json()).resolves.toMatchObject({ error: "payload exceeds 1MB limit" });
   });
 
+  it("rejects send with array payload (must be plain object)", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "question",
+        payload: [1, 2, 3],
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "payload must be a plain object" });
+  });
+
+  it("rejects send with deeply nested payload (>10 levels)", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    let deep: Record<string, unknown> = { value: "leaf" };
+    for (let i = 0; i < 11; i++) deep = { nested: deep };
+    const res = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({
+        to: beta.agent_id,
+        type: "question",
+        payload: deep,
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "payload nesting must not exceed 10 levels" });
+  });
+
+  it("rejects reply with blank type (whitespace only)", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "hello" },
+    });
+    const secret = (betaClient as unknown as { secret: string }).secret;
+    const res = await app.request(`/messages/${sent.id}/reply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({
+        type: "   ",
+        payload: { content: "reply" },
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "type must not be blank" });
+  });
+
+  it("rejects reply with array payload", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "hello" },
+    });
+    const secret = (betaClient as unknown as { secret: string }).secret;
+    const res = await app.request(`/messages/${sent.id}/reply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({
+        type: "response",
+        payload: ["not", "an", "object"],
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "payload must be a plain object" });
+  });
+
+  it("rejects edit with deeply nested payload", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "text",
+      payload: { content: "original" },
+    });
+    const secret = (alphaClient as unknown as { secret: string }).secret;
+    let deep: Record<string, unknown> = { value: "leaf" };
+    for (let i = 0; i < 11; i++) deep = { nested: deep };
+    const res = await app.request(`/messages/${sent.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`,
+      },
+      body: JSON.stringify({ payload: deep }),
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "payload nesting must not exceed 10 levels" });
+  });
+
   it("soft deletes only messages authored by the current agent", async () => {
     const { beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

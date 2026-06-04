@@ -71,14 +71,15 @@ export function requireValidUUIDs(...paramNames: string[]): MiddlewareHandler {
 const MAX_METADATA_BYTES = 10_000;
 const MAX_METADATA_DEPTH = 5;
 const MAX_METADATA_KEYS = 50;
+const MAX_PAYLOAD_DEPTH = 10;
 
-function jsonDepth(value: unknown, current = 0): number {
-  if (current > MAX_METADATA_DEPTH) return current;
+function jsonDepth(value: unknown, current = 0, limit = MAX_METADATA_DEPTH): number {
+  if (current > limit) return current;
   if (typeof value !== "object" || value === null) return current;
   let max = current + 1;
   for (const v of Object.values(value)) {
-    max = Math.max(max, jsonDepth(v, current + 1));
-    if (max > MAX_METADATA_DEPTH) return max;
+    max = Math.max(max, jsonDepth(v, current + 1, limit));
+    if (max > limit) return max;
   }
   return max;
 }
@@ -100,6 +101,21 @@ export function validateMetadata(metadata: unknown): string | null {
   }
   if (JSON.stringify(metadata).length > MAX_METADATA_BYTES) {
     return "metadata must not exceed 10KB";
+  }
+  return null;
+}
+
+/**
+ * Validate message payload: must be a plain object within depth limits.
+ * Size is checked separately via payloadSizeBytes.
+ * Returns null if valid, or an error string if invalid.
+ */
+export function validatePayload(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return "payload must be a plain object";
+  }
+  if (jsonDepth(payload, 0, MAX_PAYLOAD_DEPTH) > MAX_PAYLOAD_DEPTH) {
+    return `payload nesting must not exceed ${MAX_PAYLOAD_DEPTH} levels`;
   }
   return null;
 }

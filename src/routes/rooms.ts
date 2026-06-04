@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { rooms, roomMembers, roomWebhooks, agents, messages, tasks, sharedFacts, sharedDocuments } from "../db/schema.js";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, or, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -122,7 +122,7 @@ app.get("/", async (c) => {
   const roomRows = await db
     .select()
     .from(rooms)
-    .where(or(...roomIds.map((id) => eq(rooms.id, id))));
+    .where(inArray(rooms.id, roomIds));
 
   const result = roomRows.map((r) => {
     const membership = memberships.find((m) => m.roomId === r.id);
@@ -169,10 +169,12 @@ app.get("/:roomId/members", requireValidUUIDs("roomId"), async (c) => {
     .limit(500);
 
   const memberIds = allMembers.map((m) => m.agentId);
-  const memberAgents = await db
-    .select({ id: agents.id, name: agents.name, owner: agents.owner })
-    .from(agents)
-    .where(or(...memberIds.map((id) => eq(agents.id, id))));
+  const memberAgents = memberIds.length > 0
+    ? await db
+        .select({ id: agents.id, name: agents.name, owner: agents.owner })
+        .from(agents)
+        .where(inArray(agents.id, memberIds))
+    : [];
 
   const result = memberAgents.map((a) => {
     const m = allMembers.find((m) => m.agentId === a.id);

@@ -10,7 +10,7 @@ import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import { canMessage, canMessageWorkspace, getWorkspaceMembers, isBlocked, getBlockedRecipients } from "../lib/workspace.js";
-import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
+import { isValidUUID, requireValidUUIDs, validatePayload } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const VALID_INBOX_STATUSES = ["pending", "delivered", "processed", "replied"] as const;
@@ -52,6 +52,10 @@ app.post("/", async (c) => {
   }
   if (body.type.length > 50) {
     return c.json({ error: "type must be 50 characters or fewer", code: "INVALID_FIELD" }, 400);
+  }
+  const payloadErr = validatePayload(body.payload);
+  if (payloadErr) {
+    return c.json({ error: payloadErr, code: "VALIDATION_ERROR" }, 400);
   }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
     return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
@@ -1288,6 +1292,10 @@ app.patch("/:id", requireValidUUIDs("id"), async (c) => {
   if (!body.payload) {
     return c.json({ error: "payload is required", code: "MISSING_FIELD" }, 400);
   }
+  const editPayloadErr = validatePayload(body.payload);
+  if (editPayloadErr) {
+    return c.json({ error: editPayloadErr, code: "VALIDATION_ERROR" }, 400);
+  }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
     return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   }
@@ -1641,8 +1649,15 @@ app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
   if (!body.type || !body.payload) {
     return c.json({ error: "type and payload are required", code: "VALIDATION_ERROR" }, 400);
   }
+  if (!body.type.trim()) {
+    return c.json({ error: "type must not be blank", code: "VALIDATION_ERROR" }, 400);
+  }
   if (body.type.length > 50) {
     return c.json({ error: "type must be 50 characters or fewer", code: "VALIDATION_ERROR" }, 400);
+  }
+  const replyPayloadErr = validatePayload(body.payload);
+  if (replyPayloadErr) {
+    return c.json({ error: replyPayloadErr, code: "VALIDATION_ERROR" }, 400);
   }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
     return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
