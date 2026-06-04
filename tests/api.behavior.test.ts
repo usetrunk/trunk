@@ -20327,6 +20327,127 @@ describe("Hono API behavior", () => {
     });
   });
 
+  describe("billing webhook validation", () => {
+    it("rejects webhook without stripe-signature header", async () => {
+      const res = await app.request("/billing/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "checkout.session.completed" }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("UNAUTHORIZED");
+    });
+
+    it("webhook does not require bearer auth", async () => {
+      // Webhook uses Stripe signature, not bearer token — should not return 401
+      const res = await app.request("/billing/webhook", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "stripe-signature": "t=123,v1=abc",
+        },
+        body: JSON.stringify({ type: "test" }),
+      });
+      // Should fail at signature validation (400), not auth (401)
+      expect(res.status).toBe(400);
+      expect(res.status).not.toBe(401);
+    });
+
+    it("billing status returns subscription for workspace member", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "bill-status-ws" });
+      const client = createClient(alpha.secret);
+      const ws = await client.createWorkspace({ name: "billing-test-ws" });
+
+      const res = await app.request("/billing/status", {
+        headers: { "Authorization": `Bearer ${alpha.secret}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.workspace_id).toBe(ws.id);
+      expect(body.plan).toBe("free");
+      expect(body.status).toBe("active");
+    });
+
+    it("billing checkout rejects overly long success_url", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "bill-long-url" });
+      const client = createClient(alpha.secret);
+      await client.createWorkspace({ name: "billing-url-ws" });
+
+      const res = await app.request("/billing/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ success_url: "x".repeat(2001) }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_FIELD");
+    });
+
+    it("billing checkout rejects overly long cancel_url", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "bill-long-cancel" });
+      const client = createClient(alpha.secret);
+      await client.createWorkspace({ name: "billing-cancel-ws" });
+
+      const res = await app.request("/billing/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ cancel_url: "y".repeat(2001) }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_FIELD");
+    });
+
+    it("billing checkout rejects invalid JSON body", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "bill-bad-json" });
+      const client = createClient(alpha.secret);
+      await client.createWorkspace({ name: "billing-json-ws" });
+
+      const res = await app.request("/billing/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: "not json{{{",
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("INVALID_BODY");
+    });
+
+    it("billing portal requires stripe customer", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "bill-no-customer" });
+      const client = createClient(alpha.secret);
+      await client.createWorkspace({ name: "billing-portal-ws" });
+
+      const res = await app.request("/billing/portal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("VALIDATION_ERROR");
+      expect(body.error).toContain("No billing account");
+    });
+  });
+
   describe("billing hardening", () => {
     it("billing status requires workspace membership", async () => {
       const anon = createClient();
@@ -20734,6 +20855,338 @@ describe("Hono API behavior", () => {
       const ids = members.members.map((m: { agent_id: string }) => m.agent_id);
       expect(ids).toContain(alpha.agent_id);
       expect(ids).toContain(beta.agent_id);
+    });
+  });
+
+  describe("audit log endpoint", () => {
+    it("returns empty events list for new agent", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-empty" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      const result = await client.auditLog();
+      expect(result.events).toEqual([]);
+      expect(result.has_more).toBe(false);
+    });
+
+    it("requires authentication", async () => {
+      const res = await app.request("/audit-events", {
+        method: "GET",
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("returns own audit events after actions", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      testState["audit_events"].length = 0;
+
+      // Perform a pairing (creates audit events for alpha)
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const result = await alphaClient.auditLog();
+      expect(result.events.length).toBeGreaterThanOrEqual(1);
+      const actions = result.events.map((e: { action: string }) => e.action);
+      expect(actions).toContain("contact.pair");
+    });
+
+    it("only returns events for the authenticated agent", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      testState["audit_events"].length = 0;
+
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Beta should not see alpha's pairing audit event
+      const betaResult = await betaClient.auditLog();
+      const betaActions = betaResult.events.map((e: { action: string }) => e.action);
+      expect(betaActions).not.toContain("contact.pair");
+    });
+
+    it("filters by action", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      testState["audit_events"].length = 0;
+
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.unpair(beta.agent_id);
+
+      const filtered = await alphaClient.auditLog({ action: "contact.unpair" });
+      expect(filtered.events.length).toBe(1);
+      expect(filtered.events[0].action).toBe("contact.unpair");
+    });
+
+    it("filters by target_type", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-target-type" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      await createRoomRaw(reg.secret, { name: "Audit Filter Room" });
+
+      const filtered = await client.auditLog({ target_type: "room" });
+      expect(filtered.events.length).toBeGreaterThanOrEqual(1);
+      filtered.events.forEach((e: { target_type: string }) => {
+        expect(e.target_type).toBe("room");
+      });
+    });
+
+    it("filters by target_id", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-target-id" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      const roomRes = await createRoomRaw(reg.secret, { name: "Target ID Room" });
+      const room = await roomRes.json();
+
+      const filtered = await client.auditLog({ target_id: room.id });
+      expect(filtered.events.length).toBe(1);
+      expect(filtered.events[0].target_id).toBe(room.id);
+    });
+
+    it("filters by date range (after)", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      testState["audit_events"].length = 0;
+
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Set 'after' to the future — should return no events
+      const future = new Date(Date.now() + 86400000).toISOString();
+      const filtered = await alphaClient.auditLog({ after: future });
+      expect(filtered.events).toEqual([]);
+    });
+
+    it("filters by date range (before)", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      testState["audit_events"].length = 0;
+
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Set 'before' to the past — should return no events
+      const past = new Date(Date.now() - 86400000).toISOString();
+      const filtered = await alphaClient.auditLog({ before: past });
+      expect(filtered.events).toEqual([]);
+    });
+
+    it("rejects invalid after date", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-bad-after" });
+      const client = createClient(reg.secret);
+
+      await expect(client.auditLog({ after: "not-a-date" })).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("rejects invalid before date", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-bad-before" });
+      const client = createClient(reg.secret);
+
+      await expect(client.auditLog({ before: "garbage" })).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("rejects before <= after", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-bad-range" });
+      const client = createClient(reg.secret);
+
+      const now = new Date().toISOString();
+      const past = new Date(Date.now() - 86400000).toISOString();
+      await expect(client.auditLog({ after: now, before: past })).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("rejects overly long action filter", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-long-action" });
+      const client = createClient(reg.secret);
+
+      const longAction = "x".repeat(101);
+      await expect(client.auditLog({ action: longAction })).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("rejects overly long target_type filter", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-long-tt" });
+      const client = createClient(reg.secret);
+
+      const longType = "y".repeat(101);
+      await expect(client.auditLog({ target_type: longType })).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("rejects overly long target_id filter", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-long-tid" });
+      const client = createClient(reg.secret);
+
+      const longId = "z".repeat(101);
+      await expect(client.auditLog({ target_id: longId })).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("respects limit parameter", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-limit" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      // Create multiple audit events by creating rooms
+      await createRoomRaw(reg.secret, { name: "Limit Room 1" });
+      await createRoomRaw(reg.secret, { name: "Limit Room 2" });
+      await createRoomRaw(reg.secret, { name: "Limit Room 3" });
+
+      const limited = await client.auditLog({ limit: 2 });
+      expect(limited.events.length).toBe(2);
+      expect(limited.has_more).toBe(true);
+    });
+
+    it("supports cursor pagination", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-cursor" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      // Stagger timestamps so cursor pagination works
+      await createRoomRaw(reg.secret, { name: "Cursor Room 1" });
+      await new Promise((r) => setTimeout(r, 5));
+      await createRoomRaw(reg.secret, { name: "Cursor Room 2" });
+      await new Promise((r) => setTimeout(r, 5));
+      await createRoomRaw(reg.secret, { name: "Cursor Room 3" });
+
+      const page1 = await client.auditLog({ limit: 2 });
+      expect(page1.events.length).toBe(2);
+      expect(page1.has_more).toBe(true);
+      expect(page1.next_cursor).toBeDefined();
+
+      const page2 = await client.auditLog({ limit: 2, cursor: page1.next_cursor! });
+      expect(page2.events.length).toBe(1);
+      expect(page2.has_more).toBe(false);
+    });
+
+    it("returns events in descending order by created_at", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-order" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      await createRoomRaw(reg.secret, { name: "Order Room 1" });
+      // Small delay to ensure distinct timestamps
+      await new Promise((r) => setTimeout(r, 5));
+      await createRoomRaw(reg.secret, { name: "Order Room 2" });
+
+      const result = await client.auditLog();
+      expect(result.events.length).toBeGreaterThanOrEqual(2);
+      for (let i = 1; i < result.events.length; i++) {
+        const prev = new Date(result.events[i - 1].created_at).getTime();
+        const curr = new Date(result.events[i].created_at).getTime();
+        expect(prev).toBeGreaterThanOrEqual(curr);
+      }
+    });
+
+    it("includes metadata in events", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-metadata" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      await createRoomRaw(reg.secret, { name: "Metadata Room" });
+
+      const result = await client.auditLog({ action: "room.created" });
+      expect(result.events.length).toBe(1);
+      expect(result.events[0].metadata).toBeDefined();
+      expect(result.events[0].metadata).toHaveProperty("name", "Metadata Room");
+    });
+
+    it("returns correct event shape", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-shape" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      await createRoomRaw(reg.secret, { name: "Shape Room" });
+
+      const result = await client.auditLog();
+      expect(result.events.length).toBe(1);
+      const event = result.events[0];
+      expect(event).toHaveProperty("id");
+      expect(event).toHaveProperty("action");
+      expect(event).toHaveProperty("target_type");
+      expect(event).toHaveProperty("target_id");
+      expect(event).toHaveProperty("metadata");
+      expect(event).toHaveProperty("created_at");
+    });
+
+    it("combines multiple filters", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "audit-multi-filter" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      const roomRes = await createRoomRaw(reg.secret, { name: "Multi Filter Room" });
+      const room = await roomRes.json();
+
+      const result = await client.auditLog({
+        action: "room.created",
+        target_type: "room",
+        target_id: room.id,
+      });
+      expect(result.events.length).toBe(1);
+      expect(result.events[0].action).toBe("room.created");
+      expect(result.events[0].target_type).toBe("room");
+      expect(result.events[0].target_id).toBe(room.id);
+    });
+
+    it("tracks contact lifecycle audit events", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      testState["audit_events"].length = 0;
+
+      // Pair, block, unblock, unpair
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.blockContact(beta.agent_id);
+      await alphaClient.unblockContact(beta.agent_id);
+      await alphaClient.unpair(beta.agent_id);
+
+      const result = await alphaClient.auditLog();
+      const actions = result.events.map((e: { action: string }) => e.action);
+      expect(actions).toContain("contact.pair");
+      expect(actions).toContain("contact.block");
+      expect(actions).toContain("contact.unblock");
+      expect(actions).toContain("contact.unpair");
+    });
+
+    it("tracks room lifecycle audit events", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "audit-room-lifecycle" });
+      const beta = await anon.register({ name: "audit-room-joiner" });
+      const alphaClient = createClient(alpha.secret);
+      testState["audit_events"].length = 0;
+
+      // Create room, join, update, leave
+      const roomRes = await createRoomRaw(alpha.secret, { name: "Lifecycle Room" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      await app.request(`/rooms/${room.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({ name: "Updated Lifecycle Room" }),
+      });
+
+      const result = await alphaClient.auditLog();
+      const actions = result.events.map((e: { action: string }) => e.action);
+      expect(actions).toContain("room.created");
+      expect(actions).toContain("room.updated");
     });
   });
 });
