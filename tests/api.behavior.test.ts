@@ -22692,6 +22692,27 @@ describe("Hono API behavior", () => {
       }
     });
 
+    it("cannot pin a deleted message", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "will be deleted" },
+      });
+
+      await alphaClient.deleteMessage(sent.id);
+
+      try {
+        await alphaClient.pin(sent.id);
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.body.code).toBe("VALIDATION_ERROR");
+      }
+    });
+
     it("unpin on already-unpinned message returns idempotent ok", async () => {
       const { alpha, beta, alphaClient } = await registerPair();
       await alphaClient.pair({ code: beta.pairing_code });
@@ -23494,6 +23515,32 @@ describe("Hono API behavior", () => {
         expect.unreachable("should have thrown");
       } catch (err: any) {
         expect(err.status).toBe(400);
+      }
+    });
+
+    it("rejects reply to a deleted message", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "question",
+        payload: { content: "will be deleted" },
+      });
+
+      // Sender deletes the message
+      await alphaClient.deleteMessage(sent.id);
+
+      // Recipient tries to reply
+      try {
+        await betaClient.reply(sent.id, {
+          type: "response",
+          payload: { content: "too late" },
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.body.code).toBe("VALIDATION_ERROR");
       }
     });
   });

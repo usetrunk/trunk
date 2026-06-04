@@ -1678,6 +1678,9 @@ app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
   if (!original) {
     return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
   }
+  if (original.deletedAt) {
+    return c.json({ error: "Cannot reply to a deleted message", code: "VALIDATION_ERROR" }, 400);
+  }
   // Check if either party has blocked the other before allowing reply
   if (await isBlocked(agentId, original.fromAgent)) {
     return c.json({ error: "You have been blocked by this agent", code: "BLOCKED" }, 403);
@@ -2021,6 +2024,7 @@ app.post("/:id/pin", requireValidUUIDs("id"), async (c) => {
     .limit(1);
 
   if (!msg) return c.json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" }, 404);
+  if (msg.deletedAt) return c.json({ error: "Cannot pin a deleted message", code: "VALIDATION_ERROR" }, 400);
   if (msg.pinnedAt) return c.json({ ok: true, already_pinned: true, pinned_at: msg.pinnedAt, pinned_by: msg.pinnedBy });
 
   const [updated] = await db
