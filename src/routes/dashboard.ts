@@ -718,6 +718,98 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
       },
       flowchart: { curve: 'basis', padding: 12 },
     });
+
+    // Pan + zoom for the DAG container
+    document.addEventListener('DOMContentLoaded', () => {
+      const viewport = document.getElementById('dag-viewport');
+      if (!viewport) return;
+      const inner = viewport.querySelector('.dag-inner');
+      if (!inner) return;
+
+      let scale = 0.6, panX = 0, panY = 0;
+      let dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
+
+      function apply() {
+        inner.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
+        const zoomLabel = document.getElementById('dag-zoom');
+        if (zoomLabel) zoomLabel.textContent = Math.round(scale * 100) + '%';
+      }
+      apply();
+
+      viewport.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const oldScale = scale;
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        scale = Math.min(3, Math.max(0.1, scale * delta));
+        panX = mx - (mx - panX) * (scale / oldScale);
+        panY = my - (my - panY) * (scale / oldScale);
+        apply();
+      }, { passive: false });
+
+      viewport.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        startX = e.clientX; startY = e.clientY;
+        startPanX = panX; startPanY = panY;
+        viewport.style.cursor = 'grabbing';
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        panX = startPanX + (e.clientX - startX);
+        panY = startPanY + (e.clientY - startY);
+        apply();
+      });
+      window.addEventListener('mouseup', () => {
+        dragging = false;
+        viewport.style.cursor = 'grab';
+      });
+
+      // Touch support
+      let lastTouchDist = 0;
+      viewport.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+          dragging = true;
+          startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+          startPanX = panX; startPanY = panY;
+        } else if (e.touches.length === 2) {
+          lastTouchDist = Math.hypot(e.touches[1].clientX - e.touches[0].clientX, e.touches[1].clientY - e.touches[0].clientY);
+        }
+      }, { passive: true });
+      viewport.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1 && dragging) {
+          panX = startPanX + (e.touches[0].clientX - startX);
+          panY = startPanY + (e.touches[0].clientY - startY);
+          apply();
+        } else if (e.touches.length === 2) {
+          const dist = Math.hypot(e.touches[1].clientX - e.touches[0].clientX, e.touches[1].clientY - e.touches[0].clientY);
+          if (lastTouchDist > 0) {
+            scale = Math.min(3, Math.max(0.1, scale * (dist / lastTouchDist)));
+            apply();
+          }
+          lastTouchDist = dist;
+        }
+      }, { passive: true });
+      viewport.addEventListener('touchend', () => { dragging = false; lastTouchDist = 0; });
+
+      // Double-click to fit
+      viewport.addEventListener('dblclick', () => {
+        scale = 0.6; panX = 0; panY = 0; apply();
+      });
+
+      // Zoom buttons
+      document.getElementById('dag-zoom-in')?.addEventListener('click', () => {
+        scale = Math.min(3, scale * 1.3); apply();
+      });
+      document.getElementById('dag-zoom-out')?.addEventListener('click', () => {
+        scale = Math.max(0.1, scale * 0.7); apply();
+      });
+      document.getElementById('dag-zoom-fit')?.addEventListener('click', () => {
+        scale = 0.6; panX = 0; panY = 0; apply();
+      });
+    });
   </script>
 </head>
 <body>
@@ -830,9 +922,17 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
                 <div style="border:1px solid var(--line);border-radius:8px;background:rgba(18,18,15,0.92);margin-bottom:1rem;overflow:hidden;">
                   <div style="display:flex;align-items:center;justify-content:space-between;padding:0.6rem 0.85rem;border-bottom:1px solid var(--line);background:var(--panel);">
                     <span style="font-size:0.82rem;font-weight:700;color:var(--accent-2);text-transform:uppercase;letter-spacing:0.04em;">Dependency graph</span>
+                    <div style="display:flex;align-items:center;gap:0.4rem;">
+                      <span id="dag-zoom" style="font-size:0.72rem;color:var(--muted);min-width:2.5rem;text-align:right;">60%</span>
+                      <button id="dag-zoom-out" style="width:26px;height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text);cursor:pointer;font-size:0.9rem;display:grid;place-items:center;">−</button>
+                      <button id="dag-zoom-in" style="width:26px;height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text);cursor:pointer;font-size:0.9rem;display:grid;place-items:center;">+</button>
+                      <button id="dag-zoom-fit" style="height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--muted);cursor:pointer;font-size:0.68rem;padding:0 0.5rem;">fit</button>
+                    </div>
                   </div>
-                  <div style="padding:1rem;overflow-x:auto;">
-                    <pre class="mermaid">${raw(mermaidDef)}</pre>
+                  <div id="dag-viewport" style="height:500px;overflow:hidden;cursor:grab;position:relative;background:#0a0a09;">
+                    <div class="dag-inner" style="transform-origin:0 0;will-change:transform;">
+                      <pre class="mermaid">${raw(mermaidDef)}</pre>
+                    </div>
                   </div>
                 </div>
               ` : ""}
