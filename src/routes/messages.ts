@@ -1081,8 +1081,8 @@ app.post("/purge-expired", async (c) => {
     )
     .limit(1000);
 
-  for (const row of expired) {
-    await db.delete(messages).where(eq(messages.id, row.id));
+  if (expired.length > 0) {
+    await db.delete(messages).where(inArray(messages.id, expired.map((r) => r.id)));
   }
 
   await audit(agentId, "message.retention_purge", "message", null, { days, count: expired.length });
@@ -1125,7 +1125,7 @@ app.get("/thread/:threadId/summary", requireValidUUIDs("threadId"), async (c) =>
   const participantRows = await db
     .select({ id: agents.id, name: agents.name, owner: agents.owner })
     .from(agents)
-    .where(or(...[...participantIds].map((id) => eq(agents.id, id))));
+    .where(inArray(agents.id, [...participantIds]));
   const participants = participantRows.map((p) => ({ agent_id: p.id, name: p.name, owner: p.owner }));
 
   // Message type breakdown
