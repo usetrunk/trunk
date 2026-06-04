@@ -1,5 +1,5 @@
 import { db } from "../db/index.js";
-import { agents, messages, webhookDeliveries } from "../db/schema.js";
+import { agents, messages, webhookDeliveries, roomMembers } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { audit } from "./audit.js";
 import { signTrunkWebhook } from "./verify-webhook.js";
@@ -23,6 +23,39 @@ export async function notifyPushWorker(agentId: string, message: typeof messages
   } catch {
     // Push is best-effort — don't fail the message send
   }
+}
+
+// Push a generic event to an agent's WebSocket connections
+export async function pushEvent(agentId: string, event: string, payload: Record<string, unknown>) {
+  const pushUrl = process.env.PUSH_WORKER_URL;
+  const pushSecret = process.env.PUSH_SECRET;
+  if (!pushUrl || !pushSecret) return;
+
+  try {
+    await fetch(`${pushUrl}/notify/${agentId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${pushSecret}`,
+      },
+      body: JSON.stringify({ event, ...payload }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    // Best-effort
+  }
+}
+
+// Push a task event to all members of a room
+export async function notifyRoomTaskEvent(roomId: string, event: string, task: Record<string, unknown>) {
+  const members = await db
+    .select({ agentId: roomMembers.agentId })
+    .from(roomMembers)
+    .where(eq(roomMembers.roomId, roomId));
+
+  await Promise.allSettled(
+    members.map(m => pushEvent(m.agentId, event, { room_id: roomId, task }))
+  );
 }
 
 export async function deliverWebhook(

@@ -54,9 +54,15 @@ if (command === "daemon") {
     console.log("Usage: trunk daemon [install|start|status] [--execute]");
   }
 } else if (command === "harness") {
-  // Pass remaining args to harness module
-  process.argv = ["node", "harness", ...args.slice(1)];
-  await import("./harness.js");
+  if (subcommand === "daemon") {
+    // Push-based daemon mode — agents spawn on demand from WebSocket events
+    process.argv = ["node", "harness-daemon", ...args.slice(2)];
+    await import("./daemon/harness-daemon.js");
+  } else {
+    // Polling-based harness — agents loop on a timer
+    process.argv = ["node", "harness", ...args.slice(1)];
+    await import("./harness.js");
+  }
 } else if (command === "status") {
   const config = loadConfig();
   if (!config) {
@@ -82,8 +88,9 @@ Commands:
   daemon start --execute
                    Execute eligible handoff/question messages through claude -p
   daemon status    Check if daemon is running
-  harness start    Start agents in zellij (subscription credits)
-  harness start --api  Start agents with claude -p (API credits)
+  harness daemon   Push mode — agents spawn on demand from task events (recommended)
+  harness start    Poll mode — agents loop on a timer
+  harness start --api  Poll mode with claude -p (API credits)
   harness attach   Attach to the zellij agent session
   harness spawn    Spawn a single agent
   harness list     Show running agents

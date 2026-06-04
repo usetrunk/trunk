@@ -10,6 +10,7 @@ import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { isValidUUID, requireValidUUIDs, validateMetadata } from "../lib/errors.js";
 import { fireRoomTaskWebhooks } from "../lib/room-webhook.js";
+import { notifyRoomTaskEvent } from "../lib/webhook.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
@@ -196,9 +197,9 @@ app.post("/", async (c) => {
     })
     .returning();
 
-  // Fire room webhooks for matching criteria (best-effort, non-blocking)
+  // Fire room webhooks + push notifications (best-effort, non-blocking)
   if (body.room_id) {
-    fireRoomTaskWebhooks(body.room_id, {
+    const taskData = {
       id: task.id,
       title: task.title,
       description: task.description,
@@ -208,7 +209,9 @@ app.post("/", async (c) => {
       created_by: task.createdBy,
       group: task.group,
       scope: task.scope,
-    }).catch(() => {});
+    };
+    fireRoomTaskWebhooks(body.room_id, taskData).catch(() => {});
+    notifyRoomTaskEvent(body.room_id, "task.created", taskData).catch(() => {});
   }
 
   return c.json({ scope: task.scope, ...taskToJson(task) }, 201);
@@ -496,10 +499,10 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
 
   if (!updated) return c.json({ error: "Task not found", code: "TASK_NOT_FOUND" }, 404);
 
-  // Fire room webhooks for task updates (best-effort, non-blocking)
+  // Fire room webhooks + push notifications for task updates (best-effort)
   if (updated.scope.startsWith("room:")) {
     const roomId = updated.scope.slice(5);
-    fireRoomTaskWebhooks(roomId, {
+    const taskData = {
       id: updated.id,
       title: updated.title,
       description: updated.description,
@@ -509,7 +512,9 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
       created_by: updated.createdBy,
       group: updated.group,
       scope: updated.scope,
-    }, "task.updated").catch(() => {});
+    };
+    fireRoomTaskWebhooks(roomId, taskData, "task.updated").catch(() => {});
+    notifyRoomTaskEvent(roomId, "task.updated", taskData).catch(() => {});
   }
 
   // When a task is marked done, auto-unblock downstream tasks
@@ -539,11 +544,11 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
         .set({ status: "open", updatedAt: new Date() })
         .where(inArray(tasks.id, unblockIds));
 
-      // Fire webhooks for auto-unblocked room tasks
+      // Fire webhooks + push for auto-unblocked room tasks
       if (updated.scope.startsWith("room:")) {
         const roomId = updated.scope.slice(5);
         for (const t of toUnblock) {
-          fireRoomTaskWebhooks(roomId, {
+          const unblockedData = {
             id: t.id,
             title: t.title,
             description: t.description,
@@ -553,7 +558,9 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
             created_by: t.createdBy,
             group: t.group,
             scope: t.scope,
-          }, "task.updated").catch(() => {});
+          };
+          fireRoomTaskWebhooks(roomId, unblockedData, "task.updated").catch(() => {});
+          notifyRoomTaskEvent(roomId, "task.unblocked", unblockedData).catch(() => {});
         }
       }
     }
@@ -647,10 +654,10 @@ app.delete("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c
 
   if (!deleted) return c.json({ error: "Task not found", code: "TASK_NOT_FOUND" }, 404);
 
-  // Fire room webhooks for task deletion (best-effort, non-blocking)
+  // Fire room webhooks + push for task deletion (best-effort)
   if (deleted.scope.startsWith("room:")) {
     const roomId = deleted.scope.slice(5);
-    fireRoomTaskWebhooks(roomId, {
+    const deletedData = {
       id: deleted.id,
       title: deleted.title,
       description: deleted.description,
@@ -660,7 +667,9 @@ app.delete("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c
       created_by: deleted.createdBy,
       group: deleted.group,
       scope: deleted.scope,
-    }, "task.deleted").catch(() => {});
+    };
+    fireRoomTaskWebhooks(roomId, deletedData, "task.deleted").catch(() => {});
+    notifyRoomTaskEvent(roomId, "task.deleted", deletedData).catch(() => {});
   }
 
   return c.json({ ok: true, deleted_id: deleted.id });
