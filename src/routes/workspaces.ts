@@ -368,7 +368,7 @@ app.patch("/members/:id/role", requireValidUUIDs("id"), async (c) => {
         .from(agents)
         .where(
           and(
-            eq(agents.workspaceId, agent.workspaceId),
+            eq(agents.workspaceId, agent.workspaceId!),
             eq(agents.workspaceRole, "admin"),
           ),
         )
