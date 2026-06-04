@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, roomWebhooks, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches, messageEdits, attachments } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
-import { eq, or, and, desc, lt, gt, gte, lte, ne } from "drizzle-orm";
+import { eq, or, and, desc, lt, gt, gte, lte, ne, inArray } from "drizzle-orm";
 import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
@@ -265,7 +265,7 @@ export function createTrunkMcpServer() {
       const senders = await db
         .select({ id: agents.id, name: agents.name })
         .from(agents)
-        .where(or(...senderIds.map((id) => eq(agents.id, id))));
+        .where(inArray(agents.id, senderIds));
       const senderMap = Object.fromEntries(senders.map((s) => [s.id, s.name]));
 
       const formatted = page.items.map((m) => ({
@@ -365,7 +365,7 @@ export function createTrunkMcpServer() {
       const recipients = await db
         .select({ id: agents.id, name: agents.name })
         .from(agents)
-        .where(or(...recipientIds.map((id) => eq(agents.id, id))));
+        .where(inArray(agents.id, recipientIds));
       const recipientMap = Object.fromEntries(recipients.map((r) => [r.id, r.name]));
 
       const formatted = page.items.map((m) => ({
@@ -466,7 +466,7 @@ export function createTrunkMcpServer() {
       const agentList = await db
         .select({ id: agents.id, name: agents.name })
         .from(agents)
-        .where(or(...agentIds.map((id) => eq(agents.id, id))));
+        .where(inArray(agents.id, agentIds));
       const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
 
       const formatted = page.items.map((m) => ({
@@ -567,7 +567,7 @@ export function createTrunkMcpServer() {
       const contactAgents = await db
         .select({ id: agents.id, name: agents.name, owner: agents.owner })
         .from(agents)
-        .where(or(...contactIds.map((id) => eq(agents.id, id))));
+        .where(inArray(agents.id, contactIds));
 
       return {
         content: [{
@@ -1388,7 +1388,7 @@ export function createTrunkMcpServer() {
 
       const agentIds = [...new Set(pinned.flatMap((m) => [m.fromAgent, m.toAgent, m.pinnedBy].filter((x): x is string => !!x)))];
       const agentList = agentIds.length > 0
-        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, agentIds))
         : [];
       const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
 
@@ -1945,7 +1945,7 @@ export function createTrunkMcpServer() {
         const memberships = await db.select({ roomId: roomMembers.roomId }).from(roomMembers).where(eq(roomMembers.agentId, agent.id));
         if (memberships.length === 0) return { content: [{ type: "text", text: JSON.stringify({ rooms: [] }, null, 2) }] };
         const roomIds = memberships.map(m => m.roomId);
-        const roomList = await db.select().from(rooms).where(or(...roomIds.map(id => eq(rooms.id, id))));
+        const roomList = await db.select().from(rooms).where(inArray(rooms.id, roomIds));
         return { content: [{ type: "text", text: JSON.stringify({ rooms: roomList.map(r => ({ id: r.id, name: r.name, pairing_code: r.pairingCode, created_at: r.createdAt })) }, null, 2) }] };
       }
 
@@ -1953,7 +1953,7 @@ export function createTrunkMcpServer() {
         if (!room_id) return errorResult("room_id is required for members");
         const members = await db.select({ agentId: roomMembers.agentId, role: roomMembers.role, joinedAt: roomMembers.joinedAt }).from(roomMembers).where(eq(roomMembers.roomId, room_id));
         const agentIds = members.map(m => m.agentId);
-        const agentList = agentIds.length > 0 ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner }).from(agents).where(or(...agentIds.map(id => eq(agents.id, id)))) : [];
+        const agentList = agentIds.length > 0 ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner }).from(agents).where(inArray(agents.id, agentIds)) : [];
         const agentMap = Object.fromEntries(agentList.map(a => [a.id, a]));
         return { content: [{ type: "text", text: JSON.stringify({ members: members.map(m => ({ ...agentMap[m.agentId], role: m.role, joined_at: m.joinedAt })) }, null, 2) }] };
       }
@@ -2811,7 +2811,7 @@ export function createTrunkMcpServer() {
 
       const ownerIds = [...new Set(allTasks.map(t => t.owner).filter(Boolean))] as string[];
       const ownerRows = ownerIds.length > 0
-        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...ownerIds.map(id => eq(agents.id, id))))
+        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, ownerIds))
         : [];
       const ownerNames = Object.fromEntries(ownerRows.map(a => [a.id, a.name]));
 
@@ -3228,7 +3228,7 @@ export function createTrunkMcpServer() {
       const rows = await db.select().from(blockedContacts).where(eq(blockedContacts.agentId, agent.id));
       const agentIds = rows.map((r) => r.blockedAgentId);
       const agentList = agentIds.length > 0
-        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...agentIds.map((id) => eq(agents.id, id))))
+        ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, agentIds))
         : [];
       const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
 
@@ -3403,7 +3403,7 @@ export function createTrunkMcpServer() {
           .where(and(eq(contactTags.agentId, agent.id), eq(contactTags.tag, tag.toLowerCase())));
         const ids = rows.map((r) => r.contactAgentId);
         const agentList = ids.length > 0
-          ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(or(...ids.map((id) => eq(agents.id, id))))
+          ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, ids))
           : [];
         const nameMap = Object.fromEntries(agentList.map((a) => [a.id, a.name]));
         return {
@@ -3546,7 +3546,7 @@ export function createTrunkMcpServer() {
       }
 
       const rows = await db.select().from(messages)
-        .where(or(...messageIds.map((id) => eq(messages.id, id))))
+        .where(inArray(messages.id, messageIds))
         .orderBy(desc(messages.createdAt))
         .limit(maxResults ?? 50);
 
