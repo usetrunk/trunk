@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { rooms, roomMembers, roomWebhooks, agents, messages, tasks, sharedFacts, sharedDocuments } from "../db/schema.js";
-import { and, eq, or, inArray } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -9,6 +9,7 @@ import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { isValidUUID, requireValidUUIDs, validateMetadata } from "../lib/errors.js";
 import { validateWebhookUrl } from "../lib/ssrf.js";
 import type { AgentVariables } from "../lib/types.js";
+import { runRoomHeartbeats } from "../lib/room-heartbeat.js";
 
 const app = new Hono<AgentVariables>();
 
@@ -136,6 +137,19 @@ app.get("/", async (c) => {
   });
 
   return c.json({ rooms: result });
+});
+
+// Emit one lightweight coordination heartbeat per active room per cooldown window.
+app.post("/heartbeats/run", async (c) => {
+  const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`rooms:heartbeat:${agentId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  return c.json(await runRoomHeartbeats(agentId));
 });
 
 // List members of a room

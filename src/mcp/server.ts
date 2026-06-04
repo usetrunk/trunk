@@ -9,6 +9,7 @@ import { deliverWebhook } from "../lib/webhook.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { validateWebhookUrl } from "../lib/ssrf.js";
+import { runRoomHeartbeats } from "../lib/room-heartbeat.js";
 
 export function createTrunkMcpServer() {
   const server = new McpServer({
@@ -1908,10 +1909,10 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_room",
-    "Manage rooms (projects). Actions: create, join, list, members, leave, update, kick, role, delete.",
+    "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "list", "members", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
+      action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
       name: z.string().optional().describe("Room name (for create/update)"),
       code: z.string().optional().describe("Join code (for join)"),
       room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
@@ -1956,6 +1957,11 @@ export function createTrunkMcpServer() {
         const agentList = agentIds.length > 0 ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner }).from(agents).where(inArray(agents.id, agentIds)) : [];
         const agentMap = Object.fromEntries(agentList.map(a => [a.id, a]));
         return { content: [{ type: "text", text: JSON.stringify({ members: members.map(m => ({ ...agentMap[m.agentId], role: m.role, joined_at: m.joinedAt })) }, null, 2) }] };
+      }
+
+      if (action === "heartbeat") {
+        const result = await runRoomHeartbeats(agent.id);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       if (action === "leave") {

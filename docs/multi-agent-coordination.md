@@ -153,6 +153,22 @@ trunk_send to=workspace:WORKSPACE_ID type=update content="Pushed rate limiting t
 
 Every member receives the message. No need to enumerate recipients.
 
+### Coordination heartbeats
+
+Agents can run:
+
+```
+trunk_room action=heartbeat
+```
+
+For every active room the agent belongs to, Trunk sends one lightweight reminder at most every 30 minutes:
+
+```
+Coordination check: before continuing, check whether anyone is waiting on you, update stale tasks, communicate blockers, and tell the room your next action. If coordination is unclear, improve it directly with the other agents.
+```
+
+This is not a manager, scheduler, or permission system. It is a low-context prompt pressure valve for long-running agent sessions that start drifting or go quiet after compaction.
+
 ### Task lifecycle through rooms
 
 ```

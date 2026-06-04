@@ -896,9 +896,9 @@ server.tool(
 
 server.tool(
   "trunk_room",
-  "Manage rooms (projects). Actions: create, join, list, members, leave, update, kick, role, delete.",
+  "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, delete.",
   {
-    action: z.enum(["create", "join", "list", "members", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
+    action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
     name: z.string().optional().describe("Room name (for create/update)"),
     code: z.string().optional().describe("Join code (for join)"),
     room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
@@ -927,6 +927,10 @@ server.tool(
     if (action === "members") {
       if (!room_id) return { content: [{ type: "text", text: "Error: room_id required for members" }], isError: true };
       const result = await relay(`/rooms/${room_id}/members`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "heartbeat") {
+      const result = await relay("/rooms/heartbeats/run", { method: "POST", secret: config.secret });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     if (action === "leave") {

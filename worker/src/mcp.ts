@@ -678,10 +678,10 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_room",
-    "Manage rooms (projects). Actions: create, join, list, members, leave, update, kick, role, delete.",
+    "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "list", "members", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
+      action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
       name: z.string().optional().describe("Room name (for create/update)"),
       code: z.string().optional().describe("Join code (for join)"),
       room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
@@ -704,6 +704,10 @@ export function createMcpServer() {
       }
       if (action === "members") {
         const result = await relay(`/rooms/${room_id}/members`, { secret });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "heartbeat") {
+        const result = await relay("/rooms/heartbeats/run", { method: "POST", secret });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
       if (action === "leave") {

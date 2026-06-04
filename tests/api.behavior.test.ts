@@ -3174,6 +3174,118 @@ describe("Hono API behavior", () => {
     )).toBe(true);
   });
 
+  it("sends coordination heartbeats to active rooms and respects cooldown", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Heartbeat Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Active room work started" },
+    });
+
+    const heartbeatRes = await app.request("/rooms/heartbeats/run", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+
+    expect(heartbeatRes.status).toBe(200);
+    const heartbeat = await heartbeatRes.json();
+    expect(heartbeat.checked).toBe(1);
+    expect(heartbeat.sent).toBe(1);
+    expect(heartbeat.skipped).toEqual([]);
+    expect(heartbeat.heartbeats[0]).toEqual(expect.objectContaining({
+      room_id: room.id,
+      recipients: 2,
+    }));
+    expect(heartbeat.heartbeats[0].message_ids).toHaveLength(2);
+
+    const alphaInbox = await alphaClient.inbox();
+    const betaInbox = await betaClient.inbox();
+    const alphaHeartbeat = alphaInbox.messages.find((m: TrunkMessage) => m.type === "coordination_heartbeat");
+    const betaHeartbeat = betaInbox.messages.find((m: TrunkMessage) => m.type === "coordination_heartbeat");
+
+    expect(alphaHeartbeat).toBeDefined();
+    expect(betaHeartbeat).toBeDefined();
+    expect(alphaHeartbeat!.threadId).toBe(betaHeartbeat!.threadId);
+    expect(alphaHeartbeat!.payload).toEqual(expect.objectContaining({
+      source: "trunk",
+      finality: "fyi",
+      requires_reply: false,
+      reason: "active_room_interval",
+    }));
+    expect((alphaHeartbeat!.payload as Record<string, unknown>).content).toContain("improve it directly with the other agents");
+
+    const cooldownRes = await app.request("/rooms/heartbeats/run", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    const cooldown = await cooldownRes.json();
+
+    expect(cooldown.sent).toBe(0);
+    expect(cooldown.skipped).toEqual([{ room_id: room.id, reason: "cooldown" }]);
+  });
+
+  it("skips coordination heartbeat for inactive rooms", async () => {
+    const { alpha, beta } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Quiet Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const heartbeatRes = await app.request("/rooms/heartbeats/run", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+
+    expect(heartbeatRes.status).toBe(200);
+    const heartbeat = await heartbeatRes.json();
+    expect(heartbeat).toEqual({
+      checked: 1,
+      sent: 0,
+      skipped: [{ room_id: room.id, reason: "inactive" }],
+      heartbeats: [],
+    });
+  });
+
+  it("uses a room-level heartbeat lease even if heartbeat messages are gone", async () => {
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Lease Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "Lease test activity" },
+    });
+
+    const firstRes = await app.request("/rooms/heartbeats/run", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    const first = await firstRes.json();
+    expect(first.sent).toBe(1);
+
+    const remaining = testState.messages.filter((message) => message.type !== "coordination_heartbeat");
+    testState.messages.splice(0, testState.messages.length, ...remaining);
+
+    const secondRes = await app.request("/rooms/heartbeats/run", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${beta.secret}` },
+    });
+    const second = await secondRes.json();
+
+    expect(second.sent).toBe(0);
+    expect(second.skipped).toEqual([{ room_id: room.id, reason: "cooldown" }]);
+  });
+
   it("rejects room message from non-member", async () => {
     const { alpha, beta, alphaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });

@@ -363,6 +363,18 @@ export type RoomMembersResponse = {
   members: RoomMember[];
 };
 
+export type RoomHeartbeatRunResponse = {
+  checked: number;
+  sent: number;
+  skipped: Array<{ room_id: string; reason: string }>;
+  heartbeats: Array<{
+    room_id: string;
+    thread_id: string | null;
+    recipients: number;
+    message_ids: string[];
+  }>;
+};
+
 export type UpdateRoomRequest = {
   name?: string;
   metadata?: Record<string, unknown>;
@@ -1156,6 +1168,10 @@ export class TrunkClient {
 
   roomMembers(roomId: string): Promise<RoomMembersResponse> {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/members`);
+  }
+
+  runRoomHeartbeats(): Promise<RoomHeartbeatRunResponse> {
+    return this.request("/rooms/heartbeats/run", { method: "POST" });
   }
 
   leaveRoom(roomId: string): Promise<{ ok: boolean; room_id: string }> {
