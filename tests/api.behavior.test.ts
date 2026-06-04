@@ -21913,6 +21913,623 @@ describe("Hono API behavior", () => {
       }
     });
   });
+
+  // ── Message edit window & payload size ──────────────────────────────
+  describe("message edit edge cases", () => {
+    it("rejects edit after the 15-minute window expires", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "original" },
+      });
+
+      // Backdate the message to 16 minutes ago
+      const msg = testState.messages.find((m) => m.id === sent.id)!;
+      msg.createdAt = new Date(Date.now() - 16 * 60 * 1000);
+
+      try {
+        await alphaClient.editMessage(sent.id, { content: "edited" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(403);
+        expect(err.code).toBe("EDIT_WINDOW_EXPIRED");
+      }
+    });
+
+    it("allows edit within the 15-minute window", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "original" },
+      });
+
+      // Backdate to 14 minutes ago — still within window
+      const msg = testState.messages.find((m) => m.id === sent.id)!;
+      msg.createdAt = new Date(Date.now() - 14 * 60 * 1000);
+
+      const edited = await alphaClient.editMessage(sent.id, { content: "edited" });
+      expect(edited.payload).toEqual({ content: "edited" });
+      expect(edited.version).toBeGreaterThanOrEqual(1);
+    });
+
+    it("rejects edit with payload exceeding 1MB", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "original" },
+      });
+
+      const hugePayload = { content: "x".repeat(1024 * 1024 + 1) };
+      try {
+        await alphaClient.editMessage(sent.id, hugePayload);
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(413);
+      }
+    });
+
+    it("rejects edit on a deleted message", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "original" },
+      });
+
+      await alphaClient.deleteMessage(sent.id);
+
+      try {
+        await alphaClient.editMessage(sent.id, { content: "edited" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("recipient cannot edit a message they received", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "original" },
+      });
+
+      try {
+        await betaClient.editMessage(sent.id, { content: "hijacked" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(404);
+      }
+    });
+  });
+
+  // ── Pin access control ─────────────────────────────────────────────
+  describe("pin access control", () => {
+    it("non-participant cannot pin a message", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const gamma = await createClient().register({ name: "gamma" });
+      const gammaClient = createClient(gamma.secret);
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "private" },
+      });
+
+      try {
+        await gammaClient.pin(sent.id);
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(404);
+      }
+    });
+
+    it("non-participant cannot unpin a message", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const gamma = await createClient().register({ name: "gamma" });
+      const gammaClient = createClient(gamma.secret);
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "private" },
+      });
+
+      await alphaClient.pin(sent.id);
+
+      try {
+        await gammaClient.unpin(sent.id);
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(404);
+      }
+    });
+
+    it("unpin on already-unpinned message returns idempotent ok", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "test" },
+      });
+
+      const result = await alphaClient.unpin(sent.id);
+      expect(result.ok).toBe(true);
+    });
+
+    it("thread pins returns empty list when nothing is pinned", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "test" },
+      });
+
+      const pins = await alphaClient.threadPins(sent.thread_id);
+      expect(pins.pinned).toEqual([]);
+      expect(pins.count).toBe(0);
+    });
+
+    it("recipient can pin a message they received", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "important" },
+      });
+
+      const result = await betaClient.pin(sent.id);
+      expect(result.ok).toBe(true);
+      expect(result.pinned_by).toBe(beta.agent_id);
+    });
+  });
+
+  // ── Workspace fan-out edge cases ───────────────────────────────────
+  describe("workspace fan-out edge cases", () => {
+    it("rejects workspace send when sender is only member", async () => {
+      const reg = await createClient().register({ name: "solo" });
+      const client = createClient(reg.secret);
+      const ws = await client.createWorkspace({ name: "Solo Team" });
+
+      try {
+        await client.send({
+          to: `workspace:${ws.workspace_id}`,
+          type: "broadcast",
+          payload: { content: "echo?" },
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("returns 403 when all workspace recipients have blocked the sender", async () => {
+      const alpha = await createClient().register({ name: "alpha" });
+      const beta = await createClient().register({ name: "beta" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "Blocked Team" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      // Beta blocks alpha — workspace members are auto-contacts
+      await betaClient.blockContact(alpha.agent_id);
+
+      try {
+        await alphaClient.send({
+          to: `workspace:${ws.workspace_id}`,
+          type: "broadcast",
+          payload: { content: "hello?" },
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        // Blocked recipients are skipped; when all are blocked the send is rejected
+        expect([400, 403]).toContain(err.status);
+      }
+    });
+
+    it("rejects workspace send with invalid UUID after prefix", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.send({
+          to: "workspace:not-a-uuid",
+          type: "broadcast",
+          payload: { content: "test" },
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+  });
+
+  // ── Scheduled message: blocked sender path ─────────────────────────
+  describe("scheduled message delivery edge cases", () => {
+    it("soft-deletes scheduled message when recipient blocks sender before delivery", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Schedule a message for the future
+      const futureDate = new Date(Date.now() + 60_000).toISOString();
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "scheduled" },
+        scheduled_at: futureDate,
+      });
+      expect(sent.status).toBe("scheduled");
+
+      // Beta blocks alpha before delivery
+      await betaClient.blockContact(alpha.agent_id);
+
+      // Backdate the scheduled message so it's "due"
+      const msg = testState.messages.find((m) => m.id === sent.id)!;
+      msg.scheduledAt = new Date(Date.now() - 1000);
+
+      const result = await alphaClient.deliverScheduled();
+      expect(result.blocked).toBeGreaterThanOrEqual(1);
+      expect(result.delivered).toBe(0);
+
+      // Message should be soft-deleted
+      const deletedMsg = testState.messages.find((m) => m.id === sent.id)!;
+      expect(deletedMsg.status).toBe("deleted");
+      expect(deletedMsg.deletedAt).toBeTruthy();
+    });
+
+    it("returns zero delivered when no messages are due", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      const result = await client.deliverScheduled();
+      expect(result.delivered).toBe(0);
+    });
+  });
+
+  // ── Inbox status filter ────────────────────────────────────────────
+  describe("inbox status filter", () => {
+    it("filters inbox by status=delivered", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "msg1" },
+      });
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "msg2" },
+      });
+
+      const inbox = await betaClient.inbox({ status: "delivered" });
+      expect(inbox.messages.length).toBeGreaterThanOrEqual(2);
+      for (const msg of inbox.messages) {
+        expect(msg.status).toBe("delivered");
+      }
+    });
+
+    it("filters inbox by status=processed", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "msg" },
+      });
+
+      // Mark as processed via ack
+      await betaClient.ack(sent.id, "processed");
+
+      const inbox = await betaClient.inbox({ status: "processed" });
+      expect(inbox.messages.length).toBe(1);
+      expect(inbox.messages[0].status).toBe("processed");
+    });
+
+    it("rejects invalid status filter", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.inbox({ status: "invalid-status" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe("INVALID_FIELD");
+      }
+    });
+
+    it("returns empty inbox without status filter for a fresh agent", async () => {
+      const reg = await createClient().register({ name: "fresh" });
+      const client = createClient(reg.secret);
+
+      const inbox = await client.inbox();
+      expect(inbox.messages).toEqual([]);
+    });
+  });
+
+  // ── Sent filter (to, type) ─────────────────────────────────────────
+  describe("sent message filters", () => {
+    it("filters sent messages by recipient (to)", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const gamma = await createClient().register({ name: "gamma" });
+      await alphaClient.pair({ code: gamma.pairing_code });
+
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "to-beta" },
+      });
+      await alphaClient.send({
+        to: gamma.agent_id,
+        type: "text",
+        payload: { content: "to-gamma" },
+      });
+
+      const sentToBeta = await alphaClient.sent({ to: beta.agent_id });
+      expect(sentToBeta.messages.length).toBe(1);
+      expect(sentToBeta.messages[0].payload).toEqual({ content: "to-beta" });
+    });
+
+    it("filters sent messages by type", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "question",
+        payload: { content: "q" },
+      });
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "u" },
+      });
+
+      const questions = await alphaClient.sent({ type: "question" });
+      expect(questions.messages.length).toBe(1);
+      expect(questions.messages[0].type).toBe("question");
+    });
+
+    it("rejects invalid UUID in to filter", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.sent({ to: "not-a-uuid" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe("INVALID_INPUT");
+      }
+    });
+
+    it("rejects type filter exceeding 50 characters", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.sent({ type: "x".repeat(51) });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe("INVALID_FIELD");
+      }
+    });
+  });
+
+  // ── Purge days clamping ────────────────────────────────────────────
+  describe("purge-expired edge cases", () => {
+    it("clamps days below 1 to 1", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      const result = await client.purgeExpiredMessages(0);
+      expect(result.purged).toBe(0);
+      // The cutoff should reflect ~1 day ago, not 0 days ago
+      const cutoff = new Date(result.cutoff);
+      const oneDayAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      expect(cutoff.getTime()).toBeGreaterThan(oneDayAgo.getTime());
+    });
+
+    it("clamps days above 3650 to 3650", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      const result = await client.purgeExpiredMessages(99999);
+      expect(result.purged).toBe(0);
+    });
+  });
+
+  // ── Forward edge cases ─────────────────────────────────────────────
+  describe("forward edge cases", () => {
+    it("preserves forwarded_from and original_message_id in forwarded payload", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const gamma = await createClient().register({ name: "gamma" });
+      const gammaClient = createClient(gamma.secret);
+      await betaClient.pair({ code: gamma.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "forward me" },
+      });
+
+      const forwarded = await betaClient.forward(sent.id, gamma.agent_id, "check this out");
+
+      // Check gamma's inbox
+      const inbox = await gammaClient.inbox();
+      const fwdMsg = inbox.messages.find((m) => m.payload.original_message_id === sent.id);
+      expect(fwdMsg).toBeDefined();
+      expect(fwdMsg!.payload.forwarded_from).toBe(alpha.agent_id);
+      expect(fwdMsg!.payload.forward_comment).toBe("check this out");
+      expect(fwdMsg!.payload.content).toBe("forward me");
+    });
+
+    it("rejects forward comment exceeding 2000 characters", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const gamma = await createClient().register({ name: "gamma" });
+      await betaClient.pair({ code: gamma.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "test" },
+      });
+
+      try {
+        await betaClient.forward(sent.id, gamma.agent_id, "x".repeat(2001));
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+  });
+
+  // ── Reactions edge cases ───────────────────────────────────────────
+  describe("reaction edge cases", () => {
+    it("returns empty reactions for a message with no reactions", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "no reactions" },
+      });
+
+      const reactions = await alphaClient.reactions(sent.id);
+      expect(reactions.reactions).toEqual([]);
+    });
+
+    it("non-participant cannot unreact to a message", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const gamma = await createClient().register({ name: "gamma" });
+      const gammaClient = createClient(gamma.secret);
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "private" },
+      });
+
+      await alphaClient.react(sent.id, "👍");
+
+      try {
+        await gammaClient.unreact(sent.id, "👍");
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(404);
+      }
+    });
+  });
+
+  // ── Notification preferences edge cases ────────────────────────────
+  describe("notification preference edge cases", () => {
+    it("updates only muted without urgency_filter", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const result = await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true });
+      expect(result.muted).toBe(true);
+
+      const prefs = await alphaClient.notificationPrefs(beta.agent_id);
+      expect(prefs.muted).toBe(true);
+    });
+
+    it("updates only urgency_filter without muted", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const result = await alphaClient.setNotificationPrefs(beta.agent_id, { urgency_filter: "sync_only" });
+      expect(result.urgency_filter).toBe("sync_only");
+    });
+
+    it("notification prefs are isolated per agent", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.setNotificationPrefs(beta.agent_id, { muted: true });
+
+      // Beta's prefs for alpha should be independent
+      const betaPrefs = await betaClient.notificationPrefs(alpha.agent_id);
+      expect(betaPrefs.muted).toBe(false);
+    });
+  });
+
+  // ── Saved searches edge cases ──────────────────────────────────────
+  describe("saved search edge cases", () => {
+    it("returns empty list for agent with no saved searches", async () => {
+      const reg = await createClient().register({ name: "fresh" });
+      const client = createClient(reg.secret);
+
+      const searches = await client.listSavedSearches();
+      expect(searches.searches).toEqual([]);
+    });
+
+    it("returns 404 when deleting a non-existent saved search", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.deleteSavedSearch("00000000-0000-0000-0000-000000000000");
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(404);
+      }
+    });
+  });
+
+  // ── Contact tags edge cases ────────────────────────────────────────
+  describe("contact tag edge cases", () => {
+    it("returns 404 when removing a non-existent tag", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      try {
+        await alphaClient.removeContactTag(beta.agent_id, "nonexistent");
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(404);
+      }
+    });
+
+    it("tags/all returns correct counts across contacts", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const gamma = await createClient().register({ name: "gamma" });
+      await alphaClient.pair({ code: gamma.pairing_code });
+
+      await alphaClient.addContactTag(beta.agent_id, "vip");
+      await alphaClient.addContactTag(gamma.agent_id, "vip");
+      await alphaClient.addContactTag(beta.agent_id, "team");
+
+      const allTags = await alphaClient.allContactTags();
+      const vipTag = allTags.tags.find((t: any) => t.tag === "vip");
+      const teamTag = allTags.tags.find((t: any) => t.tag === "team");
+      expect(vipTag?.count).toBe(2);
+      expect(teamTag?.count).toBe(1);
+    });
+  });
 });
 
 async function registerPair(): Promise<{
