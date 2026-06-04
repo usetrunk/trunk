@@ -53,6 +53,8 @@ export async function notifyRoomTaskEvent(roomId: string, event: string, task: R
     .from(roomMembers)
     .where(eq(roomMembers.roomId, roomId));
 
+  console.log(`[push] ${event} → ${members.length} room members in ${roomId.slice(0, 8)}`);
+
   await Promise.allSettled(
     members.map(m => pushEvent(m.agentId, event, { room_id: roomId, task }))
   );
