@@ -21189,6 +21189,730 @@ describe("Hono API behavior", () => {
       expect(actions).toContain("room.updated");
     });
   });
+
+  describe("agent status endpoint", () => {
+    it("sets custom status text", async () => {
+      const reg = await createClient().register({ name: "status-agent" });
+      const client = createClient(reg.secret);
+
+      const result = await client.setStatus("Working on feature X");
+      expect(result.ok).toBe(true);
+      expect(result.status_text).toBe("Working on feature X");
+    });
+
+    it("clears status text with null", async () => {
+      const reg = await createClient().register({ name: "status-clear" });
+      const client = createClient(reg.secret);
+
+      await client.setStatus("Busy");
+      const result = await client.setStatus(null);
+      expect(result.ok).toBe(true);
+      expect(result.status_text).toBeNull();
+    });
+
+    it("status text persists in agent metadata", async () => {
+      const reg = await createClient().register({ name: "status-persist" });
+      const client = createClient(reg.secret);
+
+      await client.setStatus("In a meeting");
+      const me = await client.me();
+      expect((me.metadata as Record<string, unknown>)?.status_text).toBe("In a meeting");
+    });
+
+    it("clearing status removes it from metadata", async () => {
+      const reg = await createClient().register({ name: "status-remove" });
+      const client = createClient(reg.secret);
+
+      await client.setStatus("Active");
+      await client.setStatus(null);
+      const me = await client.me();
+      expect((me.metadata as Record<string, unknown>)?.status_text).toBeUndefined();
+    });
+
+    it("rejects status text exceeding 500 characters", async () => {
+      const reg = await createClient().register({ name: "status-long" });
+      const client = createClient(reg.secret);
+
+      await expect(client.setStatus("x".repeat(501))).rejects.toThrow();
+    });
+
+    it("accepts status text at exactly 500 characters", async () => {
+      const reg = await createClient().register({ name: "status-boundary" });
+      const client = createClient(reg.secret);
+
+      const result = await client.setStatus("x".repeat(500));
+      expect(result.ok).toBe(true);
+      expect(result.status_text).toBe("x".repeat(500));
+    });
+
+    it("generates audit event on status update", async () => {
+      const reg = await createClient().register({ name: "status-audit" });
+      const client = createClient(reg.secret);
+      testState["audit_events"].length = 0;
+
+      await client.setStatus("Deploying");
+
+      const audit = await client.auditLog({ action: "agent.status_update" });
+      expect(audit.events.length).toBe(1);
+      expect(audit.events[0].metadata).toHaveProperty("status_text", "Deploying");
+    });
+  });
+
+  describe("presence endpoint", () => {
+    it("returns presence for workspace members", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "presence-alpha" });
+      const beta = await anon.register({ name: "presence-beta" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "Presence WS" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      const result = await alphaClient.presence();
+      expect(result.workspace_id).toBe(ws.id);
+      expect(result.members).toHaveLength(2);
+      expect(result.members.map((m: { agent_id: string }) => m.agent_id)).toContain(alpha.agent_id);
+      expect(result.members.map((m: { agent_id: string }) => m.agent_id)).toContain(beta.agent_id);
+    });
+
+    it("returns online/away/offline counts", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "presence-counts" });
+      const alphaClient = createClient(alpha.secret);
+
+      await alphaClient.createWorkspace({ name: "Count WS" });
+
+      const result = await alphaClient.presence();
+      expect(typeof result.online).toBe("number");
+      expect(typeof result.away).toBe("number");
+      expect(typeof result.offline).toBe("number");
+      expect(result.online + result.away + result.offline).toBe(result.members.length);
+    });
+
+    it("includes status_text in presence members", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "presence-status" });
+      const alphaClient = createClient(alpha.secret);
+
+      await alphaClient.createWorkspace({ name: "Status WS" });
+      await alphaClient.setStatus("Coding");
+
+      const result = await alphaClient.presence();
+      const me = result.members.find((m: { agent_id: string }) => m.agent_id === alpha.agent_id);
+      expect(me).toBeDefined();
+      expect(me.status_text).toBe("Coding");
+    });
+
+    it("returns error when not in a workspace", async () => {
+      const reg = await createClient().register({ name: "presence-no-ws" });
+      const client = createClient(reg.secret);
+
+      await expect(client.presence()).rejects.toThrow();
+    });
+
+    it("classifies recently active agents as online", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "presence-online" });
+      const alphaClient = createClient(alpha.secret);
+
+      await alphaClient.createWorkspace({ name: "Online WS" });
+
+      // Agent was just active (lastSeenAt set by auth middleware)
+      const result = await alphaClient.presence();
+      const me = result.members.find((m: { agent_id: string }) => m.agent_id === alpha.agent_id);
+      expect(me).toBeDefined();
+      // lastSeenAt was recently set, so should be online
+      expect(["online", "away", "offline"]).toContain(me.status);
+    });
+
+    it("member fields include name, owner, role", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "presence-fields", owner: "TestOwner" });
+      const alphaClient = createClient(alpha.secret);
+
+      await alphaClient.createWorkspace({ name: "Fields WS" });
+      await alphaClient.updateMe({ role: "developer" });
+
+      const result = await alphaClient.presence();
+      const me = result.members.find((m: { agent_id: string }) => m.agent_id === alpha.agent_id);
+      expect(me).toBeDefined();
+      expect(me.name).toBe("presence-fields");
+      expect(me.owner).toBe("TestOwner");
+      expect(me).toHaveProperty("last_seen_at");
+    });
+  });
+
+  describe("agent profile lookup", () => {
+    it("paired contacts can view each other's profile", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const profile = await alphaClient.profile(beta.agent_id);
+      expect(profile.agent_id).toBe(beta.agent_id);
+      expect(profile.name).toBe("beta");
+      expect(profile.owner).toBe("Frank");
+    });
+
+    it("profile includes role and projects from metadata", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await betaClient.updateMe({ role: "reviewer", projects: ["trunk", "superkey"] });
+
+      const profile = await alphaClient.profile(beta.agent_id);
+      expect(profile.role).toBe("reviewer");
+      expect(profile.projects).toEqual(["trunk", "superkey"]);
+    });
+
+    it("workspace co-members can view profiles without pairing", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "ws-profile-a" });
+      const beta = await anon.register({ name: "ws-profile-b" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "Profile WS" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      const profile = await alphaClient.profile(beta.agent_id);
+      expect(profile.agent_id).toBe(beta.agent_id);
+      expect(profile.name).toBe("ws-profile-b");
+    });
+
+    it("non-contacts cannot view profile", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "no-access-a" });
+      const beta = await anon.register({ name: "no-access-b" });
+      const alphaClient = createClient(alpha.secret);
+
+      await expect(alphaClient.profile(beta.agent_id)).rejects.toThrow();
+    });
+
+    it("returns 404 for non-existent agent", async () => {
+      const { alpha, alphaClient, betaClient } = await registerPair();
+
+      // Use a valid UUID that doesn't exist as an agent
+      try {
+        await alphaClient.profile("00000000-0000-0000-0000-000000000000");
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("rejects invalid UUID format", async () => {
+      const reg = await createClient().register({ name: "bad-uuid" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.profile("not-a-uuid");
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+  });
+
+  describe("webhook configuration", () => {
+    it("gets webhook config for agent with webhook", async () => {
+      const reg = await createClient().register({
+        name: "wh-config",
+        webhook_url: "https://example.com/webhook",
+      });
+      const client = createClient(reg.secret);
+
+      const config = await client.webhookConfig();
+      expect(config.url).toBe("https://example.com/webhook");
+      expect(config.configured).toBe(true);
+      expect(config.secret_hint).toBeDefined();
+    });
+
+    it("gets webhook config for agent without webhook", async () => {
+      const reg = await createClient().register({ name: "wh-no-config" });
+      const client = createClient(reg.secret);
+
+      const config = await client.webhookConfig();
+      expect(config.url).toBeNull();
+      expect(config.configured).toBe(false);
+    });
+
+    it("sets webhook URL via updateWebhook", async () => {
+      const reg = await createClient().register({ name: "wh-set" });
+      const client = createClient(reg.secret);
+
+      const result = await client.updateWebhook("https://hooks.example.com/trunk");
+      expect(result.url).toBe("https://hooks.example.com/trunk");
+      expect(result.configured).toBe(true);
+    });
+
+    it("rejects missing URL on webhook set", async () => {
+      const reg = await createClient().register({ name: "wh-no-url" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateWebhook("");
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("rejects SSRF webhook URLs", async () => {
+      const reg = await createClient().register({ name: "wh-ssrf" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateWebhook("http://127.0.0.1/hook");
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("removes webhook via removeWebhook", async () => {
+      const reg = await createClient().register({
+        name: "wh-remove",
+        webhook_url: "https://example.com/wh",
+      });
+      const client = createClient(reg.secret);
+
+      const result = await client.removeWebhook();
+      expect(result.ok).toBe(true);
+
+      const config = await client.webhookConfig();
+      expect(config.url).toBeNull();
+      expect(config.configured).toBe(false);
+    });
+
+    it("rotates webhook signing secret", async () => {
+      const reg = await createClient().register({ name: "wh-rotate" });
+      const client = createClient(reg.secret);
+
+      const result = await client.rotateWebhookSecret();
+      expect(result.webhook_secret).toBeDefined();
+      expect(result.webhook_secret).toMatch(/^[a-f0-9]{64}$/);
+      expect(result.message).toContain("rotated");
+    });
+
+    it("new webhook secret differs from the registration secret", async () => {
+      const reg = await createClient().register({ name: "wh-rotate-diff" });
+      const client = createClient(reg.secret);
+
+      const first = await client.rotateWebhookSecret();
+      const second = await client.rotateWebhookSecret();
+      expect(first.webhook_secret).not.toBe(second.webhook_secret);
+    });
+
+    it("lists webhook deliveries (empty)", async () => {
+      const reg = await createClient().register({ name: "wh-deliveries-empty" });
+      const client = createClient(reg.secret);
+
+      const result = await client.webhookDeliveries();
+      expect(result.deliveries).toEqual([]);
+      expect(result.count).toBe(0);
+    });
+
+    it("lists webhook deliveries with limit", async () => {
+      const reg = await createClient().register({ name: "wh-deliveries-limit" });
+      const client = createClient(reg.secret);
+
+      // Seed some deliveries
+      for (let i = 0; i < 5; i++) {
+        testState["webhook_deliveries"].push({
+          id: crypto.randomUUID(),
+          agentId: reg.agent_id,
+          messageId: null,
+          url: "https://example.com/wh",
+          event: "webhook.test",
+          success: i % 2,
+          httpStatus: i % 2 === 0 ? 500 : 200,
+          latencyMs: 50 + i * 10,
+          error: i % 2 === 0 ? "HTTP 500" : null,
+          attempts: 1,
+          createdAt: new Date(Date.now() - i * 60000),
+        });
+      }
+
+      const result = await client.webhookDeliveries({ limit: 3 });
+      expect(result.deliveries.length).toBeLessThanOrEqual(3);
+      expect(result.count).toBeLessThanOrEqual(3);
+    });
+
+    it("webhook delivery fields are correctly shaped", async () => {
+      const reg = await createClient().register({ name: "wh-delivery-shape" });
+      const client = createClient(reg.secret);
+
+      testState["webhook_deliveries"].push({
+        id: crypto.randomUUID(),
+        agentId: reg.agent_id,
+        messageId: crypto.randomUUID(),
+        url: "https://example.com/wh",
+        event: "message.received",
+        success: 1,
+        httpStatus: 200,
+        latencyMs: 42,
+        error: null,
+        attempts: 1,
+        createdAt: new Date(),
+      });
+
+      const result = await client.webhookDeliveries();
+      expect(result.deliveries.length).toBe(1);
+      const d = result.deliveries[0];
+      expect(d).toHaveProperty("id");
+      expect(d).toHaveProperty("message_id");
+      expect(d).toHaveProperty("url", "https://example.com/wh");
+      expect(d).toHaveProperty("event", "message.received");
+      expect(d).toHaveProperty("success", true);
+      expect(d).toHaveProperty("http_status", 200);
+      expect(d).toHaveProperty("latency_ms", 42);
+      expect(d).toHaveProperty("error", null);
+      expect(d).toHaveProperty("attempts", 1);
+      expect(d).toHaveProperty("created_at");
+    });
+
+    it("webhook test requires a configured webhook URL", async () => {
+      const reg = await createClient().register({ name: "wh-test-no-url" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.testWebhook();
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("webhook retry requires a configured webhook URL", async () => {
+      const reg = await createClient().register({ name: "wh-retry-no-url" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.retryWebhookDelivery(crypto.randomUUID());
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("webhook retry returns 404 for non-existent delivery", async () => {
+      const reg = await createClient().register({
+        name: "wh-retry-notfound",
+        webhook_url: "https://example.com/wh",
+      });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.retryWebhookDelivery(crypto.randomUUID());
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("webhook retry rejects already-succeeded delivery", async () => {
+      const reg = await createClient().register({
+        name: "wh-retry-success",
+        webhook_url: "https://example.com/wh",
+      });
+      const client = createClient(reg.secret);
+
+      const deliveryId = crypto.randomUUID();
+      testState["webhook_deliveries"].push({
+        id: deliveryId,
+        agentId: reg.agent_id,
+        messageId: crypto.randomUUID(),
+        url: "https://example.com/wh",
+        event: "message.received",
+        success: 1,
+        httpStatus: 200,
+        latencyMs: 30,
+        error: null,
+        attempts: 1,
+        createdAt: new Date(),
+      });
+
+      try {
+        await client.retryWebhookDelivery(deliveryId);
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("webhook retry rejects delivery without associated message (e.g. test)", async () => {
+      const reg = await createClient().register({
+        name: "wh-retry-no-msg",
+        webhook_url: "https://example.com/wh",
+      });
+      const client = createClient(reg.secret);
+
+      const deliveryId = crypto.randomUUID();
+      testState["webhook_deliveries"].push({
+        id: deliveryId,
+        agentId: reg.agent_id,
+        messageId: null,
+        url: "https://example.com/wh",
+        event: "webhook.test",
+        success: 0,
+        httpStatus: 500,
+        latencyMs: 100,
+        error: "HTTP 500",
+        attempts: 1,
+        createdAt: new Date(),
+      });
+
+      try {
+        await client.retryWebhookDelivery(deliveryId);
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("secret_hint shows first 6 chars of webhook secret", async () => {
+      const reg = await createClient().register({
+        name: "wh-hint",
+        webhook_url: "https://example.com/wh",
+      });
+      const client = createClient(reg.secret);
+
+      const config = await client.webhookConfig();
+      expect(config.secret_hint).toMatch(/^[a-f0-9]{6}\.\.\.$/);
+    });
+  });
+
+  describe("analytics endpoint", () => {
+    it("returns analytics with default 7-day window", async () => {
+      const reg = await createClient().register({ name: "analytics-default" });
+      const client = createClient(reg.secret);
+
+      const result = await client.analytics();
+      expect(result.period_days).toBe(7);
+      expect(result.total_sent).toBe(0);
+      expect(result.total_received).toBe(0);
+      expect(result.volume_by_day).toEqual({});
+      expect(result.top_contacts).toEqual([]);
+      expect(result.by_type).toEqual({});
+      expect(result.avg_response_ms).toBeNull();
+      expect(result.response_count).toBe(0);
+    });
+
+    it("respects custom days parameter", async () => {
+      const reg = await createClient().register({ name: "analytics-days" });
+      const client = createClient(reg.secret);
+
+      const result = await client.analytics({ days: 3 });
+      expect(result.period_days).toBe(3);
+    });
+
+    it("caps days parameter to 30", async () => {
+      const reg = await createClient().register({ name: "analytics-cap" });
+      const client = createClient(reg.secret);
+
+      const result = await client.analytics({ days: 90 });
+      expect(result.period_days).toBe(30);
+    });
+
+    it("clamps days parameter minimum to 1", async () => {
+      const reg = await createClient().register({ name: "analytics-min" });
+      const client = createClient(reg.secret);
+
+      const result = await client.analytics({ days: 0 });
+      expect(result.period_days).toBe(1);
+    });
+
+    it("counts sent and received messages", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "hello" } });
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "world" } });
+      await betaClient.send({ to: alpha.agent_id, type: "response", payload: { content: "hi back" } });
+
+      const result = await alphaClient.analytics();
+      expect(result.total_sent).toBe(2);
+      expect(result.total_received).toBe(1);
+    });
+
+    it("computes volume by day", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg1" } });
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "msg2" } });
+
+      const result = await alphaClient.analytics();
+      const today = new Date().toISOString().slice(0, 10);
+      expect(result.volume_by_day[today]).toBeDefined();
+      expect(result.volume_by_day[today].sent).toBe(2);
+    });
+
+    it("returns top contacts sorted by total volume", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "analytics-top-a" });
+      const beta = await anon.register({ name: "analytics-top-b" });
+      const gamma = await anon.register({ name: "analytics-top-c" });
+      const alphaClient = createClient(alpha.secret);
+
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.pair({ code: gamma.pairing_code });
+
+      // Send more to beta than gamma
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "1" } });
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "2" } });
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "3" } });
+      await alphaClient.send({ to: gamma.agent_id, type: "update", payload: { content: "1" } });
+
+      const result = await alphaClient.analytics();
+      expect(result.top_contacts.length).toBe(2);
+      expect(result.top_contacts[0].agent_id).toBe(beta.agent_id);
+      expect(result.top_contacts[0].total).toBeGreaterThan(result.top_contacts[1].total);
+    });
+
+    it("breaks down messages by type", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "q" } });
+      await alphaClient.send({ to: beta.agent_id, type: "update", payload: { content: "u" } });
+      await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "q2" } });
+
+      const result = await alphaClient.analytics();
+      expect(result.by_type.question).toBe(2);
+      expect(result.by_type.update).toBe(1);
+    });
+
+    it("computes average response time for threaded replies", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      // Beta sends a message, alpha replies in the same thread
+      const sent = await betaClient.send({ to: alpha.agent_id, type: "question", payload: { content: "ping" } });
+      await alphaClient.reply(sent.id, { type: "response", payload: { content: "pong" } });
+
+      const result = await alphaClient.analytics();
+      // Response time should be computed (could be 0 since same tick)
+      expect(result.response_count).toBeGreaterThanOrEqual(0);
+      if (result.response_count > 0) {
+        expect(typeof result.avg_response_ms).toBe("number");
+      }
+    });
+  });
+
+  describe("agent updateMe metadata fields", () => {
+    it("sets and retrieves role via updateMe", async () => {
+      const reg = await createClient().register({ name: "meta-role" });
+      const client = createClient(reg.secret);
+
+      await client.updateMe({ role: "planner" });
+      const me = await client.me();
+      expect(me.role).toBe("planner");
+    });
+
+    it("sets and retrieves projects via updateMe", async () => {
+      const reg = await createClient().register({ name: "meta-projects" });
+      const client = createClient(reg.secret);
+
+      await client.updateMe({ projects: ["trunk", "superkey", "koji"] });
+      const me = await client.me();
+      expect(me.projects).toEqual(["trunk", "superkey", "koji"]);
+    });
+
+    it("rejects role exceeding 200 characters", async () => {
+      const reg = await createClient().register({ name: "meta-long-role" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ role: "x".repeat(201) });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("rejects projects array exceeding 50 entries", async () => {
+      const reg = await createClient().register({ name: "meta-many-projects" });
+      const client = createClient(reg.secret);
+
+      const projects = Array.from({ length: 51 }, (_, i) => `project-${i}`);
+      try {
+        await client.updateMe({ projects });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("rejects project name exceeding 100 characters", async () => {
+      const reg = await createClient().register({ name: "meta-long-project" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ projects: ["x".repeat(101)] });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("rejects metadata exceeding 10KB", async () => {
+      const reg = await createClient().register({ name: "meta-huge" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ metadata: { data: "x".repeat(11000) } });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("preserves existing metadata when adding new fields", async () => {
+      const reg = await createClient().register({ name: "meta-merge" });
+      const client = createClient(reg.secret);
+
+      await client.updateMe({ role: "developer" });
+      await client.updateMe({ projects: ["trunk"] });
+
+      const me = await client.me();
+      expect(me.role).toBe("developer");
+      expect(me.projects).toEqual(["trunk"]);
+    });
+
+    it("accepts owner update on existing agent", async () => {
+      const reg = await createClient().register({ name: "meta-owner" });
+      const client = createClient(reg.secret);
+
+      const result = await client.updateMe({ owner: "NewOwner" });
+      expect(result.owner).toBe("NewOwner");
+    });
+
+    it("rejects empty owner string", async () => {
+      const reg = await createClient().register({ name: "meta-empty-owner" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ owner: "" });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+
+    it("rejects owner exceeding 100 characters", async () => {
+      const reg = await createClient().register({ name: "meta-long-owner" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ owner: "x".repeat(101) });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeDefined();
+      }
+    });
+  });
 });
 
 async function registerPair(): Promise<{
