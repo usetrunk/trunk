@@ -575,7 +575,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     .select()
     .from(tasks)
     .where(eq(tasks.scope, `room:${roomId}`))
-    .orderBy(tasks.sequence, tasks.createdAt);
+    .orderBy(desc(tasks.updatedAt));
 
   // Resolve all agent names
   const allAgentIds = unique([
