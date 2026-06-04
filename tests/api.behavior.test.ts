@@ -22615,6 +22615,69 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // ── Search date filters ─────────────────────────────────────────────
+  describe("search date filters", () => {
+    it("filters messages by after date", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const sent1 = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "old message" },
+      });
+      // Backdate first message
+      const msg1 = testState.messages.find((m) => m.id === sent1.id)!;
+      msg1.createdAt = new Date("2025-01-01T00:00:00Z");
+
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "new message" },
+      });
+
+      const results = await alphaClient.search({ after: "2025-06-01" });
+      expect(results.messages.length).toBe(1);
+      expect(results.messages[0].payload).toEqual({ content: "new message" });
+    });
+
+    it("filters messages by before date", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const sent1 = await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "old message" },
+      });
+      // Backdate first message
+      const msg1 = testState.messages.find((m) => m.id === sent1.id)!;
+      msg1.createdAt = new Date("2025-01-01T00:00:00Z");
+
+      await alphaClient.send({
+        to: beta.agent_id,
+        type: "text",
+        payload: { content: "new message" },
+      });
+
+      const results = await alphaClient.search({ before: "2025-06-01" });
+      expect(results.messages.length).toBe(1);
+      expect(results.messages[0].payload).toEqual({ content: "old message" });
+    });
+
+    it("rejects invalid after date format", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.search({ after: "not-a-date" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+  });
+
   // ── Document body byte-length validation ───────────────────────────
   describe("document body byte-length", () => {
     it("rejects document body exceeding 1MB in UTF-8 bytes", async () => {

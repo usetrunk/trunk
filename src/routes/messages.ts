@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits, attachments } from "../db/schema.js";
-import { eq, or, and, desc, lt, gt, lte, inArray, isNull, ne } from "drizzle-orm";
+import { eq, or, and, desc, lt, gt, gte, lte, inArray, isNull, ne } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { parsePaginationQuery, paginateResults, type PaginationParams } from "../lib/pagination.js";
@@ -680,6 +680,13 @@ app.get("/search", async (c) => {
       and(eq(messages.fromAgent, contact), eq(messages.toAgent, agentId)),
     )!);
   }
+  // Push date-range filters into the DB query for index usage
+  if (after) {
+    conditions.push(gte(messages.createdAt, new Date(after)));
+  }
+  if (before) {
+    conditions.push(lte(messages.createdAt, new Date(before)));
+  }
   if (cursor) {
     conditions.push(
       or(
@@ -689,8 +696,8 @@ app.get("/search", async (c) => {
     );
   }
 
-  // Fetch a larger set when JS filtering is needed
-  const fetchLimit = (q || after || before) ? 500 : limit + 1;
+  // Fetch a larger set when JS text-search filtering is needed
+  const fetchLimit = q ? 500 : limit + 1;
   const rows = await db
     .select()
     .from(messages)
@@ -698,21 +705,13 @@ app.get("/search", async (c) => {
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(fetchLimit);
 
-  // JS-level filtering for text search and date range
+  // JS-level filtering for text search (payload content isn't indexed)
   let filtered = rows.filter((row) => row.status !== "deleted");
   if (q) {
     filtered = filtered.filter((row) => {
       const content = (row.payload as Record<string, unknown>).content;
       return typeof content === "string" && content.toLowerCase().includes(q);
     });
-  }
-  if (after) {
-    const afterDate = new Date(after);
-    filtered = filtered.filter((row) => row.createdAt >= afterDate);
-  }
-  if (before) {
-    const beforeDate = new Date(before);
-    filtered = filtered.filter((row) => row.createdAt <= beforeDate);
   }
 
   const page = paginateResults(filtered, limit);
