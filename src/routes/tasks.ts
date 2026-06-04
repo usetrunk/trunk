@@ -210,8 +210,10 @@ app.post("/", async (c) => {
       group: task.group,
       scope: task.scope,
     };
-    fireRoomTaskWebhooks(body.room_id, taskData).catch((e) => console.error("[webhook]", e));
-    notifyRoomTaskEvent(body.room_id, "task.created", taskData).catch((e) => console.error("[push]", e));
+    await Promise.allSettled([
+      fireRoomTaskWebhooks(body.room_id, taskData),
+      notifyRoomTaskEvent(body.room_id, "task.created", taskData),
+    ]);
   }
 
   return c.json({ scope: task.scope, ...taskToJson(task) }, 201);
@@ -513,8 +515,10 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
       group: updated.group,
       scope: updated.scope,
     };
-    fireRoomTaskWebhooks(roomId, taskData, "task.updated").catch(() => {});
-    notifyRoomTaskEvent(roomId, "task.updated", taskData).catch(() => {});
+    await Promise.allSettled([
+      fireRoomTaskWebhooks(roomId, taskData, "task.updated"),
+      notifyRoomTaskEvent(roomId, "task.updated", taskData),
+    ]);
   }
 
   // When a task is marked done, auto-unblock downstream tasks
@@ -559,8 +563,10 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
             group: t.group,
             scope: t.scope,
           };
-          fireRoomTaskWebhooks(roomId, unblockedData, "task.updated").catch(() => {});
-          notifyRoomTaskEvent(roomId, "task.unblocked", unblockedData).catch(() => {});
+          await Promise.allSettled([
+            fireRoomTaskWebhooks(roomId, unblockedData, "task.updated"),
+            notifyRoomTaskEvent(roomId, "task.unblocked", unblockedData),
+          ]);
         }
       }
     }
@@ -668,8 +674,10 @@ app.delete("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c
       group: deleted.group,
       scope: deleted.scope,
     };
-    fireRoomTaskWebhooks(roomId, deletedData, "task.deleted").catch(() => {});
-    notifyRoomTaskEvent(roomId, "task.deleted", deletedData).catch(() => {});
+    await Promise.allSettled([
+      fireRoomTaskWebhooks(roomId, deletedData, "task.deleted"),
+      notifyRoomTaskEvent(roomId, "task.deleted", deletedData),
+    ]);
   }
 
   return c.json({ ok: true, deleted_id: deleted.id });
