@@ -24312,6 +24312,113 @@ describe("Hono API behavior", () => {
 
       await expect(client.updateContactAlias(beta.agent_id, "test")).rejects.toMatchObject({ status: 404 });
     });
+
+    it("rejects whitespace-only alias", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(
+        alphaClient.updateContactAlias(beta.agent_id, "   ")
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects empty string alias", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      await expect(
+        alphaClient.updateContactAlias(beta.agent_id, "")
+      ).rejects.toMatchObject({ status: 400 });
+    });
+  });
+
+  describe("task creation ambiguous scope", () => {
+    it("rejects task with both contact_id and room_id", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const room = await alphaClient.createRoom({ name: "scope-test-room" });
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({
+          contact_id: beta.agent_id,
+          room_id: room.id,
+          title: "Ambiguous task",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("AMBIGUOUS_SCOPE");
+    });
+
+    it("rejects task with both room_id and workspace_id", async () => {
+      const anon = createClient();
+      const reg = await anon.register({ name: "scope-ws-agent" });
+      const client = createClient(reg.secret);
+
+      const ws = await client.createWorkspace({ name: "scope-ws" });
+      const room = await client.createRoom({ name: "scope-ws-room" });
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${reg.secret}`,
+        },
+        body: JSON.stringify({
+          room_id: room.id,
+          workspace_id: ws.id,
+          title: "Ambiguous task",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("AMBIGUOUS_SCOPE");
+    });
+
+    it("rejects task with all three scope fields", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const ws = await alphaClient.createWorkspace({ name: "scope-all-ws" });
+      const room = await alphaClient.createRoom({ name: "scope-all-room" });
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${alpha.secret}`,
+        },
+        body: JSON.stringify({
+          contact_id: beta.agent_id,
+          room_id: room.id,
+          workspace_id: ws.id,
+          title: "Ambiguous task",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("AMBIGUOUS_SCOPE");
+    });
+
+    it("accepts task with exactly one scope field", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const task = await alphaClient.createTask({
+        contact_id: beta.agent_id,
+        title: "Single scope task",
+      });
+      expect(task.title).toBe("Single scope task");
+    });
   });
 });
 

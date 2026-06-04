@@ -312,6 +312,9 @@ app.patch("/:agentId", requireValidUUIDs("agentId"), async (c) => {
   if (body.alias !== null && typeof body.alias !== "string") {
     return c.json({ error: "alias must be a string or null", code: "INVALID_FIELD" }, 400);
   }
+  if (body.alias !== null && body.alias.trim().length === 0) {
+    return c.json({ error: "alias must not be blank (use null to clear)", code: "INVALID_FIELD" }, 400);
+  }
   if (body.alias !== null && body.alias.length > 100) {
     return c.json({ error: "alias must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
   }

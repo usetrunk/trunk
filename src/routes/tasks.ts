@@ -121,6 +121,8 @@ app.post("/", async (c) => {
   if (body.group && body.group.length > 200) return c.json({ error: "group must be 200 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (body.context_ref && body.context_ref.length > 500) return c.json({ error: "context_ref must be 500 characters or fewer", code: "INVALID_FIELD" }, 400);
   if (!body.contact_id && !body.room_id && !body.workspace_id) return c.json({ error: "contact_id, room_id, or workspace_id is required", code: "MISSING_FIELD" }, 400);
+  const scopeCount = [body.contact_id, body.room_id, body.workspace_id].filter(Boolean).length;
+  if (scopeCount > 1) return c.json({ error: "Provide exactly one of contact_id, room_id, or workspace_id", code: "AMBIGUOUS_SCOPE" }, 400);
   if (body.contact_id && !isValidUUID(body.contact_id)) return c.json({ error: "Invalid contact_id format", code: "INVALID_INPUT" }, 400);
   if (body.room_id && !isValidUUID(body.room_id)) return c.json({ error: "Invalid room_id format", code: "INVALID_INPUT" }, 400);
   if (body.workspace_id && !isValidUUID(body.workspace_id)) return c.json({ error: "Invalid workspace_id format", code: "INVALID_INPUT" }, 400);
