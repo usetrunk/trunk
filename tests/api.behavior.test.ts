@@ -2928,6 +2928,134 @@ describe("Hono API behavior", () => {
     expect(webhook.filter_status).toBe("open");
   });
 
+  // --- Room webhook task.updated / task.deleted event tests ---
+
+  it("fires task.updated webhook when a room task is updated", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Task Update Webhook Room" });
+    const room = await roomRes.json();
+
+    // Create webhook
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/task-update" }),
+    });
+
+    // Create a task
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, { title: "Task to update" });
+    const task = await taskRes.json();
+    vi.mocked(fireRoomTaskWebhooks).mockClear();
+
+    // Update the task
+    const updateRes = await app.request(`/tasks/${room.id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ status: "in-progress" }),
+    });
+    expect(updateRes.status).toBe(200);
+    expect(fireRoomTaskWebhooks).toHaveBeenCalledWith(
+      room.id,
+      expect.objectContaining({ id: task.id, status: "in-progress" }),
+      "task.updated"
+    );
+  });
+
+  it("fires task.deleted webhook when a room task is deleted", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Task Delete Webhook Room" });
+    const room = await roomRes.json();
+
+    // Create webhook
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/task-delete" }),
+    });
+
+    // Create and then delete a task
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, { title: "Task to delete" });
+    const task = await taskRes.json();
+    vi.mocked(fireRoomTaskWebhooks).mockClear();
+
+    const deleteRes = await app.request(`/tasks/${room.id}/${task.id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(deleteRes.status).toBe(200);
+    expect(fireRoomTaskWebhooks).toHaveBeenCalledWith(
+      room.id,
+      expect.objectContaining({ id: task.id, title: "Task to delete" }),
+      "task.deleted"
+    );
+  });
+
+  it("does not fire webhook on non-room task update", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create a contact-scoped task
+    const task = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Contact task" });
+    vi.mocked(fireRoomTaskWebhooks).mockClear();
+
+    // Update the contact-scoped task
+    await alphaClient.updateTask(beta.agent_id, task.id, { status: "done" });
+    expect(fireRoomTaskWebhooks).not.toHaveBeenCalled();
+  });
+
+  it("does not fire webhook on non-room task delete", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha, beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    // Create a contact-scoped task
+    const task = await alphaClient.createTask({ contact_id: beta.agent_id, title: "Contact task to del" });
+    vi.mocked(fireRoomTaskWebhooks).mockClear();
+
+    // Delete the contact-scoped task
+    await alphaClient.deleteTask(beta.agent_id, task.id);
+    expect(fireRoomTaskWebhooks).not.toHaveBeenCalled();
+  });
+
+  it("task.updated webhook includes updated fields", async () => {
+    const { fireRoomTaskWebhooks } = await import("../src/lib/room-webhook.js");
+    const { alpha } = await registerPair();
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Updated Fields Webhook" });
+    const room = await roomRes.json();
+
+    await app.request(`/rooms/${room.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ url: "https://hooks.example.com/fields" }),
+    });
+
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, {
+      title: "Original title",
+      priority: "low",
+    });
+    const task = await taskRes.json();
+    vi.mocked(fireRoomTaskWebhooks).mockClear();
+
+    // Update multiple fields
+    await app.request(`/tasks/${room.id}/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
+      body: JSON.stringify({ title: "Updated title", priority: "critical" }),
+    });
+
+    expect(fireRoomTaskWebhooks).toHaveBeenCalledWith(
+      room.id,
+      expect.objectContaining({
+        title: "Updated title",
+        priority: "critical",
+      }),
+      "task.updated"
+    );
+  });
+
   // --- Room messaging fan-out tests ---
 
   it("sends a message to room:<id> and fans out to all other members", async () => {

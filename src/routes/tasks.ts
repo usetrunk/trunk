@@ -494,6 +494,22 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
 
   if (!updated) return c.json({ error: "Task not found", code: "TASK_NOT_FOUND" }, 404);
 
+  // Fire room webhooks for task updates (best-effort, non-blocking)
+  if (updated.scope.startsWith("room:")) {
+    const roomId = updated.scope.slice(5);
+    fireRoomTaskWebhooks(roomId, {
+      id: updated.id,
+      title: updated.title,
+      description: updated.description,
+      status: updated.status,
+      priority: updated.priority,
+      owner: updated.owner,
+      created_by: updated.createdBy,
+      group: updated.group,
+      scope: updated.scope,
+    }, "task.updated").catch(() => {});
+  }
+
   // When a task is marked done, auto-unblock downstream tasks
   if (body.status === "done") {
     const allScopeTasks = await db
@@ -604,6 +620,22 @@ app.delete("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c
     .returning();
 
   if (!deleted) return c.json({ error: "Task not found", code: "TASK_NOT_FOUND" }, 404);
+
+  // Fire room webhooks for task deletion (best-effort, non-blocking)
+  if (deleted.scope.startsWith("room:")) {
+    const roomId = deleted.scope.slice(5);
+    fireRoomTaskWebhooks(roomId, {
+      id: deleted.id,
+      title: deleted.title,
+      description: deleted.description,
+      status: deleted.status,
+      priority: deleted.priority,
+      owner: deleted.owner,
+      created_by: deleted.createdBy,
+      group: deleted.group,
+      scope: deleted.scope,
+    }, "task.deleted").catch(() => {});
+  }
 
   return c.json({ ok: true, deleted_id: deleted.id });
 });

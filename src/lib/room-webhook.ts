@@ -15,11 +15,13 @@ type TaskData = {
   scope: string;
 };
 
+type TaskEvent = "task.created" | "task.updated" | "task.deleted";
+
 /**
- * Fire room webhooks that match a newly created task's criteria.
- * Best-effort — failures are logged but don't block task creation.
+ * Fire room webhooks that match a task event's criteria.
+ * Best-effort — failures are logged but don't block task operations.
  */
-export async function fireRoomTaskWebhooks(roomId: string, task: TaskData): Promise<void> {
+export async function fireRoomTaskWebhooks(roomId: string, task: TaskData, event: TaskEvent = "task.created"): Promise<void> {
   const webhooks = await db
     .select()
     .from(roomWebhooks)
@@ -37,7 +39,7 @@ export async function fireRoomTaskWebhooks(roomId: string, task: TaskData): Prom
   if (matching.length === 0) return;
 
   const payload = {
-    event: "task.created",
+    event,
     room_id: roomId,
     task,
   };
@@ -47,7 +49,7 @@ export async function fireRoomTaskWebhooks(roomId: string, task: TaskData): Prom
       const body = JSON.stringify(payload);
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
-        "X-Trunk-Event": "task.created",
+        "X-Trunk-Event": event,
       };
 
       if (w.secret) {
