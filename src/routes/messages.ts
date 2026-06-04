@@ -113,6 +113,9 @@ app.post("/", async (c) => {
 
   // Handle workspace addressing: "workspace:<id>"
   if (body.to.startsWith("workspace:")) {
+    if (body.attachment_ids && body.attachment_ids.length > 0) {
+      return c.json({ error: "Attachments are not supported for workspace fan-out messages", code: "VALIDATION_ERROR" }, 400);
+    }
     const workspaceId = body.to.slice("workspace:".length);
     if (!isValidUUID(workspaceId)) {
       return c.json({ error: "Invalid workspace ID format", code: "INVALID_INPUT" }, 400);
@@ -171,20 +174,23 @@ app.post("/", async (c) => {
           idempotencyKey: `${idempotencyKey}:${recipientId}`,
           type: body.type,
           payload: body.payload,
+          ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
           ...(expiresAt ? { expiresAt } : {}),
         })
         .returning();
 
-      await notifyRealtime(recipientId, message);
-      await db
-        .update(messages)
-        .set({ status: "delivered", deliveredAt: new Date() })
-        .where(eq(messages.id, message.id));
-      message.status = "delivered";
+      if (!scheduledAt) {
+        await notifyRealtime(recipientId, message);
+        await db
+          .update(messages)
+          .set({ status: "delivered", deliveredAt: new Date() })
+          .where(eq(messages.id, message.id));
+        message.status = "delivered";
 
-      const recipient = agentMap.get(recipientId);
-      if (recipient?.webhookUrl) {
-        deliverWebhook(message, recipient).catch(() => {});
+        const recipient = agentMap.get(recipientId);
+        if (recipient?.webhookUrl) {
+          deliverWebhook(message, recipient).catch(() => {});
+        }
       }
 
       created.push(message);
@@ -194,22 +200,27 @@ app.post("/", async (c) => {
       return c.json({ error: "All recipients have blocked you", code: "BLOCKED" }, 403);
     }
 
-    await audit(agentId, "message.send_workspace", "workspace", workspaceId, {
+    await audit(agentId, scheduledAt ? "message.schedule_workspace" : "message.send_workspace", "workspace", workspaceId, {
       thread_id: threadId,
       recipient_count: created.length,
+      ...(scheduledAt ? { scheduled_at: scheduledAt.toISOString() } : {}),
     });
 
     return c.json({
       id: created[0].id,
       thread_id: threadId,
-      status: "delivered",
+      status: scheduledAt ? "scheduled" : "delivered",
       created_at: created[0].createdAt,
       recipients: created.length,
+      ...(scheduledAt ? { scheduled_at: scheduledAt.toISOString() } : {}),
     }, 201);
   }
 
   // Handle room addressing: "room:<id>"
   if (body.to.startsWith("room:")) {
+    if (body.attachment_ids && body.attachment_ids.length > 0) {
+      return c.json({ error: "Attachments are not supported for room fan-out messages", code: "VALIDATION_ERROR" }, 400);
+    }
     const roomId = body.to.slice("room:".length);
     if (!isValidUUID(roomId)) {
       return c.json({ error: "Invalid room ID format", code: "INVALID_INPUT" }, 400);
@@ -268,20 +279,23 @@ app.post("/", async (c) => {
           idempotencyKey: `${idempotencyKey}:${recipientId}`,
           type: body.type,
           payload: body.payload,
+          ...(scheduledAt ? { status: "scheduled", scheduledAt } : {}),
           ...(expiresAt ? { expiresAt } : {}),
         })
         .returning();
 
-      await notifyRealtime(recipientId, message);
-      await db
-        .update(messages)
-        .set({ status: "delivered", deliveredAt: new Date() })
-        .where(eq(messages.id, message.id));
-      message.status = "delivered";
+      if (!scheduledAt) {
+        await notifyRealtime(recipientId, message);
+        await db
+          .update(messages)
+          .set({ status: "delivered", deliveredAt: new Date() })
+          .where(eq(messages.id, message.id));
+        message.status = "delivered";
 
-      const recipient = agentMap.get(recipientId);
-      if (recipient?.webhookUrl) {
-        deliverWebhook(message, recipient).catch(() => {});
+        const recipient = agentMap.get(recipientId);
+        if (recipient?.webhookUrl) {
+          deliverWebhook(message, recipient).catch(() => {});
+        }
       }
 
       created.push(message);
@@ -291,17 +305,19 @@ app.post("/", async (c) => {
       return c.json({ error: "All recipients have blocked you", code: "BLOCKED" }, 403);
     }
 
-    await audit(agentId, "message.send_room", "room", roomId, {
+    await audit(agentId, scheduledAt ? "message.schedule_room" : "message.send_room", "room", roomId, {
       thread_id: threadId,
       recipient_count: created.length,
+      ...(scheduledAt ? { scheduled_at: scheduledAt.toISOString() } : {}),
     });
 
     return c.json({
       id: created[0].id,
       thread_id: threadId,
-      status: "delivered",
+      status: scheduledAt ? "scheduled" : "delivered",
       created_at: created[0].createdAt,
       recipients: created.length,
+      ...(scheduledAt ? { scheduled_at: scheduledAt.toISOString() } : {}),
     }, 201);
   }
 

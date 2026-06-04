@@ -22312,6 +22312,122 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // ── Scheduled fan-out & attachment rejection ───────────────────────
+  describe("scheduled fan-out messages", () => {
+    it("workspace fan-out with scheduled_at creates scheduled messages (not delivered immediately)", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "sched-ws-alpha" });
+      const beta = await anon.register({ name: "sched-ws-beta" });
+      const gamma = await anon.register({ name: "sched-ws-gamma" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const gammaClient = createClient(gamma.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "SchedWSTeam" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+      await gammaClient.joinWorkspace({ code: ws.pairing_code });
+
+      const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const receipt = await alphaClient.send({
+        to: `workspace:${ws.id}`,
+        type: "update",
+        payload: { content: "scheduled workspace broadcast" },
+        scheduled_at: futureDate,
+      });
+
+      expect(receipt.status).toBe("scheduled");
+      expect(receipt.scheduled_at).toBeDefined();
+      expect(receipt.recipients).toBe(2);
+
+      // Messages should NOT appear in recipients' inboxes
+      const betaInbox = await betaClient.inbox();
+      const gammaInbox = await gammaClient.inbox();
+      expect(betaInbox.messages).toHaveLength(0);
+      expect(gammaInbox.messages).toHaveLength(0);
+    });
+
+    it("room fan-out with scheduled_at creates scheduled messages (not delivered immediately)", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "sched-room-alpha" });
+      const beta = await anon.register({ name: "sched-room-beta" });
+      const gamma = await anon.register({ name: "sched-room-gamma" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const gammaClient = createClient(gamma.secret);
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "SchedRoom" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+      await joinRoomRaw(gamma.secret, room.pairing_code);
+
+      const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const receipt = await alphaClient.send({
+        to: `room:${room.id}`,
+        type: "update",
+        payload: { content: "scheduled room broadcast" },
+        scheduled_at: futureDate,
+      });
+
+      expect(receipt.status).toBe("scheduled");
+      expect(receipt.scheduled_at).toBeDefined();
+      expect(receipt.recipients).toBe(2);
+
+      // Messages should NOT appear in recipients' inboxes
+      const betaInbox = await betaClient.inbox();
+      const gammaInbox = await gammaClient.inbox();
+      expect(betaInbox.messages).toHaveLength(0);
+      expect(gammaInbox.messages).toHaveLength(0);
+    });
+
+    it("rejects attachments on workspace fan-out", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "att-ws-alpha" });
+      const beta = await anon.register({ name: "att-ws-beta" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+
+      const ws = await alphaClient.createWorkspace({ name: "AttWSTeam" });
+      await betaClient.joinWorkspace({ code: ws.pairing_code });
+
+      try {
+        await alphaClient.send({
+          to: `workspace:${ws.id}`,
+          type: "update",
+          payload: { content: "with attachment" },
+          attachment_ids: [crypto.randomUUID()],
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.body?.code).toBe("VALIDATION_ERROR");
+      }
+    });
+
+    it("rejects attachments on room fan-out", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "att-room-alpha" });
+      const beta = await anon.register({ name: "att-room-beta" });
+      const alphaClient = createClient(alpha.secret);
+
+      const roomRes = await createRoomRaw(alpha.secret, { name: "AttRoom" });
+      const room = await roomRes.json();
+      await joinRoomRaw(beta.secret, room.pairing_code);
+
+      try {
+        await alphaClient.send({
+          to: `room:${room.id}`,
+          type: "update",
+          payload: { content: "with attachment" },
+          attachment_ids: [crypto.randomUUID()],
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.body?.code).toBe("VALIDATION_ERROR");
+      }
+    });
+  });
+
   // ── Scheduled message: blocked sender path ─────────────────────────
   describe("scheduled message delivery edge cases", () => {
     it("soft-deletes scheduled message when recipient blocks sender before delivery", async () => {
