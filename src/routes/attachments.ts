@@ -44,9 +44,15 @@ app.post("/", async (c) => {
   // Validate base64 and check size
   let sizeBytes: number;
   try {
-    sizeBytes = Math.ceil((body.data.length * 3) / 4);
-    // Validate it's valid base64
-    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(body.data)) {
+    // Reject obviously invalid base64: must be groups of 4 chars, only valid chars, padding only at end
+    if (body.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.data)) {
+      return c.json({ error: "data must be valid base64", code: "INVALID_INPUT" }, 400);
+    }
+    // Decode to verify and get actual byte length
+    const decoded = Buffer.from(body.data, "base64");
+    sizeBytes = decoded.length;
+    // Roundtrip check: reject corrupted base64 that silently decodes to wrong data
+    if (decoded.toString("base64") !== body.data) {
       return c.json({ error: "data must be valid base64", code: "INVALID_INPUT" }, 400);
     }
   } catch {

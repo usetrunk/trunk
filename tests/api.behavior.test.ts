@@ -9472,6 +9472,30 @@ describe("Hono API behavior", () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 
+  it("rejects base64 with incorrect padding length", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    // base64 must be a multiple of 4 characters
+    await expect(
+      client.uploadAttachment({ filename: "bad.txt", data: "QUJD" }) // "ABC" — valid
+    ).resolves.toBeDefined();
+
+    await expect(
+      client.uploadAttachment({ filename: "bad.txt", data: "QUJ" }) // 3 chars, not multiple of 4
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("accepts valid base64 with padding", async () => {
+    const registered = await createClient().register({ name: "alpha" });
+    const client = createClient(registered.secret);
+
+    // "Hello" in base64 = "SGVsbG8="
+    const result = await client.uploadAttachment({ filename: "hello.txt", data: "SGVsbG8=" });
+    expect(result.id).toBeDefined();
+    expect(result.size_bytes).toBe(5);
+  });
+
   it("recipient can download attachment linked to a message they received", async () => {
     const { alpha, beta, alphaClient, betaClient } = await registerPair();
     await alphaClient.pair({ code: beta.pairing_code });
@@ -22835,6 +22859,33 @@ describe("Hono API behavior", () => {
       } catch (err: any) {
         expect(err.status).toBe(400);
       }
+    });
+
+    it("accepts metadata with exactly 50 keys (boundary)", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const metadata: Record<string, unknown> = {};
+      for (let i = 0; i < 50; i++) metadata[`key${i}`] = "value";
+
+      const task = await alphaClient.createTask({
+        contact_id: beta.agent_id,
+        title: "boundary-50-keys",
+        metadata,
+      });
+      expect(task.id).toBeDefined();
+    });
+
+    it("accepts metadata with exactly 5 levels of nesting (boundary)", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      // Build exactly 5-level nested object (should pass)
+      let nested: Record<string, unknown> = { v: "leaf" };
+      for (let i = 0; i < 4; i++) nested = { level: nested };
+
+      const result = await client.updateMe({ metadata: nested });
+      expect(result.metadata).toBeDefined();
     });
 
     it("accepts valid shallow metadata", async () => {

@@ -130,30 +130,34 @@ app.get("/", async (c) => {
     return c.text("Too many requests. Please try again later.", 429);
   }
 
-  // Get contacts
+  // Get contacts (capped to prevent unbounded queries)
   const contactRows = await db
     .select()
     .from(contacts)
-    .where(or(eq(contacts.agentA, agentId), eq(contacts.agentB, agentId)));
+    .where(or(eq(contacts.agentA, agentId), eq(contacts.agentB, agentId)))
+    .limit(500);
 
   const contactIds = contactRows.map((r) => r.agentA === agentId ? r.agentB : r.agentA);
 
   const memberships = await db
     .select()
     .from(roomMembers)
-    .where(eq(roomMembers.agentId, agentId));
+    .where(eq(roomMembers.agentId, agentId))
+    .limit(200);
   const roomIds = memberships.map((membership) => membership.roomId);
   const roomRows = roomIds.length > 0
     ? await db
         .select()
         .from(rooms)
         .where(or(...roomIds.map((id) => eq(rooms.id, id))))
+        .limit(200)
     : [];
   const memberRows = roomIds.length > 0
     ? await db
         .select()
         .from(roomMembers)
         .where(or(...roomIds.map((id) => eq(roomMembers.roomId, id))))
+        .limit(2000)
     : [];
   const roomTaskRows = roomIds.length > 0
     ? await db
@@ -161,6 +165,7 @@ app.get("/", async (c) => {
         .from(tasks)
         .where(or(...roomIds.map((id) => eq(tasks.scope, `room:${id}`))))
         .orderBy(desc(tasks.createdAt))
+        .limit(500)
     : [];
 
   // Get recent messages

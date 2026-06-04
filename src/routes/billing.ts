@@ -192,6 +192,10 @@ app.post("/webhook", async (c) => {
       const session = event.data.object as Stripe.Checkout.Session;
       const workspaceId = session.metadata?.workspace_id;
       if (workspaceId && session.subscription) {
+        // Verify workspace exists before updating subscription
+        const [ws] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+        if (!ws) break;
+
         const subId = typeof session.subscription === "string" ? session.subscription : session.subscription.id;
         await db
           .update(subscriptions)
