@@ -1011,12 +1011,18 @@ app.post("/deliver-scheduled", async (c) => {
     )
     .limit(200);
 
+  // Batch-fetch blocked recipients and webhook agents to avoid N+1
+  const recipientIds = [...new Set(due.map((m) => m.toAgent))];
+  const blockedSet = recipientIds.length > 0 ? await getBlockedRecipients(agentId, recipientIds) : new Set<string>();
+  const recipientAgents = recipientIds.length > 0
+    ? await db.select().from(agents).where(inArray(agents.id, recipientIds))
+    : [];
+  const agentMap = new Map(recipientAgents.map((a) => [a.id, a]));
+
   let delivered = 0;
   let blocked = 0;
   for (const msg of due) {
-    // Check if recipient has since blocked the sender
-    const senderBlocked = await isBlocked(agentId, msg.toAgent);
-    if (senderBlocked) {
+    if (blockedSet.has(msg.toAgent)) {
       await db
         .update(messages)
         .set({ status: "deleted", deletedAt: now })
@@ -1031,11 +1037,7 @@ app.post("/deliver-scheduled", async (c) => {
       .set({ status: "delivered", deliveredAt: now })
       .where(eq(messages.id, msg.id));
 
-    const [recipient] = await db
-      .select()
-      .from(agents)
-      .where(eq(agents.id, msg.toAgent))
-      .limit(1);
+    const recipient = agentMap.get(msg.toAgent);
     if (recipient?.webhookUrl) {
       deliverWebhook(msg, recipient).catch(() => {});
     }
