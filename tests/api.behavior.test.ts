@@ -22530,6 +22530,113 @@ describe("Hono API behavior", () => {
       expect(teamTag?.count).toBe(1);
     });
   });
+
+  // ── SSRF protection: IPv4-mapped IPv6 bypass ───────────────────────
+  describe("SSRF protection", () => {
+    it("blocks IPv4-mapped IPv6 addresses pointing to IMDS", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ webhook_url: "http://[::ffff:169.254.169.254]/latest/meta-data/" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("blocks IPv4-mapped IPv6 addresses pointing to private ranges", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ webhook_url: "http://[::ffff:10.0.0.1]/hook" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("blocks IPv4-mapped IPv6 loopback", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ webhook_url: "http://[::ffff:127.0.0.1]/hook" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("allows legitimate hostnames starting with fd (not IPv6 unique-local)", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      // fdisk.example.com should NOT be blocked — it's a legitimate DNS name
+      const result = await client.updateMe({ webhook_url: "https://fdisk.example.com/hook" });
+      expect(result.webhook_url).toBe("https://fdisk.example.com/hook");
+    });
+
+    it("blocks actual IPv6 unique-local addresses", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ webhook_url: "http://[fd12::1]/hook" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+  });
+
+  // ── Reply type length validation ───────────────────────────────────
+  describe("reply validation", () => {
+    it("rejects reply with type exceeding 50 characters", async () => {
+      const { alpha, beta, alphaClient, betaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "question",
+        payload: { content: "hello?" },
+      });
+
+      try {
+        await betaClient.reply(sent.id, {
+          type: "x".repeat(51),
+          payload: { content: "response" },
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+  });
+
+  // ── Document body byte-length validation ───────────────────────────
+  describe("document body byte-length", () => {
+    it("rejects document body exceeding 1MB in UTF-8 bytes", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+      const beta = await createClient().register({ name: "beta" });
+      await client.pair({ code: beta.pairing_code });
+
+      // Use multi-byte characters: each CJK char is 3 bytes in UTF-8
+      // 350,000 CJK chars × 3 bytes = 1,050,000 bytes > 1MB, but only 350k .length
+      const multiByteBody = "漢".repeat(350_000);
+      try {
+        await client.createDocument(beta.agent_id, {
+          name: "test-doc",
+          body: multiByteBody,
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(413);
+      }
+    });
+  });
 });
 
 async function registerPair(): Promise<{

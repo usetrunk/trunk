@@ -1602,6 +1602,9 @@ app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
   if (!body.type || !body.payload) {
     return c.json({ error: "type and payload are required", code: "VALIDATION_ERROR" }, 400);
   }
+  if (body.type.length > 50) {
+    return c.json({ error: "type must be 50 characters or fewer", code: "VALIDATION_ERROR" }, 400);
+  }
   if (payloadSizeBytes(body.payload) > MAX_PAYLOAD_BYTES) {
     return c.json({ error: "payload exceeds 1MB limit", code: "VALIDATION_ERROR" }, 413);
   }
