@@ -472,6 +472,60 @@ describe("Slack adapter", () => {
     });
   });
 
+  describe("Trunk webhook signature verification", () => {
+    it("rejects requests with invalid signature when TRUNK_WEBHOOK_SECRET is set", async () => {
+      // Temporarily set the webhook secret
+      const origSecret = process.env.TRUNK_WEBHOOK_SECRET;
+      process.env.TRUNK_WEBHOOK_SECRET = "test-webhook-secret";
+
+      // Re-import to pick up the new env var
+      vi.resetModules();
+      const { handleTrunkWebhook: freshHandler } = await import("../adapters/slack/index.js");
+
+      const webhookReq = new Request("https://example.com/slack/trunk-webhook", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Trunk-Signature": "sha256=invalid_signature",
+        },
+        body: JSON.stringify({
+          event: "message.received",
+          message: { id: "msg-1", payload: { content: "test" }, threadId: "t-1" },
+        }),
+      });
+
+      const res = await freshHandler(webhookReq);
+      expect(res.status).toBe(401);
+      expect(await res.text()).toContain("Invalid Trunk webhook signature");
+
+      // Restore
+      process.env.TRUNK_WEBHOOK_SECRET = origSecret || "";
+      vi.resetModules();
+    });
+
+    it("rejects requests with missing signature when TRUNK_WEBHOOK_SECRET is set", async () => {
+      const origSecret = process.env.TRUNK_WEBHOOK_SECRET;
+      process.env.TRUNK_WEBHOOK_SECRET = "test-webhook-secret";
+      vi.resetModules();
+      const { handleTrunkWebhook: freshHandler } = await import("../adapters/slack/index.js");
+
+      const webhookReq = new Request("https://example.com/slack/trunk-webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "message.received",
+          message: { id: "msg-1", payload: { content: "test" }, threadId: "t-1" },
+        }),
+      });
+
+      const res = await freshHandler(webhookReq);
+      expect(res.status).toBe(401);
+
+      process.env.TRUNK_WEBHOOK_SECRET = origSecret || "";
+      vi.resetModules();
+    });
+  });
+
   // --- resolveSlackTarget ---
 
   describe("resolveSlackTarget", () => {

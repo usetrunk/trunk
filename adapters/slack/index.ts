@@ -13,6 +13,7 @@
 
 const TRUNK_RELAY = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
 const TRUNK_SECRET = process.env.TRUNK_AGENT_SECRET || "";
+const TRUNK_WEBHOOK_SECRET = process.env.TRUNK_WEBHOOK_SECRET || "";
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const SLACK_SIGNING = process.env.SLACK_SIGNING_SECRET || "";
 const SLACK_CHANNEL_AGENT_MAP = parseJsonMap(process.env.SLACK_CHANNEL_AGENT_MAP);
@@ -152,7 +153,17 @@ export async function handleSlackEvent(request: Request): Promise<Response> {
 // --- Trunk → Slack delivery (webhook handler) ---
 
 export async function handleTrunkWebhook(request: Request): Promise<Response> {
-  const body = await request.json() as {
+  const rawBody = await request.text();
+
+  // Verify Trunk webhook signature if a webhook secret is configured
+  if (TRUNK_WEBHOOK_SECRET) {
+    const signature = request.headers.get("X-Trunk-Signature") || "";
+    if (!signature || !await verifyTrunkSignature(rawBody, signature, TRUNK_WEBHOOK_SECRET)) {
+      return new Response("Invalid Trunk webhook signature", { status: 401 });
+    }
+  }
+
+  const body = JSON.parse(rawBody) as {
     event: string;
     message: { id: string; payload: { content?: string }; threadId: string };
   };
@@ -184,6 +195,31 @@ export function resolveSlackTarget(
 
 function slackKey(channel: string, threadTs: string): string {
   return `${channel}:${threadTs}`;
+}
+
+async function verifyTrunkSignature(
+  rawBody: string,
+  signature: string,
+  secret: string
+): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
+  const computed = `sha256=${Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+
+  // Constant-time comparison
+  if (computed.length !== signature.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < computed.length; i++) {
+    mismatch |= computed.charCodeAt(i) ^ signature.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
 function parseJsonMap(value: string | undefined): Record<string, string> {
