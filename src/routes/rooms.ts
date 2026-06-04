@@ -67,7 +67,7 @@ app.post("/join", async (c) => {
   const body = await c.req.json<{ code: string }>();
 
   if (!body.code || typeof body.code !== "string") return c.json({ error: "code is required", code: "MISSING_FIELD" }, 400);
-  if (body.code.length > 20) return c.json({ error: "Invalid code format", code: "INVALID_INPUT" }, 400);
+  if (body.code.length > 20 || !/^[A-Za-z0-9]+$/.test(body.code)) return c.json({ error: "Invalid code format", code: "INVALID_INPUT" }, 400);
 
   const [room] = await db
     .select()

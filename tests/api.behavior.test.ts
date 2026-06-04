@@ -22760,6 +22760,32 @@ describe("Hono API behavior", () => {
         expect(err.code).toBe("INVALID_INPUT");
       }
     });
+
+    it("rejects workspace join code with special characters", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.joinWorkspace({ code: "../../etc" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe("INVALID_INPUT");
+      }
+    });
+
+    it("rejects room join code with special characters", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.joinRoom({ code: "ABC!@#$" });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe("INVALID_INPUT");
+      }
+    });
   });
 
   // ── Document body byte-length validation ───────────────────────────
