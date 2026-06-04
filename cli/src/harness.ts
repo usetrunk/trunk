@@ -54,6 +54,10 @@ type AgentConfig = {
   model?: string;
   loop?: boolean;
   loopDelay?: number;
+  runtime?: "claude" | "goose";    // default: claude
+  gooseProvider?: string;           // e.g., "ollama" (only when runtime=goose)
+  gooseModel?: string;              // e.g., "qwen3:32b" (only when runtime=goose)
+  maxTurns?: number;                // max turns per run (goose only, default: 10)
 };
 
 type HarnessConfig = {
@@ -168,12 +172,35 @@ function writeAgentScript(config: AgentConfig): string {
   const escapedPrompt = fullPrompt.replace(/'/g, "'\\''");
   const escapedResume = `You are resuming work. Check your Trunk inbox for new messages and the project room for tasks. Pick up where you left off or claim the next available task. ${fullPrompt}`.replace(/'/g, "'\\''");
 
+  const runtime = config.runtime || "claude";
+  const gooseProvider = config.gooseProvider || "ollama";
+  const gooseModel = config.gooseModel || "qwen3:32b";
+  const maxTurns = config.maxTurns ?? 10;
+  const GOOSE_BIN = findBin("goose", ["/opt/homebrew/bin/goose", "/usr/local/bin/goose"]) || "goose";
+
+  // Build the runtime command
+  let runCommand: string;
+  if (runtime === "goose") {
+    runCommand = `${GOOSE_BIN} run \\
+      --provider '${gooseProvider}' \\
+      --model '${gooseModel}' \\
+      --no-profile \\
+      --no-session \\
+      --max-turns ${maxTurns} \\
+      --with-extension 'TRUNK_PROFILE=${config.profile} npx -y -p @usetrunk/cli trunk-mcp' \\
+      -t "$CURRENT_PROMPT"`;
+  } else {
+    runCommand = `${CLAUDE_BIN} \\
+      --dangerously-skip-permissions \\
+      --mcp-config '${mcpConfigPath}' \\
+      -p "$CURRENT_PROMPT"`;
+  }
+
   const scriptContent = `#!/bin/bash
 cd '${expandedCwd.replace(/'/g, "'\\''")}'
 export TRUNK_PROFILE='${config.profile}'
 
-# Unset API key so claude uses OAuth/subscription instead of API credits
-unset ANTHROPIC_API_KEY
+${runtime === "claude" ? "# Unset API key so claude uses OAuth/subscription instead of API credits\nunset ANTHROPIC_API_KEY" : "# Goose runtime — uses local model, no API credits"}
 
 PROMPT='${escapedPrompt}'
 RESUME_PROMPT='${escapedResume}'
@@ -190,17 +217,14 @@ ${loopEnabled ? "while true; do" : ""}
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "  [harness] Starting ${config.name} (${config.profile})"
+  echo "  [harness] runtime: ${runtime}${runtime === "goose" ? ` (${gooseProvider}/${gooseModel})` : ""}"
   echo "  [harness] cwd: ${expandedCwd}"
   echo "  [harness] $(date)"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
 
-  # Run directly on the TTY (no pipes — pipes cause stdout buffering)
-  # Fresh session each loop — task state lives in Trunk, not Claude context
-  ${CLAUDE_BIN} \\
-    --dangerously-skip-permissions \\
-    --mcp-config '${mcpConfigPath}' \\
-    -p "$CURRENT_PROMPT"
+  # Fresh session each loop — task state lives in Trunk, not agent context
+  ${runCommand}
 
   EXIT_CODE=$?
   echo ""
