@@ -5,7 +5,7 @@ import { eq, desc, or, and, gte } from "drizzle-orm";
 import { authMiddleware, generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
-import { requireValidUUIDs } from "../lib/errors.js";
+import { requireValidUUIDs, validateMetadata } from "../lib/errors.js";
 import { canMessage } from "../lib/workspace.js";
 import { validateWebhookUrl } from "../lib/ssrf.js";
 import type { AgentVariables } from "../lib/types.js";
@@ -151,8 +151,9 @@ app.patch("/me", authMiddleware, async (c) => {
       }
     }
   }
-  if (body.metadata !== undefined && JSON.stringify(body.metadata).length > 10000) {
-    return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
+  if (body.metadata !== undefined) {
+    const metaErr = validateMetadata(body.metadata);
+    if (metaErr) return c.json({ error: metaErr, code: "INVALID_FIELD" }, 400);
   }
 
   if (body.role !== undefined || body.projects !== undefined || body.metadata !== undefined) {

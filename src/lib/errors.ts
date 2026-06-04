@@ -68,6 +68,42 @@ export function requireValidUUIDs(...paramNames: string[]): MiddlewareHandler {
   };
 }
 
+const MAX_METADATA_BYTES = 10_000;
+const MAX_METADATA_DEPTH = 5;
+const MAX_METADATA_KEYS = 50;
+
+function jsonDepth(value: unknown, current = 0): number {
+  if (current > MAX_METADATA_DEPTH) return current;
+  if (typeof value !== "object" || value === null) return current;
+  let max = current + 1;
+  for (const v of Object.values(value)) {
+    max = Math.max(max, jsonDepth(v, current + 1));
+    if (max > MAX_METADATA_DEPTH) return max;
+  }
+  return max;
+}
+
+/**
+ * Validate metadata: must be a plain object, within size/depth/key limits.
+ * Returns null if valid, or an error string if invalid.
+ */
+export function validateMetadata(metadata: unknown): string | null {
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+    return "metadata must be a plain object";
+  }
+  const keys = Object.keys(metadata);
+  if (keys.length > MAX_METADATA_KEYS) {
+    return `metadata must have ${MAX_METADATA_KEYS} or fewer keys`;
+  }
+  if (jsonDepth(metadata) > MAX_METADATA_DEPTH) {
+    return `metadata nesting must not exceed ${MAX_METADATA_DEPTH} levels`;
+  }
+  if (JSON.stringify(metadata).length > MAX_METADATA_BYTES) {
+    return "metadata must not exceed 10KB";
+  }
+  return null;
+}
+
 /** Return a structured JSON error response */
 export function apiError(
   c: Context,

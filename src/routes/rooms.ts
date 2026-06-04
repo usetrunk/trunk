@@ -6,7 +6,7 @@ import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
-import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
+import { isValidUUID, requireValidUUIDs, validateMetadata } from "../lib/errors.js";
 import { isPrivateHostname } from "../lib/ssrf.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -29,8 +29,9 @@ app.post("/", async (c) => {
   if (!body.name) return c.json({ error: "name is required", code: "MISSING_FIELD" }, 400);
   if (!body.name.trim()) return c.json({ error: "name must not be blank", code: "INVALID_FIELD" }, 400);
   if (body.name.length > 100) return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
-  if (body.metadata && JSON.stringify(body.metadata).length > 10000) {
-    return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
+  if (body.metadata) {
+    const metaErr = validateMetadata(body.metadata);
+    if (metaErr) return c.json({ error: metaErr, code: "INVALID_FIELD" }, 400);
   }
 
   const pairingCode = generatePairingCode();
@@ -203,8 +204,9 @@ app.patch("/:roomId", requireValidUUIDs("roomId"), async (c) => {
   if (body.name && body.name.length > 100) {
     return c.json({ error: "name must be 100 characters or fewer", code: "INVALID_FIELD" }, 400);
   }
-  if (body.metadata && JSON.stringify(body.metadata).length > 10000) {
-    return c.json({ error: "metadata must not exceed 10KB", code: "INVALID_FIELD" }, 400);
+  if (body.metadata) {
+    const metaErr = validateMetadata(body.metadata);
+    if (metaErr) return c.json({ error: metaErr, code: "INVALID_FIELD" }, 400);
   }
 
   // Verify creator/admin role

@@ -22788,6 +22788,66 @@ describe("Hono API behavior", () => {
     });
   });
 
+  // ── Metadata depth/type validation ──────────────────────────────────
+  describe("metadata validation", () => {
+    it("rejects deeply nested metadata on room create", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      // Build 6-level nested object (exceeds 5-level cap)
+      let nested: Record<string, unknown> = { v: "leaf" };
+      for (let i = 0; i < 6; i++) nested = { level: nested };
+
+      try {
+        await client.createRoom({ name: "deep-room", metadata: nested });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("rejects array as metadata on agent update", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      try {
+        await client.updateMe({ metadata: [1, 2, 3] as unknown as Record<string, unknown> });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("rejects metadata with more than 50 keys on task create", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+
+      const metadata: Record<string, unknown> = {};
+      for (let i = 0; i < 51; i++) metadata[`key${i}`] = "value";
+
+      try {
+        await alphaClient.createTask({
+          contact_id: beta.agent_id,
+          title: "test",
+          metadata,
+        });
+        expect.unreachable("should have thrown");
+      } catch (err: any) {
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it("accepts valid shallow metadata", async () => {
+      const reg = await createClient().register({ name: "alpha" });
+      const client = createClient(reg.secret);
+
+      const result = await client.updateMe({
+        metadata: { role: "developer", team: "platform" },
+      });
+      expect(result.metadata).toEqual({ role: "developer", team: "platform" });
+    });
+  });
+
   // ── Document body byte-length validation ───────────────────────────
   describe("document body byte-length", () => {
     it("rejects document body exceeding 1MB in UTF-8 bytes", async () => {

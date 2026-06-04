@@ -8,7 +8,7 @@ import { contactScope, verifyRoomAccess, resolveScopeAccess } from "../lib/conte
 import { requireWorkspaceMember, requireRoomMember } from "../lib/scope-middleware.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
-import { isValidUUID, requireValidUUIDs } from "../lib/errors.js";
+import { isValidUUID, requireValidUUIDs, validateMetadata } from "../lib/errors.js";
 import { fireRoomTaskWebhooks } from "../lib/room-webhook.js";
 import type { AgentVariables } from "../lib/types.js";
 
@@ -128,8 +128,9 @@ app.post("/", async (c) => {
   if (body.priority && !isValidPriority(body.priority)) {
     return c.json({ error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(", ")}`, code: "INVALID_FIELD" }, 400);
   }
-  if (body.metadata && JSON.stringify(body.metadata).length > 10000) {
-    return c.json({ error: "metadata exceeds 10KB limit", code: "VALIDATION_ERROR" }, 400);
+  if (body.metadata) {
+    const metaErr = validateMetadata(body.metadata);
+    if (metaErr) return c.json({ error: metaErr, code: "VALIDATION_ERROR" }, 400);
   }
   if (body.sequence !== undefined && (typeof body.sequence !== "number" || !Number.isFinite(body.sequence) || body.sequence < 0 || body.sequence > 1_000_000)) {
     return c.json({ error: "sequence must be a finite number between 0 and 1000000", code: "INVALID_FIELD" }, 400);
@@ -426,8 +427,9 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
   if (body.owner !== undefined && body.owner !== null && body.owner !== "" && !isValidUUID(body.owner)) {
     return c.json({ error: "Invalid owner format", code: "INVALID_INPUT" }, 400);
   }
-  if (body.metadata !== undefined && JSON.stringify(body.metadata).length > 10000) {
-    return c.json({ error: "metadata exceeds 10KB limit", code: "VALIDATION_ERROR" }, 400);
+  if (body.metadata !== undefined) {
+    const metaErr = validateMetadata(body.metadata);
+    if (metaErr) return c.json({ error: metaErr, code: "VALIDATION_ERROR" }, 400);
   }
   if (body.sequence !== undefined && body.sequence !== null && (typeof body.sequence !== "number" || !Number.isFinite(body.sequence) || body.sequence < 0 || body.sequence > 1_000_000)) {
     return c.json({ error: "sequence must be a finite number between 0 and 1000000", code: "INVALID_FIELD" }, 400);
