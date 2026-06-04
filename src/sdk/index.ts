@@ -676,6 +676,30 @@ export type MessageAttachmentsResponse = {
   attachments: AttachmentResponse[];
 };
 
+export type CreateRoomWebhookRequest = {
+  url: string;
+  secret?: string;
+  filter_group?: string;
+  filter_priority?: string;
+  filter_status?: string;
+};
+
+export type RoomWebhookResponse = {
+  id: string;
+  room_id: string;
+  url: string;
+  filter_group: string | null;
+  filter_priority: string | null;
+  filter_status: string | null;
+  active: boolean;
+  created_by: string;
+  created_at: string | Date;
+};
+
+export type RoomWebhookListResponse = {
+  webhooks: RoomWebhookResponse[];
+};
+
 export type HealthResponse = {
   status: "ok";
   version: string;
@@ -1433,6 +1457,20 @@ export class TrunkClient {
 
   deleteAttachment(attachmentId: string): Promise<{ ok: true }> {
     return this.request(`/attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE" });
+  }
+
+  // --- Room Webhooks ---
+
+  createRoomWebhook(roomId: string, input: CreateRoomWebhookRequest): Promise<RoomWebhookResponse> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/webhooks`, { method: "POST", body: input });
+  }
+
+  listRoomWebhooks(roomId: string): Promise<RoomWebhookListResponse> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/webhooks`);
+  }
+
+  deleteRoomWebhook(roomId: string, webhookId: string): Promise<{ ok: true; deleted_id: string }> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/webhooks/${encodeURIComponent(webhookId)}`, { method: "DELETE" });
   }
 
   private async request<T>(

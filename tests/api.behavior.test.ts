@@ -2842,6 +2842,92 @@ describe("Hono API behavior", () => {
     expect(reCreateRes.status).toBe(201);
   });
 
+  // --- Room webhook SDK client tests ---
+
+  it("SDK: createRoomWebhook creates a webhook via SDK client", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "sdk-wh-create" });
+    const client = createClient(alpha.secret);
+
+    const room = await client.createRoom({ name: "SDK Webhook Room" });
+    const webhook = await client.createRoomWebhook(room.id, {
+      url: "https://hooks.example.com/sdk-create",
+      filter_priority: "high",
+    });
+
+    expect(webhook.id).toBeDefined();
+    expect(webhook.room_id).toBe(room.id);
+    expect(webhook.url).toBe("https://hooks.example.com/sdk-create");
+    expect(webhook.filter_priority).toBe("high");
+    expect(webhook.active).toBe(true);
+    expect(webhook.created_by).toBe(alpha.agent_id);
+  });
+
+  it("SDK: listRoomWebhooks returns all webhooks for a room", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "sdk-wh-list" });
+    const client = createClient(alpha.secret);
+
+    const room = await client.createRoom({ name: "SDK List Room" });
+    await client.createRoomWebhook(room.id, { url: "https://hooks.example.com/sdk-a" });
+    await client.createRoomWebhook(room.id, { url: "https://hooks.example.com/sdk-b" });
+
+    const result = await client.listRoomWebhooks(room.id);
+    expect(result.webhooks).toHaveLength(2);
+    expect(result.webhooks.map((w) => w.url).sort()).toEqual([
+      "https://hooks.example.com/sdk-a",
+      "https://hooks.example.com/sdk-b",
+    ]);
+  });
+
+  it("SDK: deleteRoomWebhook removes a webhook", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "sdk-wh-del" });
+    const client = createClient(alpha.secret);
+
+    const room = await client.createRoom({ name: "SDK Delete Room" });
+    const webhook = await client.createRoomWebhook(room.id, { url: "https://hooks.example.com/sdk-del" });
+
+    const deleteResult = await client.deleteRoomWebhook(room.id, webhook.id);
+    expect(deleteResult.ok).toBe(true);
+    expect(deleteResult.deleted_id).toBe(webhook.id);
+
+    const list = await client.listRoomWebhooks(room.id);
+    expect(list.webhooks).toHaveLength(0);
+  });
+
+  it("SDK: createRoomWebhook rejects non-member", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "sdk-wh-noauth-a" });
+    const beta = await anon.register({ name: "sdk-wh-noauth-b" });
+    const clientA = createClient(alpha.secret);
+    const clientB = createClient(beta.secret);
+
+    const room = await clientA.createRoom({ name: "SDK Auth Room" });
+
+    await expect(
+      clientB.createRoomWebhook(room.id, { url: "https://hooks.example.com/unauthorized" })
+    ).rejects.toThrow();
+  });
+
+  it("SDK: createRoomWebhook with all filter options", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "sdk-wh-filters" });
+    const client = createClient(alpha.secret);
+
+    const room = await client.createRoom({ name: "SDK Filter Room" });
+    const webhook = await client.createRoomWebhook(room.id, {
+      url: "https://hooks.example.com/sdk-filtered",
+      filter_group: "backend",
+      filter_priority: "critical",
+      filter_status: "open",
+    });
+
+    expect(webhook.filter_group).toBe("backend");
+    expect(webhook.filter_priority).toBe("critical");
+    expect(webhook.filter_status).toBe("open");
+  });
+
   // --- Room messaging fan-out tests ---
 
   it("sends a message to room:<id> and fans out to all other members", async () => {
