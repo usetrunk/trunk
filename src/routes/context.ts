@@ -157,6 +157,9 @@ app.get("/workspace/:workspaceId/facts", requireValidUUIDs("workspaceId"), requi
 
 app.get("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), requireWorkspaceMember(), async (c) => {
   const agentId = c.get("agentId");
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
   const workspaceId = c.req.param("workspaceId");
   const key = c.req.param("key");
 
