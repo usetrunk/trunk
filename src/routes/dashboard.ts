@@ -630,11 +630,25 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     }
   }
 
-  // Build Mermaid DAG for task visualization
+  // Build Mermaid DAG — only active work (not done) + their direct dependencies
   const taskIdSet = new Set(roomTasks.map(t => t.id));
+  const taskById = new Map(roomTasks.map(t => [t.id, t]));
   let mermaidDef = "";
-  if (roomTasks.length > 0) {
-    // Sanitize title for mermaid (escape quotes, brackets)
+
+  // Active tasks = everything not done
+  const activeTasks = roomTasks.filter(t => t.status !== "done");
+  // Also include done tasks that an active task depends on (immediate deps only)
+  const neededDoneIds = new Set<string>();
+  for (const t of activeTasks) {
+    for (const dep of ((t.dependsOn as string[]) || [])) {
+      const depTask = taskById.get(dep);
+      if (depTask && depTask.status === "done") neededDoneIds.add(dep);
+    }
+  }
+  const dagTasks = [...activeTasks, ...roomTasks.filter(t => neededDoneIds.has(t.id))];
+  const dagTaskIds = new Set(dagTasks.map(t => t.id));
+
+  if (dagTasks.length > 0) {
     const sanitize = (s: string) => s.replace(/["\[\](){}|<>#&]/g, " ").replace(/\s+/g, " ").trim();
     const shortId = (id: string) => `t_${id.replace(/-/g, "_")}`;
     const statusColor: Record<string, string> = {
@@ -644,35 +658,41 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
       "open": ":::open",
     };
 
-    const lines: string[] = ["flowchart LR"];
-    // Class definitions for status colors
-    lines.push("  classDef done fill:#1a2e1a,stroke:#7ee787,color:#7ee787");
-    lines.push("  classDef active fill:#2a2a10,stroke:#d5ff5f,color:#d5ff5f");
-    lines.push("  classDef blocked fill:#2e1a1a,stroke:#ff7b72,color:#ff7b72");
-    lines.push("  classDef open fill:#1a1a18,stroke:#8d8a7d,color:#8d8a7d");
+    const lines: string[] = ["flowchart TD"];
+    lines.push("  classDef done fill:#1a2e1a,stroke:#7ee787,color:#7ee787,font-size:14px");
+    lines.push("  classDef active fill:#2a2a10,stroke:#d5ff5f,color:#d5ff5f,font-size:14px");
+    lines.push("  classDef blocked fill:#2e1a1a,stroke:#ff7b72,color:#ff7b72,font-size:14px");
+    lines.push("  classDef open fill:#1a1a18,stroke:#8d8a7d,color:#8d8a7d,font-size:14px");
 
-    // Group into subgraphs by group
-    const rendered = new Set<string>();
-    for (const [group, gTasks] of groupMap.entries()) {
+    // Group active tasks by group for subgraphs
+    const dagGroupMap = new Map<string, typeof dagTasks>();
+    const dagUngrouped: typeof dagTasks = [];
+    for (const t of dagTasks) {
+      if (t.group) {
+        if (!dagGroupMap.has(t.group)) dagGroupMap.set(t.group, []);
+        dagGroupMap.get(t.group)!.push(t);
+      } else {
+        dagUngrouped.push(t);
+      }
+    }
+
+    for (const [group, gTasks] of dagGroupMap.entries()) {
       lines.push(`  subgraph ${sanitize(group)}`);
       for (const t of gTasks) {
-        const label = sanitize(t.title).slice(0, 40);
+        const label = sanitize(t.title).slice(0, 50);
         lines.push(`    ${shortId(t.id)}["${label}"]${statusColor[t.status] || ":::open"}`);
-        rendered.add(t.id);
       }
       lines.push("  end");
     }
-    // Ungrouped tasks
-    for (const t of ungrouped) {
-      const label = sanitize(t.title).slice(0, 40);
+    for (const t of dagUngrouped) {
+      const label = sanitize(t.title).slice(0, 50);
       lines.push(`  ${shortId(t.id)}["${label}"]${statusColor[t.status] || ":::open"}`);
-      rendered.add(t.id);
     }
-    // Edges from dependencies
-    for (const t of roomTasks) {
+    // Edges — only between tasks in the DAG
+    for (const t of dagTasks) {
       const deps = (t.dependsOn as string[]) || [];
       for (const dep of deps) {
-        if (taskIdSet.has(dep)) {
+        if (dagTaskIds.has(dep)) {
           lines.push(`  ${shortId(dep)} --> ${shortId(t.id)}`);
         }
       }
@@ -715,7 +735,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
         secondaryColor: '#1a1a2e',
         tertiaryColor: '#2e1a1a',
         fontFamily: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif',
-        fontSize: '13px',
+        fontSize: '16px',
         nodeBorder: '#282820',
         clusterBkg: '#0d0d0b',
         clusterBorder: '#282820',
@@ -731,7 +751,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
       const inner = viewport.querySelector('.dag-inner');
       if (!inner) return;
 
-      let scale = 0.6, panX = 0, panY = 0;
+      let scale = 1.0, panX = 0, panY = 0;
       let dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
 
       function apply() {
@@ -801,7 +821,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
 
       // Double-click to fit
       viewport.addEventListener('dblclick', () => {
-        scale = 0.6; panX = 0; panY = 0; apply();
+        scale = 1.0; panX = 0; panY = 0; apply();
       });
 
       // Zoom buttons
@@ -812,7 +832,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
         scale = Math.max(0.1, scale * 0.7); apply();
       });
       document.getElementById('dag-zoom-fit')?.addEventListener('click', () => {
-        scale = 0.6; panX = 0; panY = 0; apply();
+        scale = 1.0; panX = 0; panY = 0; apply();
       });
     });
   </script>
@@ -926,15 +946,15 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
               ${mermaidDef ? html`
                 <div style="border:1px solid var(--line);border-radius:8px;background:rgba(18,18,15,0.92);margin-bottom:1rem;overflow:hidden;">
                   <div style="display:flex;align-items:center;justify-content:space-between;padding:0.6rem 0.85rem;border-bottom:1px solid var(--line);background:var(--panel);">
-                    <span style="font-size:0.82rem;font-weight:700;color:var(--accent-2);text-transform:uppercase;letter-spacing:0.04em;">Dependency graph</span>
+                    <span style="font-size:0.82rem;font-weight:700;color:var(--accent-2);text-transform:uppercase;letter-spacing:0.04em;">Active work <span style="color:var(--muted);font-weight:400;text-transform:none;">${dagTasks.length} tasks</span></span>
                     <div style="display:flex;align-items:center;gap:0.4rem;">
-                      <span id="dag-zoom" style="font-size:0.72rem;color:var(--muted);min-width:2.5rem;text-align:right;">60%</span>
+                      <span id="dag-zoom" style="font-size:0.72rem;color:var(--muted);min-width:2.5rem;text-align:right;">100%</span>
                       <button id="dag-zoom-out" style="width:26px;height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text);cursor:pointer;font-size:0.9rem;display:grid;place-items:center;">−</button>
                       <button id="dag-zoom-in" style="width:26px;height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text);cursor:pointer;font-size:0.9rem;display:grid;place-items:center;">+</button>
                       <button id="dag-zoom-fit" style="height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--muted);cursor:pointer;font-size:0.68rem;padding:0 0.5rem;">fit</button>
                     </div>
                   </div>
-                  <div id="dag-viewport" style="height:500px;overflow:hidden;cursor:grab;position:relative;background:#0a0a09;">
+                  <div id="dag-viewport" style="height:600px;overflow:hidden;cursor:grab;position:relative;background:#0a0a09;">
                     <div class="dag-inner" style="transform-origin:0 0;will-change:transform;">
                       <pre class="mermaid">${raw(mermaidDef)}</pre>
                     </div>
