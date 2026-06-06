@@ -1,1 +1,1 @@
-ALTER TABLE "shared_facts" ADD COLUMN "version" integer DEFAULT 1 NOT NULL;
+ALTER TABLE "shared_facts" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1 NOT NULL;
