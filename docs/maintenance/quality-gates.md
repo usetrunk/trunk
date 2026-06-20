@@ -59,7 +59,7 @@ Run:
 npm run verify:mcp
 ```
 
-The check fails when a tool is missing from a declared surface, registered on an undeclared surface, duplicated, or has a different top-level input schema across shared surfaces.
+The check fails when a tool is missing from a declared surface, registered on an undeclared surface, duplicated, has a different top-level input schema across shared surfaces, or gives the same shared hosted tool conflicting descriptions in `src/mcp/server.ts` and `worker/src/mcp.ts`. CLI descriptions may mention local credential storage or push behavior when that surface behaves differently.
 
 When adding a tool:
 

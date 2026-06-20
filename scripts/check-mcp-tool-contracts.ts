@@ -157,6 +157,28 @@ function extractToolSchemaKeys(file: string): Map<string, string[]> {
   return result;
 }
 
+function extractStringLiteral(source: string): string | null {
+  const trimmed = source.trim();
+  const match = trimmed.match(/^(["'`])([\s\S]*)\1$/);
+  return match ? match[2].replace(/\s+/g, " ").trim() : null;
+}
+
+function extractToolDescriptions(file: string): Map<string, string> {
+  const source = readFileSync(file, "utf8");
+  const result = new Map<string, string>();
+
+  for (const block of extractToolBlocks(source)) {
+    const args = splitTopLevelArgs(block);
+    const name = extractStringLiteral(args[0] ?? "");
+    const description = extractStringLiteral(args[1] ?? "");
+    if (!name || !description) continue;
+
+    result.set(name, description);
+  }
+
+  return result;
+}
+
 function sorted(values: Iterable<string>): string[] {
   return [...values].sort((a, b) => a.localeCompare(b));
 }
@@ -185,11 +207,13 @@ for (const contract of MCP_TOOL_CONTRACTS) {
 
 const issues: Issue[] = [];
 const schemaKeysBySurface = new Map<McpSurface, Map<string, string[]>>();
+const descriptionsBySurface = new Map<McpSurface, Map<string, string>>();
 for (const [surface, file] of Object.entries(SURFACE_FILES) as [McpSurface, string][]) {
   const actualNames = extractToolNames(file);
   const actual = new Set(actualNames);
   const expected = expectedBySurface.get(surface) ?? new Set<string>();
   schemaKeysBySurface.set(surface, extractToolSchemaKeys(file));
+  descriptionsBySurface.set(surface, extractToolDescriptions(file));
 
   for (const name of sorted(actual)) {
     if (!expected.has(name)) {
@@ -222,6 +246,21 @@ for (const contract of MCP_TOOL_CONTRACTS) {
       .map(([fingerprint, surfaces]) => `${surfaces.join("+")}: ${fingerprint || "(no input schema)"}`)
       .join("; ");
     issues.push({ surface: contract.surfaces[0], tool: contract.name, message: `input schema keys drift across surfaces: ${details}` });
+  }
+
+  const descriptionSets = new Map<string, McpSurface[]>();
+  for (const surface of contract.surfaces) {
+    if (surface === "cli") continue;
+    const description = descriptionsBySurface.get(surface)?.get(contract.name);
+    if (!description) continue;
+    descriptionSets.set(description, [...(descriptionSets.get(description) ?? []), surface]);
+  }
+
+  if (descriptionSets.size > 1) {
+    const details = [...descriptionSets.entries()]
+      .map(([description, surfaces]) => `${surfaces.join("+")}: ${description || "(no description)"}`)
+      .join("; ");
+    issues.push({ surface: contract.surfaces[0], tool: contract.name, message: `description drifts across surfaces: ${details}` });
   }
 }
 

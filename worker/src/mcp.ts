@@ -112,7 +112,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_inbox",
-    "Check for new messages. Returns pending (unread) messages with cursor pagination. Default limit is 20 to keep context windows small.",
+    "Check for new messages. Returns pending (unread) messages with cursor-based pagination. Default limit is 20 to keep context windows small.",
     {
       secret: z.string().describe("Your agent secret"),
       limit: z.number().optional().describe("Max messages to return (default 20, max 100)"),
@@ -134,7 +134,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_inbox_stats",
-    "Get inbox summary — unread count, total messages, breakdown by type and status.",
+    "Get inbox summary — unread count, total messages, breakdown by type and status. Quick way to triage without fetching all messages.",
     { secret: z.string().describe("Your agent secret") },
     async ({ secret }) => {
       const result = await relay("/messages/inbox/stats", { secret });
@@ -337,7 +337,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_edit_message",
-    "Edit a sent message's payload. Only the original sender can edit within 15 minutes. Tracks edit history.",
+    "Edit a sent message's payload. Only the original sender can edit within 15 minutes of sending. Tracks edit history.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to edit"),
@@ -364,7 +364,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_delete_message",
-    "Soft-delete a sent message. Only the original sender can delete.",
+    "Soft-delete a sent message. Only the original sender can delete. The message remains in the database with a deletedAt timestamp but is excluded from inbox, thread, and search results.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to delete"),
@@ -377,7 +377,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_purge_messages",
-    "Purge messages older than the specified number of days. Defaults to 90 days.",
+    "Purge messages older than the specified number of days. Permanently deletes expired messages for the authenticated agent. Defaults to 90 days.",
     {
       secret: z.string().describe("Your agent secret"),
       days: z.number().optional().describe("Number of days to retain (default: 90)"),
@@ -433,7 +433,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_forward",
-    "Forward a message to another contact. Preserves the original type and payload with provenance metadata.",
+    "Forward a message to another contact. Preserves the original message type and payload, adds provenance metadata (forwarded_from, original_message_id). Optionally include a comment.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to forward"),
@@ -489,7 +489,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_pin",
-    "Pin a message in a thread. Surfaces key decisions and information.",
+    "Pin a message in a thread. Pinned messages surface key decisions and information. Both sender and recipient can pin.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to pin"),
@@ -515,7 +515,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_thread_pins",
-    "List all pinned messages in a thread. Quickly find key decisions and information.",
+    "List all pinned messages in a thread. Useful for quickly finding key decisions and information.",
     {
       secret: z.string().describe("Your agent secret"),
       thread_id: z.string().describe("Thread ID"),
@@ -845,7 +845,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_config",
-    "Update your agent profile on the server. Set name, role, projects, or arbitrary metadata without re-registering.",
+    "Update your agent profile. Set name, role, projects, or arbitrary metadata without re-registering.",
     {
       secret: z.string().describe("Your agent secret"),
       name: z.string().optional().describe("Display name for your agent"),
@@ -866,7 +866,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_profile",
-    "Look up another agent's public profile (role, projects, metadata). They must be a contact or workspace co-member.",
+    "Look up another agent's public profile. They must be a contact or workspace co-member.",
     {
       secret: z.string().describe("Your agent secret"),
       agent_id: z.string().describe("The agent ID to look up"),
@@ -941,7 +941,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_document",
-    "Manage shared documents with a contact or room. Actions: create, list, get, update, delete. Provide contact_id or room_id.",
+    "Manage shared documents with a contact, room, or workspace. Actions: create, list, get, update, delete. Provide contact_id, room_id, or workspace_id.",
     {
       secret: z.string().describe("Your agent secret"),
       action: z.enum(["create", "list", "get", "update", "delete"]).describe("Action to perform"),
@@ -1000,7 +1000,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_document_versions",
-    "List version history or get a specific version of a shared document. Works with contact or room-scoped docs.",
+    "List version history or get a specific version of a shared document. Works with contact, room, or workspace-scoped documents.",
     {
       secret: z.string().describe("Your agent secret"),
       contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped docs)"),
@@ -1039,7 +1039,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_fact",
-    "Manage shared facts (key-value context) with a contact or room. Actions: list, get, put, delete. Provide contact_id or room_id.",
+    "Manage shared facts (key-value context) with a contact, room, or workspace. Actions: list, get, put, delete. Provide contact_id, room_id, or workspace_id.",
     {
       secret: z.string().describe("Your agent secret"),
       action: z.enum(["list", "get", "put", "delete"]).describe("Action to perform"),
@@ -1166,7 +1166,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_mark_read",
-    "Mark a message as read without processing/acking it.",
+    "Mark a message as read without processing/acking it. The message stays in your inbox but the sender knows you've seen it.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to mark as read"),
@@ -1179,7 +1179,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_set_status",
-    "Set your custom status text visible to workspace co-members. Pass null to clear.",
+    "Set your custom status text visible to workspace co-members in presence. Pass null to clear.",
     {
       secret: z.string().describe("Your agent secret"),
       text: z.string().nullable().describe("Status text or null to clear"),
@@ -1192,7 +1192,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_contact_note",
-    "Get your private note about a contact.",
+    "Get your private note about a contact. Returns null content if no note exists.",
     {
       secret: z.string().describe("Your agent secret"),
       contact_id: z.string().describe("Agent ID of the contact"),
@@ -1232,7 +1232,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_block_contact",
-    "Block an agent from sending you messages. Blocking is one-directional.",
+    "Block an agent from sending you messages. Blocking is one-directional — you can still send to them.",
     {
       secret: z.string().describe("Your agent secret"),
       agent_id: z.string().describe("ID of the agent to block"),
@@ -1271,7 +1271,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_notification_prefs",
-    "Get or set notification preferences for a contact. Omit muted/urgency_filter to just read current prefs.",
+    "Get or set notification preferences for a contact. Use to mute a noisy contact or filter by urgency.",
     {
       secret: z.string().describe("Your agent secret"),
       contact_id: z.string().describe("Agent ID of the contact"),
@@ -1298,7 +1298,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_tag_contact",
-    "Add a tag to a contact for organization.",
+    "Add a tag to a contact for organization. Tags are private to you. Use to group contacts (e.g., 'team', 'vendor', 'priority').",
     {
       secret: z.string().describe("Your agent secret"),
       contact_id: z.string().describe("Agent ID of the contact"),
@@ -1326,7 +1326,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_contact_tags",
-    "List tags for a contact, or list all your tags.",
+    "List all tags for a specific contact, or list contacts by tag.",
     {
       secret: z.string().describe("Your agent secret"),
       contact_id: z.string().optional().describe("Agent ID to list tags for (omit for all tags)"),
@@ -1348,7 +1348,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_label_message",
-    "Add a label/tag to a message for organization. Labels are private to the agent.",
+    "Add a label/tag to a message for organization. Labels are private to the agent. Good for marking messages as 'important', 'action-required', 'reviewed', etc.",
     {
       secret: z.string().describe("Your agent secret"),
       message_id: z.string().describe("ID of the message to label"),
@@ -1449,7 +1449,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_list_templates",
-    "List all message templates for your agent.",
+    "List all message templates for your agent. Templates are reusable message structures.",
     {
       secret: z.string().describe("Your agent secret"),
     },
@@ -1461,7 +1461,7 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_create_template",
-    "Create a reusable message template.",
+    "Create a reusable message template. Use templates to standardize common message types.",
     {
       secret: z.string().describe("Your agent secret"),
       name: z.string().describe("Unique name for the template"),
