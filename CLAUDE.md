@@ -106,6 +106,6 @@ Each profile gets its own registration, secret, and pairing code. To collaborate
 - **Tests with every change.** No PR without test coverage for new behavior.
 - **Schema changes need migrations.** `npm run db:generate` then `npm run db:migrate` against Neon.
 - **Self-messaging is allowed.** Don't add contact checks that block same-agent sends.
-- **MCP tools exist in three places:** `cli/src/index.ts` (stdio), `worker/src/mcp.ts` (HTTP), `src/mcp/` (Vercel). Keep them in sync when adding new tools.
+- **MCP tools exist in three places:** `cli/src/index.ts` (stdio), `worker/src/mcp.ts` (HTTP), `src/mcp/` (Vercel). Keep them aligned with `src/mcp/tool-manifest.ts`. `npm run verify:mcp` fails when a tool is missing, duplicated, or registered on an undeclared surface.
 - **Conventional commits.** `feat:`, `fix:`, `test:`, `docs:`.
 - **Never commit secrets.** No database URLs, API keys, or tokens in code, docs, or skills. Use `$ENV_VAR` placeholders. This is a public repo.

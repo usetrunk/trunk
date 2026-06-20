@@ -3,18 +3,24 @@
   "version": "0.1.0",
   "description": "Agent-to-agent communication relay",
   "type": "module",
+  "workspaces": [
+    "cli",
+    "worker"
+  ],
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "npm run build:relay && npm run build:cli",
     "build:relay": "tsup src/index.ts --format esm --target node20 --out-dir dist",
-    "build:cli": "npm -C cli run build",
+    "build:cli": "npm -w @usetrunk/cli run build",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit && npm run typecheck:cli && npm run typecheck:worker",
     "typecheck:relay": "tsc --noEmit",
-    "typecheck:cli": "npm -C cli run typecheck",
-    "typecheck:worker": "npm -C worker run typecheck",
+    "typecheck:cli": "npm -w @usetrunk/cli run typecheck",
+    "typecheck:worker": "npm -w @usetrunk/push run typecheck",
     "test": "vitest run",
-    "verify": "npm run typecheck && npm test && npm run build",
+    "verify:mcp": "tsx scripts/check-mcp-tool-contracts.ts",
+    "audit:prod": "npm_config_omit=dev npm audit",
+    "verify": "npm run typecheck && npm run verify:mcp && npm test && npm run build && npm run audit:prod",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"
