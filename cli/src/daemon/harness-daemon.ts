@@ -328,15 +328,16 @@ function connectAgent(agentConfig: AgentConfig, allAgents: AgentConfig[]) {
     console.error(`[daemon] no config for profile "${agentConfig.profile}" — agent needs to register first`);
     return;
   }
+  const activeProfile = profileConfig;
 
-  const url = `${PUSH_URL}/connect/${profileConfig.agent_id}?secret=${profileConfig.secret}`;
+  const url = `${PUSH_URL}/connect/${activeProfile.agent_id}?secret=${activeProfile.secret}`;
   let ws: WebSocket;
 
   function connect() {
     ws = new WebSocket(url);
 
     ws.on("open", () => {
-      console.log(`[daemon] ${agentConfig.name} connected to push (${profileConfig.agent_id.slice(0, 8)}...)`);
+      console.log(`[daemon] ${agentConfig.name} connected to push (${activeProfile.agent_id.slice(0, 8)}...)`);
     });
 
     ws.on("message", (data: RawData) => {

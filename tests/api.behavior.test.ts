@@ -5,6 +5,17 @@ import { createTrunkInboxNode, createTrunkSendNode } from "../src/adapters/langg
 import { notifyPushWorker } from "../src/lib/webhook.js";
 import { TrunkApiError, TrunkClient, signWebhookPayload, verifyWebhookSignature, type RegisterResponse, type TrunkMessage } from "../src/sdk/index.js";
 
+type CascadeAuditMetadata = {
+  cascade: {
+    contacts?: number;
+    documents?: number;
+    facts?: number;
+    members?: number;
+    messages?: number;
+    tasks?: number;
+  };
+};
+
 type AgentRow = {
   id: string;
   name: string;
@@ -343,6 +354,7 @@ const testState = vi.hoisted(() => ({
 
 vi.mock("../src/lib/webhook.js", () => ({
   notifyPushWorker: vi.fn(async () => undefined),
+  notifyRoomTaskEvent: vi.fn(async () => undefined),
   deliverWebhook: vi.fn(async () => true),
 }));
 
@@ -4357,7 +4369,7 @@ describe("Hono API behavior", () => {
 
     const deleteEvent = testState["audit_events"].find(
       (e) => e.action === "workspace.delete"
-    );
+    ) as (AuditEventRow & { metadata: CascadeAuditMetadata }) | undefined;
     expect(deleteEvent).toBeDefined();
     expect(deleteEvent!.metadata.cascade).toBeDefined();
     expect(deleteEvent!.metadata.cascade.members).toBeGreaterThanOrEqual(2);
@@ -4599,7 +4611,7 @@ describe("Hono API behavior", () => {
     const pushFailedEvent = testState["audit_events"].find(
       (e: any) => e.action === "message.push_failed" && e.targetId === sent.id
     );
-    expect(pushFailedEvent).toBeDefined();
+    if (!pushFailedEvent) throw new Error("Expected message.push_failed audit event");
     // Verify audit logs error_type (class name) not raw error message
     expect(pushFailedEvent.metadata.error_type).toBe("Error");
     expect(pushFailedEvent.metadata.error_type).not.toContain("push worker down");
@@ -18500,7 +18512,7 @@ describe("Hono API behavior", () => {
 
       const deleteEvent = testState["audit_events"].find(
         (e) => e.action === "room.deleted"
-      );
+      ) as (AuditEventRow & { metadata: CascadeAuditMetadata }) | undefined;
       expect(deleteEvent).toBeDefined();
       expect(deleteEvent!.actorAgent).toBe(alpha.agent_id);
     });
@@ -18535,8 +18547,8 @@ describe("Hono API behavior", () => {
 
       const deleteEvent = testState["audit_events"].find(
         (e) => e.action === "room.deleted"
-      );
-      expect(deleteEvent).toBeDefined();
+      ) as (AuditEventRow & { metadata: CascadeAuditMetadata }) | undefined;
+      if (!deleteEvent) throw new Error("Expected room.deleted audit event");
       expect(deleteEvent!.metadata.cascade).toBeDefined();
       expect(deleteEvent!.metadata.cascade.messages).toBeGreaterThanOrEqual(1);
       expect(deleteEvent!.metadata.cascade.members).toBeGreaterThanOrEqual(2);
@@ -18595,7 +18607,7 @@ describe("Hono API behavior", () => {
       // Verify message exists in beta's inbox
       const inboxBefore = await betaClient.inbox();
       const roomMsgBefore = inboxBefore.messages.find(
-        (m: TrunkMessage) => m.toRoom === room.id
+        (m: TrunkMessage & { toRoom?: string | null }) => m.toRoom === room.id
       );
       expect(roomMsgBefore).toBeDefined();
 
@@ -21284,7 +21296,7 @@ describe("Hono API behavior", () => {
     await alphaClient.pair({ code: beta.pairing_code });
     const task = await alphaClient.createTask({ contact_id: beta.agent_id, title: "valid title" });
     await expect(
-      alphaClient.updateTask(task.id, { title: "   " }, { contact_id: beta.agent_id })
+      alphaClient.updateTask(beta.agent_id, task.id, { title: "   " })
     ).rejects.toMatchObject({ status: 400 });
   });
 
@@ -21293,7 +21305,7 @@ describe("Hono API behavior", () => {
     await alphaClient.pair({ code: beta.pairing_code });
     const task = await alphaClient.createTask({ contact_id: beta.agent_id, title: "valid title" });
     await expect(
-      alphaClient.updateTask(task.id, { title: "" }, { contact_id: beta.agent_id })
+      alphaClient.updateTask(beta.agent_id, task.id, { title: "" })
     ).rejects.toMatchObject({ status: 400 });
   });
 
@@ -22049,7 +22061,7 @@ describe("Hono API behavior", () => {
 
       const result = await alphaClient.presence();
       const me = result.members.find((m: { agent_id: string }) => m.agent_id === alpha.agent_id);
-      expect(me).toBeDefined();
+      if (!me) throw new Error("Expected current agent in presence members");
       expect(me.status_text).toBe("Coding");
     });
 
@@ -22070,7 +22082,7 @@ describe("Hono API behavior", () => {
       // Agent was just active (lastSeenAt set by auth middleware)
       const result = await alphaClient.presence();
       const me = result.members.find((m: { agent_id: string }) => m.agent_id === alpha.agent_id);
-      expect(me).toBeDefined();
+      if (!me) throw new Error("Expected current agent in presence members");
       // lastSeenAt was recently set, so should be online
       expect(["online", "away", "offline"]).toContain(me.status);
     });
@@ -22085,7 +22097,7 @@ describe("Hono API behavior", () => {
 
       const result = await alphaClient.presence();
       const me = result.members.find((m: { agent_id: string }) => m.agent_id === alpha.agent_id);
-      expect(me).toBeDefined();
+      if (!me) throw new Error("Expected current agent in presence members");
       expect(me.name).toBe("presence-fields");
       expect(me.owner).toBe("TestOwner");
       expect(me).toHaveProperty("last_seen_at");
@@ -23251,7 +23263,7 @@ describe("Hono API behavior", () => {
       });
 
       // Mark as processed via ack
-      await betaClient.ack(sent.id, "processed");
+      await betaClient.ack(sent.id);
 
       const inbox = await betaClient.inbox({ status: "processed" });
       expect(inbox.messages.length).toBe(1);
@@ -24691,18 +24703,26 @@ function createClient(secret?: string): TrunkClient {
   });
 }
 
-function createMockDb() {
+type MockDb = {
+  select: (projection?: Record<string, unknown>) => SelectQuery;
+  insert: (table: unknown) => InsertQuery;
+  update: (table: unknown) => UpdateQuery;
+  delete: (table: unknown) => DeleteQuery;
+  transaction: <T>(fn: (tx: MockDb) => Promise<T>) => Promise<T>;
+};
+
+function createMockDb(): MockDb {
   const mockDb = {
     select: (projection?: Record<string, unknown>) => new SelectQuery(projection),
     insert: (table: unknown) => new InsertQuery(getTableName(table)),
     update: (table: unknown) => new UpdateQuery(getTableName(table)),
     delete: (table: unknown) => new DeleteQuery(getTableName(table)),
-    transaction: async <T>(fn: (tx: typeof mockDb) => Promise<T>): Promise<T> => {
+    transaction: async <T>(fn: (tx: MockDb) => Promise<T>): Promise<T> => {
       // In the mock DB, transactions just execute the callback with the same db
       // (in-memory store is already atomic per operation)
       return fn(mockDb);
     },
-  };
+  } satisfies MockDb;
   return mockDb;
 }
 

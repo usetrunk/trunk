@@ -10,6 +10,9 @@
       }
     ]
   },
+  "vars": {
+    "RELAY_URL": "https://trunk.bot"
+  },
   "migrations": [
     {
       "tag": "v1",

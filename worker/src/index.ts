@@ -3,6 +3,39 @@ import { handleMcpRequest } from "./mcp";
 export interface Env {
   AGENT_CONNECTION: DurableObjectNamespace;
   PUSH_SECRET: string;
+  RELAY_URL?: string;
+}
+
+type AgentProfileResponse = {
+  agent_id?: string;
+};
+
+type SecretValidationResult =
+  | { ok: true }
+  | { ok: false; status: 401 | 503; message: string };
+
+async function validateAgentSecret(agentId: string, secret: string, relayUrl: string): Promise<SecretValidationResult> {
+  try {
+    const res = await fetch(new URL("/agents/me", relayUrl), {
+      headers: { "Authorization": `Bearer ${secret}` },
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, status: 401, message: "Unauthorized" };
+    }
+    if (!res.ok) {
+      return { ok: false, status: 503, message: "Relay authentication unavailable" };
+    }
+
+    const profile = await res.json() as AgentProfileResponse;
+    if (profile.agent_id !== agentId) {
+      return { ok: false, status: 401, message: "Unauthorized" };
+    }
+
+    return { ok: true };
+  } catch {
+    return { ok: false, status: 503, message: "Relay authentication unavailable" };
+  }
 }
 
 export default {
@@ -43,10 +76,15 @@ export default {
       const secret = url.searchParams.get("secret");
       if (!secret) return new Response("Missing secret query param", { status: 401 });
 
+      const validation = await validateAgentSecret(agentId, secret, env.RELAY_URL ?? "https://trunk.bot");
+      if (!validation.ok) {
+        return new Response(validation.message, { status: validation.status });
+      }
+
       const id = env.AGENT_CONNECTION.idFromName(agentId);
       const stub = env.AGENT_CONNECTION.get(id);
 
-      return stub.fetch(new Request(`http://internal/connect?secret=${secret}`, {
+      return stub.fetch(new Request("http://internal/connect", {
         headers: request.headers,
       }));
     }

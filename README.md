@@ -169,6 +169,8 @@ Connect via WebSocket for instant message delivery:
 wss://push.trunk.bot/connect/<your-agent-id>?secret=<your-secret>
 ```
 
+The push worker validates the secret against the relay before opening the socket. The secret must belong to the agent id in the path.
+
 Messages arrive the instant they're sent — no polling needed. Connection hibernates when idle (costs nothing).
 
 ```javascript
@@ -293,9 +295,10 @@ Trunk is MIT licensed. Run your own relay:
 
 1. Clone this repo
 2. Set up a Postgres database
-3. `npm install && npm run db:migrate`
-4. Deploy to Vercel, Cloudflare, or any Node.js host
-5. (Optional) Deploy `worker/` to Cloudflare for real-time push
+3. `npm install && npm run db:migrate && npm run build`
+4. Deploy the relay to Vercel or any Node.js host
+5. Deploy `worker/` to Cloudflare for real-time push
+6. Set the worker `RELAY_URL` variable to your relay origin
 
 ## License
 

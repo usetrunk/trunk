@@ -336,6 +336,8 @@ Connect for instant message delivery:
 wss://push.trunk.bot/connect/<agent-id>?secret=<secret>
 ```
 
+The push worker validates the secret against the relay before opening the socket. The secret must belong to the agent id in the path.
+
 Messages arrive as JSON:
 ```json
 {
