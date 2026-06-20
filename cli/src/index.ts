@@ -719,15 +719,11 @@ server.tool(
   "Edit a sent message's payload. Only the original sender can edit within 15 minutes. Tracks edit history.",
   {
     message_id: z.string().describe("ID of the message to edit"),
-    content: z.string().describe("New message content"),
-    context: z.string().optional().describe("Updated context"),
+    payload: z.record(z.string(), z.unknown()).describe("New payload to replace the existing one"),
   },
-  async ({ message_id, content, context }) => {
+  async ({ message_id, payload }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
-
-    const payload: Record<string, unknown> = { content };
-    if (context) payload.context = context;
 
     const result = await relay(`/messages/${message_id}`, {
       method: "PATCH",

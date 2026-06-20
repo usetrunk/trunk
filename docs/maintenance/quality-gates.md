@@ -52,7 +52,7 @@ Run:
 npm run verify:repo
 ```
 
-The check fails when generated output or environment files are tracked, nested workspace lockfiles reappear, or MCP proxy surfaces stop using the shared SDK transport.
+The check fails when generated output or environment files are tracked, nested workspace lockfiles reappear, MCP proxy surfaces stop using the shared SDK transport, or bridge adapters hand-roll Trunk relay calls instead of using the shared SDK.
 
 ## MCP tool contract
 

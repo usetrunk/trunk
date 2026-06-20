@@ -12,6 +12,8 @@
  * - ESCALATION_AGENT_ID: default Trunk agent to escalate to
  */
 
+import { TrunkApiError, TrunkClient, type MessageReceipt } from "../../src/sdk/index.js";
+
 const TRUNK_RELAY = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
 const TRUNK_SECRET = process.env.TRUNK_AGENT_SECRET || "";
 const TRUNK_WEBHOOK_SECRET = process.env.TRUNK_WEBHOOK_SECRET || "";
@@ -31,7 +33,7 @@ async function trunkSend(to: string, type: string, content: string, opts: {
   threadId?: string;
   context?: string;
   updatesFacts?: Record<string, unknown>;
-} = {}) {
+} = {}): Promise<MessageReceipt | null> {
   const payload: Record<string, unknown> = {
     content,
     source: "intercom",
@@ -39,27 +41,22 @@ async function trunkSend(to: string, type: string, content: string, opts: {
   if (opts.context) payload.context = opts.context;
   if (opts.updatesFacts) payload.updates_facts = opts.updatesFacts;
 
-  return fetch(`${TRUNK_RELAY}/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${TRUNK_SECRET}`,
-      "Idempotency-Key": crypto.randomUUID(),
-    },
-    body: JSON.stringify({
+  try {
+    return await trunkClient().send({
       to,
       type,
       payload,
       thread_id: opts.threadId,
-    }),
-  });
+      idempotency_key: crypto.randomUUID(),
+    });
+  } catch (error) {
+    if (error instanceof TrunkApiError) return null;
+    throw error;
+  }
 }
 
 async function trunkAck(messageId: string) {
-  return fetch(`${TRUNK_RELAY}/messages/${messageId}/ack`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${TRUNK_SECRET}` },
-  });
+  return trunkClient().ack(messageId);
 }
 
 // --- Intercom API ---
@@ -190,10 +187,9 @@ export async function handleIntercomWebhook(request: Request): Promise<Response>
     },
   });
 
-  if (res.ok) {
-    const receipt = await res.json() as { thread_id: string };
-    conversationToThread.set(conversationId, receipt.thread_id);
-    threadToConversation.set(receipt.thread_id, conversationId);
+  if (res) {
+    conversationToThread.set(conversationId, res.thread_id);
+    threadToConversation.set(res.thread_id, conversationId);
   }
 
   return new Response("ok");
@@ -258,6 +254,10 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 };
+
+function trunkClient(): TrunkClient {
+  return new TrunkClient({ baseUrl: TRUNK_RELAY, secret: TRUNK_SECRET });
+}
 
 async function verifyTrunkSignature(
   rawBody: string,

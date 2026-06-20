@@ -11,6 +11,8 @@ import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { validateWebhookUrl } from "../lib/ssrf.js";
 import { runRoomHeartbeats } from "../lib/room-heartbeat.js";
 
+type MessageRow = typeof messages.$inferSelect;
+
 export function createTrunkMcpServer() {
   const server = new McpServer({
     name: "trunk",
@@ -2951,24 +2953,25 @@ export function createTrunkMcpServer() {
         .where(and(...conditions))
         .orderBy(desc(messages.createdAt));
 
-      const visible = rows.filter((r: any) => r.status !== "deleted" && r.threadId);
+      const visible = rows.filter((row): row is MessageRow & { threadId: string } =>
+        row.status !== "deleted" && typeof row.threadId === "string"
+      );
 
-      const threadMap = new Map<string, typeof visible>();
+      const threadMap = new Map<string, Array<MessageRow & { threadId: string }>>();
       for (const msg of visible) {
-        const tid = (msg as any).threadId!;
-        if (!threadMap.has(tid)) threadMap.set(tid, []);
-        threadMap.get(tid)!.push(msg);
+        if (!threadMap.has(msg.threadId)) threadMap.set(msg.threadId, []);
+        threadMap.get(msg.threadId)!.push(msg);
       }
 
       const threadSummaries = Array.from(threadMap.entries())
         .map(([threadId, msgs]) => {
-          msgs.sort((a: any, b: any) => b.createdAt.getTime() - a.createdAt.getTime());
-          const latest = msgs[0] as any;
-          const unread = msgs.filter((m: any) => m.toAgent === agent.id && (m.status === "pending" || m.status === "delivered")).length;
+          msgs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+          const latest = msgs[0];
+          const unread = msgs.filter((m) => m.toAgent === agent.id && (m.status === "pending" || m.status === "delivered")).length;
           const participantIds = new Set<string>();
           for (const m of msgs) {
-            participantIds.add((m as any).fromAgent);
-            participantIds.add((m as any).toAgent);
+            participantIds.add(m.fromAgent);
+            participantIds.add(m.toAgent);
           }
           return {
             thread_id: threadId,

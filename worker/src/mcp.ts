@@ -3,7 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 import { TrunkApiError, TrunkClient } from "../../src/sdk/index.js";
 
-const RELAY_URL = "https://trunk.bot";
+const RELAY_URL = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
 
 // Proxy helper — calls the Vercel relay API
 async function relay(path: string, options: { method?: string; body?: unknown; secret?: string; idempotencyKey?: string } = {}) {

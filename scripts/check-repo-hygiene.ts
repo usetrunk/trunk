@@ -47,6 +47,17 @@ for (const file of mcpProxyFiles) {
   }
 }
 
+const adapterFiles = ["adapters/email/index.ts", "adapters/intercom/index.ts", "adapters/slack/index.ts"];
+for (const file of adapterFiles) {
+  const source = readFileSync(file, "utf8");
+  if (!source.includes("TrunkClient")) {
+    issues.push(`${file}: Trunk-facing adapter calls must use TrunkClient from the shared SDK`);
+  }
+  if (/fetch\(\s*`\$\{TRUNK_RELAY\}/.test(source)) {
+    issues.push(`${file}: adapter must not hand-roll Trunk relay fetch calls`);
+  }
+}
+
 if (issues.length > 0) {
   for (const issue of issues) {
     console.error(issue);

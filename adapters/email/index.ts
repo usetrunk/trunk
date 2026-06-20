@@ -13,6 +13,8 @@
  * - AGENT_PAIRING_CODE: pairing code for the "Sent with Trunk" footer
  */
 
+import { TrunkApiError, TrunkClient, type MessageReceipt } from "../../src/sdk/index.js";
+
 const TRUNK_RELAY = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
 const TRUNK_SECRET = process.env.TRUNK_AGENT_SECRET || "";
 const TRUNK_WEBHOOK_SECRET = process.env.TRUNK_WEBHOOK_SECRET || "";
@@ -34,7 +36,7 @@ async function trunkSend(to: string, type: string, content: string, opts: {
   threadId?: string;
   context?: string;
   updatesFacts?: Record<string, unknown>;
-} = {}) {
+} = {}): Promise<MessageReceipt | null> {
   const payload: Record<string, unknown> = {
     content,
     source: "email",
@@ -42,27 +44,22 @@ async function trunkSend(to: string, type: string, content: string, opts: {
   if (opts.context) payload.context = opts.context;
   if (opts.updatesFacts) payload.updates_facts = opts.updatesFacts;
 
-  return fetch(`${TRUNK_RELAY}/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${TRUNK_SECRET}`,
-      "Idempotency-Key": crypto.randomUUID(),
-    },
-    body: JSON.stringify({
+  try {
+    return await trunkClient().send({
       to,
       type,
       payload,
       thread_id: opts.threadId,
-    }),
-  });
+      idempotency_key: crypto.randomUUID(),
+    });
+  } catch (error) {
+    if (error instanceof TrunkApiError) return null;
+    throw error;
+  }
 }
 
 async function trunkAck(messageId: string) {
-  return fetch(`${TRUNK_RELAY}/messages/${messageId}/ack`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${TRUNK_SECRET}` },
-  });
+  return trunkClient().ack(messageId);
 }
 
 // --- Outbound email via SendGrid ---
@@ -129,17 +126,15 @@ export async function handleInboundEmail(email: InboundEmail, targetAgentId: str
     context,
   });
 
-  if (!res.ok) {
+  if (!res) {
     return new Response("Failed to relay to Trunk", { status: 502 });
   }
 
-  const receipt = await res.json() as { id: string; thread_id: string };
-
   // Store thread mapping for reply threading
-  threadMap.set(email.messageId, receipt.thread_id);
-  reverseThreadMap.set(receipt.thread_id, email.messageId);
-  threadRecipients.set(receipt.thread_id, email.from);
-  threadSubjects.set(receipt.thread_id, email.subject);
+  threadMap.set(email.messageId, res.thread_id);
+  reverseThreadMap.set(res.thread_id, email.messageId);
+  threadRecipients.set(res.thread_id, email.from);
+  threadSubjects.set(res.thread_id, email.subject);
 
   return new Response("ok");
 }
@@ -254,6 +249,10 @@ function parseJsonMap(value: string | undefined): Record<string, string> {
 function normalizeEmail(value: string): string {
   const match = value.match(/<([^>]+)>/);
   return (match?.[1] || value).trim().toLowerCase();
+}
+
+function trunkClient(): TrunkClient {
+  return new TrunkClient({ baseUrl: TRUNK_RELAY, secret: TRUNK_SECRET });
 }
 
 async function verifyTrunkSignature(

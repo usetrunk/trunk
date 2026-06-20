@@ -1,7 +1,12 @@
-import { eq } from "drizzle-orm";
+import { eq, lt } from "drizzle-orm";
 import type { Context } from "hono";
 import { db } from "../db/index.js";
 import { rateLimits } from "../db/schema.js";
+
+const RATE_LIMIT_RETENTION_MS = 24 * 60 * 60 * 1000;
+const RATE_LIMIT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+let nextPruneAt = 0;
 
 export type RateLimitResult = {
   ok: boolean;
@@ -11,8 +16,23 @@ export type RateLimitResult = {
   retryAfterSeconds?: number;
 };
 
+export async function pruneStaleRateLimits(
+  now = new Date(),
+  retentionMs = RATE_LIMIT_RETENTION_MS
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - retentionMs);
+  const removed = await db
+    .delete(rateLimits)
+    .where(lt(rateLimits.updatedAt, cutoff))
+    .returning({ scope: rateLimits.scope });
+
+  return removed.length;
+}
+
 export async function checkRateLimit(scope: string, limit: number, windowMs: number): Promise<RateLimitResult> {
   const now = new Date();
+  await maybePruneStaleRateLimits(now);
+
   const [current] = await db
     .select()
     .from(rateLimits)
@@ -54,5 +74,15 @@ export function setRateLimitHeaders(c: Context, result: RateLimitResult): void {
   c.header("X-RateLimit-Reset", String(Math.ceil(result.resetAt.getTime() / 1000)));
   if (!result.ok && result.retryAfterSeconds !== undefined) {
     c.header("Retry-After", String(result.retryAfterSeconds));
+  }
+}
+
+async function maybePruneStaleRateLimits(now: Date): Promise<void> {
+  if (now.getTime() < nextPruneAt) return;
+  nextPruneAt = now.getTime() + RATE_LIMIT_PRUNE_INTERVAL_MS;
+  try {
+    await pruneStaleRateLimits(now);
+  } catch {
+    // Rate limiting must not fail closed because a best-effort cleanup missed.
   }
 }

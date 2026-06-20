@@ -106,7 +106,7 @@ describe("Email adapter", () => {
       expect(body.type).toBe("question");
       expect(body.payload.content).toBe("I need help with order #12345");
       expect(body.payload.source).toBe("email");
-      expect(opts.headers["Authorization"]).toBe("Bearer test-trunk-secret");
+      expect(headerValue(opts.headers, "Authorization")).toBe("Bearer test-trunk-secret");
     });
 
     it("includes email context (from and subject)", async () => {
@@ -294,3 +294,7 @@ describe("Email adapter", () => {
     });
   });
 });
+
+function headerValue(headers: HeadersInit, name: string): string | null {
+  return headers instanceof Headers ? headers.get(name) : (headers as Record<string, string>)[name] ?? null;
+}

@@ -306,8 +306,8 @@ describe("Slack adapter", () => {
       await handleSlackEvent(req);
 
       const headers = mockFetch.mock.calls[0][1].headers;
-      expect(headers["Authorization"]).toBe(`Bearer ${TEST_AGENT_SECRET}`);
-      expect(headers["Idempotency-Key"]).toBeDefined();
+      expect(headerValue(headers, "Authorization")).toBe(`Bearer ${TEST_AGENT_SECRET}`);
+      expect(headerValue(headers, "Idempotency-Key")).toBeDefined();
     });
 
     it("handles Trunk API failure gracefully", async () => {
@@ -562,3 +562,7 @@ describe("Slack adapter", () => {
     });
   });
 });
+
+function headerValue(headers: HeadersInit, name: string): string | null {
+  return headers instanceof Headers ? headers.get(name) : (headers as Record<string, string>)[name] ?? null;
+}

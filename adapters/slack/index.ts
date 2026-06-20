@@ -11,6 +11,8 @@
  * - TRUNK_RELAY_URL: https://trunk.bot (default)
  */
 
+import { TrunkApiError, TrunkClient } from "../../src/sdk/index.js";
+
 const TRUNK_RELAY = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
 const TRUNK_SECRET = process.env.TRUNK_AGENT_SECRET || "";
 const TRUNK_WEBHOOK_SECRET = process.env.TRUNK_WEBHOOK_SECRET || "";
@@ -24,29 +26,22 @@ const trunkToSlackThread = new Map<string, { channel: string; threadTs: string }
 // --- Trunk API helpers ---
 
 async function trunkSend(to: string, type: string, content: string, threadId?: string) {
-  const res = await fetch(`${TRUNK_RELAY}/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${TRUNK_SECRET}`,
-      "Idempotency-Key": crypto.randomUUID(),
-    },
-    body: JSON.stringify({
+  try {
+    return await trunkClient().send({
       to,
       type,
       payload: { content, source: "slack" },
       thread_id: threadId,
-    }),
-  });
-  if (!res.ok) return null;
-  return res.json() as Promise<{ id: string; thread_id: string; status: string }>;
+      idempotency_key: crypto.randomUUID(),
+    });
+  } catch (error) {
+    if (error instanceof TrunkApiError) return null;
+    throw error;
+  }
 }
 
 async function trunkAck(messageId: string) {
-  return fetch(`${TRUNK_RELAY}/messages/${messageId}/ack`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${TRUNK_SECRET}` },
-  });
+  return trunkClient().ack(messageId);
 }
 
 // --- Slack API helpers ---
@@ -222,4 +217,8 @@ function parseJsonMap(value: string | undefined): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+function trunkClient(): TrunkClient {
+  return new TrunkClient({ baseUrl: TRUNK_RELAY, secret: TRUNK_SECRET });
 }
