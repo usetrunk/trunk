@@ -20,6 +20,7 @@ npm run verify
 
 - relay, CLI, and worker type checks
 - MCP surface contract checks
+- repository hygiene checks
 - API behavior tests
 - Python SDK tests
 - relay and CLI builds
@@ -42,6 +43,16 @@ npm ls esbuild drizzle-kit tsup tsx vitest wrangler --all
 ```
 
 The repo intentionally declares root `esbuild` so Vite, tsx, and the worker share a version that satisfies their peer ranges. Older esbuild versions may remain nested under tools that require them.
+
+## Repository hygiene
+
+Run:
+
+```bash
+npm run verify:repo
+```
+
+The check fails when generated output or environment files are tracked, nested workspace lockfiles reappear, or MCP proxy surfaces stop using the shared SDK transport.
 
 ## MCP tool contract
 
