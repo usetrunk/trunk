@@ -158,11 +158,11 @@ export class AgentConnection {
     }
   }
 
-  webSocketClose(ws: WebSocket, code: number, reason: string) {
+  webSocketClose(ws: WebSocket, _code: number, _reason: string) {
     this.connections.delete(ws);
   }
 
-  webSocketError(ws: WebSocket, error: unknown) {
+  webSocketError(ws: WebSocket, _error: unknown) {
     this.connections.delete(ws);
   }
 }

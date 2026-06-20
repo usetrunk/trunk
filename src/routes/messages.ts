@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits, attachments } from "../db/schema.js";
+import { agents, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits, attachments } from "../db/schema.js";
 import { eq, or, and, desc, lt, gt, gte, lte, inArray, isNull, ne } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
-import { parsePaginationQuery, paginateResults, type PaginationParams } from "../lib/pagination.js";
+import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";

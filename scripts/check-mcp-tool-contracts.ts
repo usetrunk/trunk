@@ -196,11 +196,12 @@ for (const contract of MCP_TOOL_CONTRACTS) {
   }
   seenContracts.add(contract.name);
 
-  if (contract.surfaces.length === 0) {
+  const contractSurfaces = [...contract.surfaces];
+  if (contractSurfaces.length === 0) {
     contractIssues.push(`MCP tool contract has no surfaces: ${contract.name}`);
   }
 
-  for (const surface of contract.surfaces) {
+  for (const surface of contractSurfaces) {
     expectedBySurface.get(surface)?.add(contract.name);
   }
 }

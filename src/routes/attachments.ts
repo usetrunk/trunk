@@ -3,7 +3,6 @@ import { db } from "../db/index.js";
 import { attachments, messages } from "../db/schema.js";
 import { eq, and, desc, lt, or } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
-import { canMessage } from "../lib/workspace.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";

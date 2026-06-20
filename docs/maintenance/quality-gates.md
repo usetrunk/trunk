@@ -18,7 +18,7 @@ npm run verify
 
 `verify` runs:
 
-- relay, CLI, and worker type checks
+- relay, CLI, worker, and production-source hygiene type checks
 - MCP surface contract checks
 - repository hygiene checks
 - API behavior tests

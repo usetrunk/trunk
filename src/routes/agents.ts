@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
-import { agents, webhookDeliveries, messages, contacts } from "../db/schema.js";
-import { eq, desc, or, and, gte } from "drizzle-orm";
+import { agents, webhookDeliveries, messages } from "../db/schema.js";
+import { eq, desc, and, gte } from "drizzle-orm";
 import { authMiddleware, generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";

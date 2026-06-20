@@ -42,13 +42,6 @@ async function trunkSend(to: string, type: string, content: string, threadId?: s
   return res.json() as Promise<{ id: string; thread_id: string; status: string }>;
 }
 
-async function trunkInbox() {
-  const res = await fetch(`${TRUNK_RELAY}/messages/inbox`, {
-    headers: { "Authorization": `Bearer ${TRUNK_SECRET}` },
-  });
-  return res.json() as Promise<{ messages: Array<{ id: string; payload: Record<string, unknown>; threadId: string }> }>;
-}
-
 async function trunkAck(messageId: string) {
   return fetch(`${TRUNK_RELAY}/messages/${messageId}/ack`, {
     method: "POST",

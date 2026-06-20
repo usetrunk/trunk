@@ -13,7 +13,7 @@
 import WebSocket from "ws";
 import type { RawData } from "ws";
 import { spawn, execSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 
@@ -21,8 +21,6 @@ const STATE_DIR = join(homedir(), ".trunk");
 const SESSION_NAME = "trunk-harness";
 
 const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://push.trunk.bot";
-const RELAY_URL = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
-
 type AgentConfig = {
   name: string;
   profile: string;
@@ -80,9 +78,7 @@ function routeEvent(event: TaskEvent, agents: AgentConfig[]): AgentConfig | null
   const findAgent = (pattern: RegExp) => agents.find(a => pattern.test(a.name.toLowerCase()));
 
   const builder = findAgent(/build/);
-  const reviewer = findAgent(/review/);
   const planner = findAgent(/plan/);
-  const merger = findAgent(/merge/);
   const qa = findAgent(/qa|test/);
   const docs = findAgent(/doc/);
 

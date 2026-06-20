@@ -1006,6 +1006,10 @@ export function createTrunkMcpServer() {
       if (!agent) return errorResult("Invalid secret");
 
       const conditions = [eq(messages.fromAgent, agent.id), eq(messages.status, "scheduled")];
+      if (cursor) {
+        const [cursorMsg] = await db.select({ createdAt: messages.createdAt }).from(messages).where(eq(messages.id, cursor)).limit(1);
+        if (cursorMsg) conditions.push(lt(messages.createdAt, cursorMsg.createdAt));
+      }
 
       const rows = await db
         .select()
@@ -2122,10 +2126,6 @@ export function createTrunkMcpServer() {
     async ({ secret, days }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
-
-      const params = new URLSearchParams();
-      if (days !== undefined) params.set("days", String(days));
-      const query = params.toString();
 
       // Re-use the route logic by querying messages directly
       const daysVal = Math.min(Math.max(1, days || 7), 30);

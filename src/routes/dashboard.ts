@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import { html, raw } from "hono/html";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { db } from "../db/index.js";
-import { agents, contacts, messages, roomMembers, rooms, tasks, workspaceContacts, workspaces } from "../db/schema.js";
-import { and, eq, or, desc, asc, inArray } from "drizzle-orm";
+import { agents, contacts, messages, roomMembers, rooms, tasks, workspaceContacts } from "../db/schema.js";
+import { and, eq, or, desc, inArray } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
@@ -382,7 +382,6 @@ app.get("/", async (c) => {
 
 // Thread detail view
 app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
-  const agent = c.get("agent");
   const agentId = c.get("agentId");
   const threadId = c.req.param("threadId");
 
@@ -457,7 +456,6 @@ app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
 
 // Inbox view — all pending messages with full content
 app.get("/inbox", async (c) => {
-  const agent = c.get("agent");
   const agentId = c.get("agentId");
   const VALID_STATUSES = ["pending", "delivered", "processed", "replied"];
   const statusFilter = c.req.query("status") || "pending";
@@ -621,17 +619,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     }
   }
 
-  function statusClass(status: string) {
-    switch (status) {
-      case "done": return "st-done";
-      case "in-progress": return "st-active";
-      case "blocked": return "st-blocked";
-      default: return "st-open";
-    }
-  }
-
   // Build Mermaid DAG — only active work (not done) + their direct dependencies
-  const taskIdSet = new Set(roomTasks.map(t => t.id));
   const taskById = new Map(roomTasks.map(t => [t.id, t]));
   let mermaidDef = "";
 
@@ -1059,7 +1047,6 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
                   .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
                   .slice(0, 8)
                   .map(t => {
-                    const owner = t.owner ? (nameMap.get(t.owner) || t.owner.slice(0, 8)) : "unknown";
                     return html`
                       <div style="font-size:0.78rem;padding:0.35rem 0;border-bottom:1px solid #1a1a18;display:flex;gap:0.4rem;">
                         <span style="color:var(--good);">✓</span>
@@ -1079,7 +1066,6 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
 
 // Mission control — real-time agent work dashboard
 app.get("/gantt", async (c) => {
-  const agent = c.get("agent");
   const agentId = c.get("agentId");
 
   const rateLimit = await checkRateLimit(`dashboard:${agentId}`, 30, 60 * 1000);
@@ -1119,11 +1105,6 @@ app.get("/gantt", async (c) => {
         .orderBy(tasks.sequence, tasks.createdAt)
     : [];
 
-  const roomRows = roomIds.length > 0
-    ? await db.select().from(rooms).where(inArray(rooms.id, roomIds))
-    : [];
-  const roomNameMap = new Map(roomRows.map(r => [r.id, r.name]));
-
   // Merge all tasks
   const taskMap = new Map<string, typeof allTasks[0]>();
   for (const t of [...allTasks, ...roomTasks]) taskMap.set(t.id, t);
@@ -1131,11 +1112,6 @@ app.get("/gantt", async (c) => {
 
   // Resolve owner names
   const ownerIds = [...new Set(mergedTasks.map(t => t.owner).filter(Boolean))] as string[];
-  const ownerRows = ownerIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, ownerIds))
-    : [];
-  const ownerNames = new Map(ownerRows.map(a => [a.id, a.name]));
-
   // Resolve creator names too
   const creatorIds = [...new Set(mergedTasks.map(t => t.createdBy).filter(Boolean))] as string[];
   const allAgentIds = [...new Set([...ownerIds, ...creatorIds])];
