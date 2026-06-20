@@ -6,6 +6,7 @@ import type { RawData } from "ws";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { TrunkApiError, TrunkClient } from "../../src/sdk/index.js";
 
 // --- Config ---
 
@@ -43,17 +44,18 @@ function saveConfig(config: Config): void {
 // --- Relay API helper ---
 
 async function relay(path: string, opts: { method?: string; body?: unknown; secret?: string; idempotencyKey?: string } = {}) {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (opts.secret) headers["Authorization"] = `Bearer ${opts.secret}`;
-  if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
-
-  const res = await fetch(`${RELAY_URL}${path}`, {
-    method: opts.method || "GET",
-    headers,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
-
-  return res.json() as Promise<any>;
+  const client = new TrunkClient({ baseUrl: RELAY_URL, secret: opts.secret });
+  try {
+    return await client.raw(path, {
+      method: opts.method,
+      body: opts.body,
+      auth: opts.secret !== undefined,
+      idempotencyKey: opts.idempotencyKey,
+    }) as any;
+  } catch (error) {
+    if (error instanceof TrunkApiError) return error.body as any;
+    throw error;
+  }
 }
 
 // --- WebSocket push listener ---

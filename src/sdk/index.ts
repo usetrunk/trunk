@@ -1489,6 +1489,13 @@ export class TrunkClient {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/webhooks/${encodeURIComponent(webhookId)}`, { method: "DELETE" });
   }
 
+  raw<T = unknown>(
+    path: string,
+    options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string } = {},
+  ): Promise<T> {
+    return this.request<T>(path, options);
+  }
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string } = {}

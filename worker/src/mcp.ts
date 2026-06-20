@@ -1,22 +1,24 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+import { TrunkApiError, TrunkClient } from "../../src/sdk/index.js";
 
 const RELAY_URL = "https://trunk.bot";
 
 // Proxy helper — calls the Vercel relay API
 async function relay(path: string, options: { method?: string; body?: unknown; secret?: string; idempotencyKey?: string } = {}) {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (options.secret) headers["Authorization"] = `Bearer ${options.secret}`;
-  if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
-
-  const res = await fetch(`${RELAY_URL}${path}`, {
-    method: options.method || "GET",
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-
-  return res.json() as Promise<any>;
+  const client = new TrunkClient({ baseUrl: RELAY_URL, secret: options.secret });
+  try {
+    return await client.raw(path, {
+      method: options.method,
+      body: options.body,
+      auth: options.secret !== undefined,
+      idempotencyKey: options.idempotencyKey,
+    }) as any;
+  } catch (error) {
+    if (error instanceof TrunkApiError) return error.body as any;
+    throw error;
+  }
 }
 
 export function createMcpServer() {
