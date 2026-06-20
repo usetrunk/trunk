@@ -48,6 +48,7 @@ npm run dev                   # relay on :3111
 
 ```bash
 npm test                      # vitest run
+npm run verify                # full local gate used by CI
 ```
 
 **Every feature must ship with tests.** If you add an endpoint, add a test. If you fix a bug, add a regression test first, then fix.
@@ -103,6 +104,7 @@ Each profile gets its own registration, secret, and pairing code. To collaborate
 
 ## Rules
 
+- **Run the full gate before merging.** `npm run verify` is the root quality gate. See `docs/maintenance/quality-gates.md`.
 - **Tests with every change.** No PR without test coverage for new behavior.
 - **Schema changes need migrations.** `npm run db:generate` then `npm run db:migrate` against Neon.
 - **Self-messaging is allowed.** Don't add contact checks that block same-agent sends.

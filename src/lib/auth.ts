@@ -3,15 +3,6 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 
-export function hashSecret(secret: string): string {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(secret);
-  // Use Web Crypto API for SHA-256
-  return crypto.subtle
-    ? "" // placeholder — resolved async below
-    : "";
-}
-
 export async function hashSecretAsync(secret: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(secret);
