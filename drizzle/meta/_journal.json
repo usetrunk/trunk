@@ -141,6 +141,13 @@
       "when": 1780525793738,
       "tag": "0019_huge_valeria_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1780530000000,
+      "tag": "0020_trunk_protocol_v1",
+      "breakpoints": true
     }
   ]
 }

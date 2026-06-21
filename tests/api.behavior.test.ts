@@ -294,6 +294,61 @@ type RoomWebhookRow = {
   createdAt: Date;
 };
 
+type AgentCardRow = {
+  agentId: string;
+  schema: string;
+  description: string | null;
+  protocol: string[];
+  version: string;
+  homepageUrl: string | null;
+  documentationUrl: string | null;
+  repositoryUrl: string | null;
+  capabilities: Array<Record<string, unknown>>;
+  messageTypes: string[];
+  endpoints: Array<Record<string, unknown>>;
+  contactPolicy: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type ScopedGrantRow = {
+  id: string;
+  ownerAgentId: string;
+  createdBy: string | null;
+  name: string;
+  description: string | null;
+  tokenHash: string;
+  tokenId: string;
+  scopes: string[];
+  audienceAgentId: string | null;
+  audienceWorkspaceId: string | null;
+  roomId: string | null;
+  expiresAt: Date | null;
+  notBefore: Date | null;
+  revokedAt: Date | null;
+  revokedReason: string | null;
+  lastUsedAt: Date | null;
+  useCount: number;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
+type FactHistoryRow = {
+  id: string;
+  scope: string;
+  key: string;
+  version: number;
+  value: unknown;
+  setBy: string;
+  setAt: Date;
+  reason: string | null;
+  sourceMessageId: string | null;
+  sourceThreadId: string | null;
+  supersededAt: Date | null;
+  supersededBy: string | null;
+};
+
 type TableName =
   | "agents"
   | "contacts"
@@ -320,7 +375,10 @@ type TableName =
   | "saved_searches"
   | "message_edits"
   | "attachments"
-  | "room_webhooks";
+  | "room_webhooks"
+  | "agent_cards"
+  | "scoped_grants"
+  | "fact_history";
 
 const testState = vi.hoisted(() => ({
   agents: [] as AgentRow[],
@@ -349,6 +407,9 @@ const testState = vi.hoisted(() => ({
   "message_edits": [] as MessageEditRow[],
   attachments: [] as AttachmentRow[],
   "room_webhooks": [] as RoomWebhookRow[],
+  "agent_cards": [] as AgentCardRow[],
+  "scoped_grants": [] as ScopedGrantRow[],
+  "fact_history": [] as FactHistoryRow[],
   idCounter: 0,
 }));
 
@@ -394,6 +455,9 @@ describe("Hono API behavior", () => {
     testState["message_edits"].length = 0;
     testState.attachments.length = 0;
     testState["room_webhooks"].length = 0;
+    testState["agent_cards"].length = 0;
+    testState["scoped_grants"].length = 0;
+    testState["fact_history"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
   });
@@ -24591,6 +24655,293 @@ describe("Hono API behavior", () => {
       expect(task.title).toBe("Single scope task");
     });
   });
+
+  describe("agent cards", () => {
+    it("returns a default card for a newly registered agent", async () => {
+      const { alpha, alphaClient } = await registerPair();
+      const res = await alphaClient.getMyAgentCard();
+      const card = res.card as { agent_id: string; name: string; pairing_code: string; capabilities: unknown[]; message_types: string[]; contact_policy: Record<string, unknown> };
+      expect(card.agent_id).toBe(alpha.agent_id);
+      expect(card.name).toBe("alpha");
+      expect(card.pairing_code).toBe(alpha.pairing_code);
+      expect(card.capabilities.length).toBeGreaterThan(0);
+      expect(card.message_types).toContain("question");
+      expect(card.contact_policy.pairing_open).toBe(true);
+    });
+
+    it("upserts a card and reflects changes on read", async () => {
+      const { alphaClient } = await registerPair();
+      const res = await alphaClient.upsertMyAgentCard({
+        description: "Vesper — communications lead",
+        homepage_url: "https://example.com",
+        capabilities: [
+          { id: "answer", description: "Answer questions" },
+          { id: "summarize", description: "Summarize threads" },
+        ],
+        message_types: ["question", "decision", "update"],
+        endpoints: [{ type: "http", url: "https://example.com/inbox", auth: "bearer" }],
+        contact_policy: { pairing_open: true, accepts_bearer: true, accepts_scoped_grants: true, rate_limit: { requests_per_minute: 60 } },
+      });
+      const card = res.card as { description: string; homepage_url: string; capabilities: Array<{ id: string }>; message_types: string[]; endpoints: Array<{ url: string }>; contact_policy: { rate_limit: { requests_per_minute: number } } };
+      expect(card.description).toBe("Vesper — communications lead");
+      expect(card.homepage_url).toBe("https://example.com");
+      expect(card.capabilities.map((c) => c.id)).toEqual(["answer", "summarize"]);
+      expect(card.message_types).toEqual(["question", "decision", "update"]);
+      expect(card.endpoints[0].url).toBe("https://example.com/inbox");
+      expect(card.contact_policy.rate_limit.requests_per_minute).toBe(60);
+
+      const read = await alphaClient.getMyAgentCard();
+      const readCard = read.card as { description: string };
+      expect(readCard.description).toBe("Vesper — communications lead");
+    });
+
+    it("lets a contact fetch another agent's card", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const res = await alphaClient.getAgentCard(beta.agent_id);
+      const card = res.card as { agent_id: string; name: string };
+      expect(card.agent_id).toBe(beta.agent_id);
+      expect(card.name).toBe("beta");
+      void alpha;
+    });
+
+    it("rejects fetching a card with an invalid agent id", async () => {
+      const { alphaClient } = await registerPair();
+      await expect(alphaClient.getAgentCard("not-a-uuid")).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects upsert with invalid body", async () => {
+      const { alphaClient } = await registerPair();
+      const res = await app.request("/agents/me/card", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alphaClient["secret"] ?? ""}` },
+        body: JSON.stringify({ protocol: [] }),
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("scoped grants", () => {
+    it("creates a grant with secret + records metadata", async () => {
+      const { alphaClient } = await registerPair();
+      const res = await alphaClient.createGrant({
+        name: "inbox-bot",
+        description: "Read-only inbox scraper",
+        scopes: ["messages:send", "messages:read"],
+        metadata: { source: "test" },
+      });
+      expect(res.secret).toMatch(/^tg_/);
+      const grant = res.grant as { name: string; scopes: string[]; revoked: boolean; use_count: number; metadata: Record<string, unknown> };
+      expect(grant.name).toBe("inbox-bot");
+      expect(grant.scopes).toEqual(["messages:send", "messages:read"]);
+      expect(grant.revoked).toBe(false);
+      expect(grant.use_count).toBe(0);
+      expect(grant.metadata.source).toBe("test");
+    });
+
+    it("lists grants owned by the agent", async () => {
+      const { alphaClient } = await registerPair();
+      await alphaClient.createGrant({ name: "first", scopes: ["messages:send"] });
+      await alphaClient.createGrant({ name: "second", scopes: ["facts:read"] });
+      const list = await alphaClient.listGrants();
+      expect(list.count).toBe(2);
+      const names = (list.grants as Array<{ name: string }>).map((g) => g.name).sort();
+      expect(names).toEqual(["first", "second"]);
+    });
+
+    it("revokes a grant and blocks future token auth", async () => {
+      const { alpha, alphaClient } = await registerPair();
+      const created = await alphaClient.createGrant({ name: "revoke-me", scopes: ["messages:read"] });
+      const grant = created.grant as { id: string; revoked: boolean };
+
+      // Use the grant token to make a read request
+      const okRes = await app.request("/messages/inbox", {
+        headers: { "Authorization": `Bearer ${created.secret}` },
+      });
+      expect(okRes.status).toBe(200);
+
+      // Revoke
+      const revoked = await alphaClient.revokeGrant(grant.id, "no longer needed");
+      const revokedGrant = revoked.grant as { revoked: boolean; revoked_at: string | null; revoked_reason: string | null };
+      expect(revokedGrant.revoked).toBe(true);
+      expect(revokedGrant.revoked_at).not.toBeNull();
+      expect(revokedGrant.revoked_reason).toBe("no longer needed");
+
+      const denied = await app.request("/messages/inbox", {
+        headers: { "Authorization": `Bearer ${created.secret}` },
+      });
+      expect(denied.status).toBe(401);
+      void alpha;
+    });
+
+    it("rejects grant with empty scopes", async () => {
+      const { alphaClient } = await registerPair();
+      const res = await app.request("/grants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alphaClient["secret"] ?? ""}` },
+        body: JSON.stringify({ name: "empty", scopes: [] }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects grant creation with unknown scope", async () => {
+      const { alphaClient } = await registerPair();
+      const res = await app.request("/grants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alphaClient["secret"] ?? ""}` },
+        body: JSON.stringify({ name: "x", scopes: ["made-up:scope"] }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects grant with expires_at in the past", async () => {
+      const { alphaClient } = await registerPair();
+      const res = await app.request("/grants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alphaClient["secret"] ?? ""}` },
+        body: JSON.stringify({ name: "past", scopes: ["messages:read"], expires_at: "2000-01-01T00:00:00.000Z" }),
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("fact provenance", () => {
+    it("records history entry on first write", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.putFact(beta.agent_id, "phase", "build");
+      const history = await alphaClient.factHistory(beta.agent_id, "phase");
+      const h = history as { current: { version: number; updated_by: string } | null; history: Array<{ version: number; set_by: string; reason: string | null }>; count: number };
+      expect(h.current?.version).toBe(1);
+      expect(h.current?.updated_by).toBe(alpha.agent_id);
+      expect(h.count).toBe(1);
+      expect(h.history[0].set_by).toBe(alpha.agent_id);
+      expect(h.history[0].reason).toBeNull();
+      void alpha;
+    });
+
+    it("appends history on each update and supersedes prior versions", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.putFactWithProvenance(beta.agent_id, "phase", "build", { reason: "kickoff" });
+      await alphaClient.putFactWithProvenance(beta.agent_id, "phase", "qa", { reason: "handoff to qa" });
+      const history = await alphaClient.factHistory(beta.agent_id, "phase");
+      const h = history as { current: { value: unknown; version: number } | null; history: Array<{ version: number; value: unknown; reason: string | null; superseded_at: string | null; superseded_by: string | null }>; count: number };
+      expect(h.count).toBe(2);
+      expect(h.current?.value).toBe("qa");
+      const v1 = h.history.find((entry) => entry.version === 1);
+      const v2 = h.history.find((entry) => entry.version === 2);
+      expect(v1?.superseded_at).not.toBeNull();
+      expect(v1?.superseded_by).toBe(alpha.agent_id);
+      expect(v2?.superseded_at).toBeNull();
+      expect(v2?.reason).toBe("handoff to qa");
+    });
+
+    it("records source_message_id when provided", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({
+        to: beta.agent_id,
+        type: "update",
+        payload: { content: "branch switched", updates_facts: { branch: "main" } },
+      });
+      const history = await alphaClient.factHistory(beta.agent_id, "branch");
+      const h = history as { history: Array<{ source_message_id: string | null; source_thread_id: string | null }> };
+      expect(h.history[0].source_message_id).toBe(sent.id);
+      expect(h.history[0].source_thread_id).toBe(sent.thread_id);
+      void alpha;
+    });
+
+    it("supports history for room facts", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      const room = await alphaClient.createRoom({ name: "prov-room" });
+      await alphaClient.joinRoom({ code: room.pairing_code });
+      const betaClient = createClient(beta.secret);
+      await betaClient.joinRoom({ code: room.pairing_code });
+      await alphaClient.putRoomFact(room.id, "topic", "initial");
+      const history = await alphaClient.roomFactHistory(room.id, "topic");
+      const h = history as { count: number; history: Array<{ version: number }> };
+      expect(h.count).toBeGreaterThanOrEqual(1);
+      void alpha;
+    });
+
+    it("rejects fact key in source_message_id that is not a UUID", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const res = await app.request(`/context/${beta.agent_id}/facts/prov`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alphaClient["secret"] ?? ""}` },
+        body: JSON.stringify({ value: "x", source_message_id: "not-a-uuid" }),
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("inspector", () => {
+    it("returns delivery health summary", async () => {
+      const { alpha, alphaClient } = await registerPair();
+      await alphaClient.updateWebhook("https://example.com/hook");
+      const res = await alphaClient.inspectorHealth({ days: 7 });
+      const health = res as { agent_id: string; webhook_configured: boolean; totals: { attempts: number } };
+      expect(health.agent_id).toBe(alpha.agent_id);
+      expect(health.webhook_configured).toBe(true);
+      expect(health.totals.attempts).toBeGreaterThanOrEqual(0);
+    });
+
+    it("returns thread timeline with delivery state", async () => {
+      const { alpha, beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      const sent = await alphaClient.send({ to: beta.agent_id, type: "question", payload: { content: "ping" } });
+      const res = await alphaClient.inspectorThread(sent.thread_id);
+      const timeline = res as { thread_id: string; entries: Array<{ message_id: string; delivery_state: string }>; counts: { messages: number } };
+      expect(timeline.thread_id).toBe(sent.thread_id);
+      expect(timeline.entries.length).toBe(1);
+      expect(timeline.entries[0].delivery_state).toBe("delivered");
+      expect(timeline.counts.messages).toBe(1);
+      void alpha;
+      void beta;
+    });
+
+    it("returns inspector summary combining threads, facts, audits", async () => {
+      const { beta, alphaClient } = await registerPair();
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.putFact(beta.agent_id, "phase", "build");
+      const res = await alphaClient.inspectorSummary();
+      const summary = res as { generated_at: string; recent_facts: Array<{ key: string }>; recent_threads: Array<unknown> };
+      expect(summary.generated_at).toEqual(expect.any(String));
+      expect(summary.recent_facts.length).toBeGreaterThan(0);
+      expect(summary.recent_facts[0].key).toBe("phase");
+      expect(summary.recent_threads.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it("renders the HTML inspector dashboard", async () => {
+      const { alpha, alphaClient } = await registerPair();
+      const res = await app.request("/inspector", {
+        headers: { "Authorization": `Bearer ${alpha.secret}`, Accept: "text/html" },
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("Delivery health");
+      expect(html).toContain("Inspector");
+      expect(html).toContain(alpha.agent_id.slice(0, 8));
+    });
+
+    it("rejects bad thread id for inspector", async () => {
+      const { alphaClient } = await registerPair();
+      await expect(alphaClient.inspectorThread("not-a-uuid")).rejects.toMatchObject({ status: 400 });
+    });
+  });
+
+  describe("protocol spine", () => {
+    it("shared schemas validate the register/send shapes via SDK", async () => {
+      // Use a few canonical shapes the protocol cares about.
+      const reg = await createClient().register({ name: "schema-agent" });
+      expect(reg.agent_id).toEqual(expect.any(String));
+      const client = createClient(reg.secret);
+      const card = await client.getMyAgentCard();
+      expect((card.card as { schema: string }).schema).toBe("trunk.agent_card.v1");
+    });
+  });
 });
 
 async function registerPair(): Promise<{
@@ -25234,6 +25585,73 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "agent_cards") {
+      const row: AgentCardRow = {
+        agentId: iv.agentId as string,
+        schema: (iv.schema as string | undefined) ?? "trunk.agent_card.v1",
+        description: (iv.description as string | undefined) ?? null,
+        protocol: (iv.protocol as string[] | undefined) ?? [],
+        version: (iv.version as string | undefined) ?? "0.1.0",
+        homepageUrl: (iv.homepageUrl as string | undefined) ?? null,
+        documentationUrl: (iv.documentationUrl as string | undefined) ?? null,
+        repositoryUrl: (iv.repositoryUrl as string | undefined) ?? null,
+        capabilities: (iv.capabilities as Array<Record<string, unknown>> | undefined) ?? [],
+        messageTypes: (iv.messageTypes as string[] | undefined) ?? [],
+        endpoints: (iv.endpoints as Array<Record<string, unknown>> | undefined) ?? [],
+        contactPolicy: (iv.contactPolicy as Record<string, unknown> | undefined) ?? {},
+        metadata: (iv.metadata as Record<string, unknown> | undefined) ?? {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      testState["agent_cards"].push(row);
+      return row;
+    }
+
+    if (this.table === "scoped_grants") {
+      const row: ScopedGrantRow = {
+        id: nextId("grant"),
+        ownerAgentId: iv.ownerAgentId as string,
+        createdBy: (iv.createdBy as string | undefined) ?? null,
+        name: iv.name as string,
+        description: (iv.description as string | undefined) ?? null,
+        tokenHash: iv.tokenHash as string,
+        tokenId: iv.tokenId as string,
+        scopes: (iv.scopes as string[] | undefined) ?? [],
+        audienceAgentId: (iv.audienceAgentId as string | undefined) ?? null,
+        audienceWorkspaceId: (iv.audienceWorkspaceId as string | undefined) ?? null,
+        roomId: (iv.roomId as string | undefined) ?? null,
+        expiresAt: (iv.expiresAt as Date | undefined) ?? null,
+        notBefore: (iv.notBefore as Date | undefined) ?? null,
+        revokedAt: (iv.revokedAt as Date | undefined) ?? null,
+        revokedReason: (iv.revokedReason as string | undefined) ?? null,
+        lastUsedAt: (iv.lastUsedAt as Date | undefined) ?? null,
+        useCount: (iv.useCount as number | undefined) ?? 0,
+        metadata: (iv.metadata as Record<string, unknown> | undefined) ?? {},
+        createdAt: new Date(),
+      };
+      testState["scoped_grants"].push(row);
+      return row;
+    }
+
+    if (this.table === "fact_history") {
+      const row: FactHistoryRow = {
+        id: nextId("facth"),
+        scope: iv.scope as string,
+        key: iv.key as string,
+        version: iv.version as number,
+        value: iv.value,
+        setBy: iv.setBy as string,
+        setAt: new Date(),
+        reason: (iv.reason as string | undefined) ?? null,
+        sourceMessageId: (iv.sourceMessageId as string | undefined) ?? null,
+        sourceThreadId: (iv.sourceThreadId as string | undefined) ?? null,
+        supersededAt: (iv.supersededAt as Date | undefined) ?? null,
+        supersededBy: (iv.supersededBy as string | undefined) ?? null,
+      };
+      testState["fact_history"].push(row);
+      return row;
+    }
+
     const row: MessageRow = {
       id: nextId("message"),
       fromAgent: iv.fromAgent as string,
@@ -25270,6 +25688,9 @@ class UpdateQuery {
   constructor(private readonly table: TableName) {}
 
   set(updates: Record<string, unknown>): this {
+    if (this.table === "fact_history") {
+      console.log("MOCK FACT_HISTORY SET", JSON.stringify(updates, null, 2));
+    }
     this.updates = updates;
     return this;
   }
@@ -25333,8 +25754,8 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow> {
-  return testState[table];
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow | AgentCardRow | ScopedGrantRow | FactHistoryRow> {
+  return testState[table] as Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow | AgentCardRow | ScopedGrantRow | FactHistoryRow>;
 }
 
 function nextId(_prefix: string): string {
@@ -25375,7 +25796,10 @@ function getTableName(table: unknown): TableName {
     name === "saved_searches" ||
     name === "message_edits" ||
     name === "attachments" ||
-    name === "room_webhooks"
+    name === "room_webhooks" ||
+    name === "agent_cards" ||
+    name === "scoped_grants" ||
+    name === "fact_history"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
 }
@@ -25574,5 +25998,26 @@ const columnToProperty: Record<string, string> = {
   urgency_filter: "urgencyFilter",
   expires_at: "expiresAt",
   workspace_role: "workspaceRole",
+  owner_agent_id: "ownerAgentId",
+  audience_agent_id: "audienceAgentId",
+  audience_workspace_id: "audienceWorkspaceId",
+  revoked_at: "revokedAt",
+  revoked_reason: "revokedReason",
+  last_used_at: "lastUsedAt",
+  use_count: "useCount",
+  not_before: "notBefore",
+  token_id: "tokenId",
+  token_hash: "tokenHash",
+  contact_policy: "contactPolicy",
+  message_types: "messageTypes",
+  homepage_url: "homepageUrl",
+  documentation_url: "documentationUrl",
+  repository_url: "repositoryUrl",
+  set_by: "setBy",
+  set_at: "setAt",
+  source_message_id: "sourceMessageId",
+  source_thread_id: "sourceThreadId",
+  superseded_at: "supersededAt",
+  superseded_by: "supersededBy",
   size_bytes: "sizeBytes",
 };

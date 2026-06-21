@@ -398,7 +398,11 @@ app.post("/", async (c) => {
     }
   }
 
-  await applyFactUpdates(agentId, body.to, body.payload.updates_facts);
+  await applyFactUpdates(agentId, body.to, body.payload.updates_facts, {
+    source_message_id: message.id,
+    source_thread_id: message.threadId ?? null,
+    reason: typeof body.payload.reason === "string" ? body.payload.reason : null,
+  });
   await audit(agentId, scheduledAt ? "message.schedule" : "message.send", "message", message.id, {
     to: body.to,
     thread_id: message.threadId,
@@ -1729,7 +1733,11 @@ app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
     })
     .returning();
 
-  await applyFactUpdates(agentId, original.fromAgent, body.payload.updates_facts);
+  await applyFactUpdates(agentId, original.fromAgent, body.payload.updates_facts, {
+    source_message_id: reply.id,
+    source_thread_id: reply.threadId ?? null,
+    reason: typeof body.payload.reason === "string" ? body.payload.reason : null,
+  });
   await audit(agentId, "message.reply", "message", reply.id, {
     original_message_id: original.id,
     thread_id: original.threadId,

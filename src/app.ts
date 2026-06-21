@@ -3,6 +3,8 @@ import { html } from "hono/html";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import agentsRoutes from "./routes/agents.js";
+import agentCardsRoutes from "./routes/agent-cards.js";
+import grantsRoutes from "./routes/grants.js";
 import contactsRoutes from "./routes/contacts.js";
 import messagesRoutes from "./routes/messages.js";
 import tasksRoutes from "./routes/tasks.js";
@@ -17,6 +19,7 @@ import auditRoutes from "./routes/audit.js";
 import templatesRoutes from "./routes/templates.js";
 import attachmentsRoutes from "./routes/attachments.js";
 import slackRoutes from "./routes/slack.js";
+import inspectorRoutes from "./routes/inspector.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 import { db } from "./db/index.js";
 import { agents } from "./db/schema.js";
@@ -69,6 +72,8 @@ app.all("/mcp", (c) => handleMcpRequest(c.req.raw));
 
 // Routes
 app.route("/agents", agentsRoutes);
+app.route("/agents", agentCardsRoutes);
+app.route("/grants", grantsRoutes);
 app.route("/contacts", contactsRoutes);
 app.route("/messages", messagesRoutes);
 app.route("/tasks", tasksRoutes);
@@ -83,6 +88,7 @@ app.route("/audit-events", auditRoutes);
 app.route("/templates", templatesRoutes);
 app.route("/attachments", attachmentsRoutes);
 app.route("/slack", slackRoutes);
+app.route("/inspector", inspectorRoutes);
 
 export default app;
 

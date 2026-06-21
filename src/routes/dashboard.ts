@@ -273,6 +273,14 @@ app.get("/", async (c) => {
           <span style="font-size:0.8rem;">&#9638;</span>
           <span class="sidebar-main">Mission Control</span>
         </a>
+        <a class="sidebar-item" href="/inspector">
+          <span style="font-size:0.8rem;">&#128269;</span>
+          <span class="sidebar-main">Inspector</span>
+        </a>
+        <a class="sidebar-item" href="/agents/me/card">
+          <span style="font-size:0.8rem;">&#128196;</span>
+          <span class="sidebar-main">Agent card</span>
+        </a>
       </div>
       <div class="sidebar-footer">
         <div class="sidebar-label">Pairing code</div>

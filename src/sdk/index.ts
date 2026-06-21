@@ -1496,6 +1496,114 @@ export class TrunkClient {
     return this.request<T>(path, options);
   }
 
+  // --- Agent Cards ---
+
+  getMyAgentCard(): Promise<{ card: unknown; signed: boolean }> {
+    return this.request("/agents/me/card");
+  }
+
+  upsertMyAgentCard(input: {
+    description?: string;
+    protocol?: string[];
+    version?: string;
+    homepage_url?: string;
+    documentation_url?: string;
+    repository_url?: string;
+    capabilities?: Array<{ id: string; description?: string; inputs?: Record<string, unknown> }>;
+    message_types?: string[];
+    endpoints?: Array<{ type: string; url: string; description?: string; auth?: string }>;
+    contact_policy?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ card: unknown; signed: boolean }> {
+    return this.request("/agents/me/card", { method: "PUT", body: input });
+  }
+
+  getAgentCard(agentId: string): Promise<{ card: unknown; signed: boolean }> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/card`);
+  }
+
+  // --- Scoped grants ---
+
+  listGrants(): Promise<{ grants: unknown[]; count: number }> {
+    return this.request("/grants");
+  }
+
+  createGrant(input: {
+    name: string;
+    description?: string;
+    scopes: string[];
+    expires_at?: string;
+    not_before?: string;
+    audience_agent_id?: string;
+    audience_workspace_id?: string;
+    room_id?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ grant: unknown; secret: string; warning?: string }> {
+    return this.request("/grants", { method: "POST", body: input });
+  }
+
+  revokeGrant(grantId: string, reason?: string): Promise<{ ok: true; grant: unknown }> {
+    return this.request(`/grants/${encodeURIComponent(grantId)}`, {
+      method: "DELETE",
+      body: reason ? { reason } : {},
+    });
+  }
+
+  // --- Fact history (provenance) ---
+
+  factHistory(
+    contactId: string,
+    key: string,
+  ): Promise<{ scope: string; key: string; current: unknown; history: unknown[]; count: number }> {
+    return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}/history`);
+  }
+
+  roomFactHistory(
+    roomId: string,
+    key: string,
+  ): Promise<{ scope: string; key: string; current: unknown; history: unknown[]; count: number }> {
+    return this.request(`/context/room/${encodeURIComponent(roomId)}/facts/${encodeURIComponent(key)}/history`);
+  }
+
+  workspaceFactHistory(
+    workspaceId: string,
+    key: string,
+  ): Promise<{ scope: string; key: string; current: unknown; history: unknown[]; count: number }> {
+    return this.request(
+      `/context/workspace/${encodeURIComponent(workspaceId)}/facts/${encodeURIComponent(key)}/history`,
+    );
+  }
+
+  putFactWithProvenance(
+    contactId: string,
+    key: string,
+    value: unknown,
+    provenance: { reason?: string; source_message_id?: string; source_thread_id?: string; ifMatch?: string | number } = {},
+  ): Promise<{ key: string; value: unknown; version: number; updated_by: string; set_by?: string; reason?: string | null }> {
+    return this.request(`/context/${encodeURIComponent(contactId)}/facts/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: { value, reason: provenance.reason, source_message_id: provenance.source_message_id, source_thread_id: provenance.source_thread_id },
+      ifMatch: provenance.ifMatch === undefined ? undefined : String(provenance.ifMatch),
+    });
+  }
+
+  // --- Inspector ---
+
+  inspectorHealth(options: { days?: number } = {}): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (options.days !== undefined) params.set("days", String(options.days));
+    const qs = params.toString();
+    return this.request(`/inspector/health${qs ? `?${qs}` : ""}`);
+  }
+
+  inspectorThread(threadId: string): Promise<unknown> {
+    return this.request(`/inspector/thread/${encodeURIComponent(threadId)}`);
+  }
+
+  inspectorSummary(): Promise<unknown> {
+    return this.request("/inspector");
+  }
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string } = {}

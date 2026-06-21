@@ -61,7 +61,8 @@ export async function verifyContactAccess(agentId: string, otherId: string): Pro
 export async function applyFactUpdates(
   actorAgent: string,
   otherAgent: string,
-  updates: unknown
+  updates: unknown,
+  provenance: { source_message_id?: string | null; source_thread_id?: string | null; reason?: string | null } = {},
 ): Promise<void> {
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) return;
   const scope = contactScope(actorAgent, otherAgent);
@@ -83,6 +84,22 @@ export async function applyFactUpdates(
       if (!(await checkFactCountLimit(scope, key))) continue;
       await db.insert(sharedFacts).values({ scope, key, value, updatedBy: actorAgent });
     }
+
+    // Record history entry directly (lightweight — we only need the
+    // attribution line, not the full recordFactWrite txn).
+    const version = existing.length > 0 ? (existing[0].version ?? 1) + 1 : 1;
+    const { recordFactHistoryEntry } = await import("./fact-history.js");
+    await recordFactHistoryEntry({
+      scope,
+      key,
+      version,
+      value,
+      setBy: actorAgent,
+      reason: provenance.reason ?? null,
+      sourceMessageId: provenance.source_message_id ?? null,
+      sourceThreadId: provenance.source_thread_id ?? null,
+      supersededBy: existing.length > 0 ? actorAgent : null,
+    });
   }
 }
 

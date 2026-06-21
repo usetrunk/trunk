@@ -345,3 +345,65 @@ export const attachments = pgTable("attachments", {
   index("attachments_message_idx").on(table.messageId),
   index("attachments_agent_idx").on(table.agentId, table.createdAt),
 ]);
+
+export const agentCards = pgTable("agent_cards", {
+  agentId: text("agent_id").primaryKey().references(() => agents.id),
+  schema: text("schema").notNull().default("trunk.agent_card.v1"),
+  description: text("description"),
+  protocol: jsonb("protocol").$type<string[]>().notNull().default([]),
+  version: text("version").notNull().default("0.1.0"),
+  homepageUrl: text("homepage_url"),
+  documentationUrl: text("documentation_url"),
+  repositoryUrl: text("repository_url"),
+  capabilities: jsonb("capabilities").$type<Array<Record<string, unknown>>>().notNull().default([]),
+  messageTypes: jsonb("message_types").$type<string[]>().notNull().default([]),
+  endpoints: jsonb("endpoints").$type<Array<Record<string, unknown>>>().notNull().default([]),
+  contactPolicy: jsonb("contact_policy").$type<Record<string, unknown>>().notNull().default({}),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const scopedGrants = pgTable("scoped_grants", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  ownerAgentId: text("owner_agent_id").notNull().references(() => agents.id),
+  createdBy: text("created_by").references(() => agents.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  tokenHash: text("token_hash").notNull(),
+  tokenId: text("token_id").notNull().unique(),
+  scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
+  audienceAgentId: text("audience_agent_id").references(() => agents.id),
+  audienceWorkspaceId: text("audience_workspace_id").references(() => workspaces.id),
+  roomId: text("room_id").references(() => rooms.id),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  notBefore: timestamp("not_before", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokedReason: text("revoked_reason"),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  useCount: integer("use_count").notNull().default(0),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("scoped_grants_owner_idx").on(table.ownerAgentId, table.createdAt),
+  index("scoped_grants_audience_idx").on(table.audienceAgentId),
+]);
+
+export const factHistory = pgTable("fact_history", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  scope: text("scope").notNull(),
+  key: text("key").notNull(),
+  version: integer("version").notNull(),
+  value: jsonb("value").$type<unknown>().notNull(),
+  setBy: text("set_by").notNull().references(() => agents.id),
+  setAt: timestamp("set_at", { withTimezone: true }).defaultNow().notNull(),
+  reason: text("reason"),
+  sourceMessageId: text("source_message_id").references(() => messages.id),
+  sourceThreadId: text("source_thread_id"),
+  supersededAt: timestamp("superseded_at", { withTimezone: true }),
+  supersededBy: text("superseded_by").references(() => agents.id),
+}, (table) => [
+  index("fact_history_scope_key_idx").on(table.scope, table.key, table.version),
+  index("fact_history_set_by_idx").on(table.setBy, table.setAt),
+  index("fact_history_source_msg_idx").on(table.sourceMessageId),
+]);

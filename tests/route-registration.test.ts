@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const ROUTE_PREFIX_BY_FILE: Record<string, string> = {
   "agents.ts": "/agents",
+  "agent-cards.ts": "/agents",
   "attachments.ts": "/attachments",
   "audit.ts": "/audit-events",
   "billing.ts": "/billing",
@@ -12,6 +13,8 @@ const ROUTE_PREFIX_BY_FILE: Record<string, string> = {
   "context.ts": "/context",
   "dashboard.ts": "/dashboard",
   "documents.ts": "/documents",
+  "grants.ts": "/grants",
+  "inspector.ts": "/inspector",
   "messages.ts": "/messages",
   "rooms.ts": "/rooms",
   "slack.ts": "/slack",
