@@ -1,5 +1,24 @@
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
+import type { IconNode } from "lucide";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BadgeCheck,
+  Ban,
+  Circle,
+  CircleCheck,
+  ClipboardList,
+  Clock3,
+  IdCard,
+  Inbox,
+  LayoutDashboard,
+  LogOut,
+  MessageSquare,
+  Radio,
+  Search,
+  Sparkles,
+} from "lucide";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, roomMembers, rooms, tasks } from "../db/schema.js";
 import { eq, or, desc, inArray } from "drizzle-orm";
@@ -69,12 +88,12 @@ export function initials(name: string): string {
     .join("") || "?";
 }
 
-export function statusIcon(status: string): string {
+export function statusIcon(status: string): Rendered {
   switch (status) {
-    case "done": return "✓";
-    case "in-progress": return "▶";
-    case "blocked": return "✕";
-    default: return "○";
+    case "done": return icon("status-done");
+    case "in-progress": return icon("status-progress");
+    case "blocked": return icon("status-blocked");
+    default: return icon("status-open");
   }
 }
 
@@ -88,19 +107,33 @@ export function statusTone(status: string): "good" | "accent" | "danger" | "mute
 }
 
 function icon(name: string): Rendered {
-  const paths: Record<string, string> = {
-    feed: '<path d="M4 5h12M4 9h12M4 13h8"/>',
-    inbox: '<path d="M3 11.5V5a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v6.5M3 11.5h4l1.5 2h3l1.5-2h4M3 11.5V13a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1.5"/>',
-    mission: '<path d="M3 14V6m4 8V9m4 5V4m4 10V8"/>',
-    inspector: '<path d="M3 8h10M8 3v10M5 5l6 6M11 5l-6 6"/>',
-    card: '<path d="M4 3h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm1.5 3h5M5.5 8h3M5.5 10h4.5"/>',
-    signout: '<path d="M9 4H5a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h4M9 8h7m0 0-2.5-2.5M16 8l-2.5 2.5"/>',
-    back: '<path d="M14 8H6m0 0 3-3M6 8l3 3"/>',
-    check: '<path d="M4 8.5l3 3 5-6"/>',
-    alert: '<path d="M8 4.5 3 13a1 1 0 0 0 1 1.5h8A1 1 0 0 0 13.2 13L8.2 4.5a.3.3 0 0 0-.4 0ZM8 8.5v2M8 12v.5"/>',
-    spark: '<path d="M8 2.5v4M8 9.5v4M2.5 8h4M9.5 8h4M4.4 4.4l2.3 2.3M9.3 9.3l2.3 2.3M11.6 4.4 9.3 6.7M6.7 9.3 4.4 11.6"/>',
+  const nodes: Record<string, IconNode> = {
+    feed: MessageSquare,
+    inbox: Inbox,
+    mission: LayoutDashboard,
+    inspector: Search,
+    card: IdCard,
+    signout: LogOut,
+    back: ArrowLeft,
+    check: BadgeCheck,
+    alert: AlertTriangle,
+    spark: Sparkles,
+    room: Radio,
+    task: ClipboardList,
+    "status-done": CircleCheck,
+    "status-progress": Clock3,
+    "status-blocked": Ban,
+    "status-open": Circle,
   };
-  return raw(`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? ""}</svg>`);
+  const node = nodes[name] ?? Sparkles;
+  const body = node.map(([tag, attrs]) => {
+    const attrText = Object.entries(attrs)
+      .filter((entry): entry is [string, string | number] => entry[1] !== undefined)
+      .map(([key, value]) => `${key}="${value}"`)
+      .join(" ");
+    return `<${tag} ${attrText}></${tag}>`;
+  }).join("");
+  return raw(`<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`);
 }
 
 export async function loadSidebarData(agentId: string): Promise<SidebarData> {
@@ -204,7 +237,7 @@ export function renderSidebar(data: SidebarData): Rendered {
               const active = room.id === data.activeRoomId;
               return html`
                 <a class="sidebar-item room ${active ? "active" : ""}" href="/dashboard/room/${room.id}" aria-current="${active ? "page" : "false"}">
-                  <span class="room-hash" aria-hidden="true">#</span>
+                  <span class="room-mark" aria-hidden="true">${icon("room")}</span>
                   <span class="sidebar-main">${room.name}</span>
                   ${room.openTaskCount > 0 ? html`<span class="count-badge warn">${room.openTaskCount}</span>` : ""}
                   <span class="sidebar-sub">${room.memberCount} agents</span>
@@ -471,8 +504,9 @@ button { font: inherit; color: inherit; }
 }
 .sidebar-main { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sidebar-item.room { gap:6px; }
-.room-hash { color: var(--text-faint); font-weight:700; }
-.sidebar-item.active .room-hash { color: var(--accent-2); }
+.room-mark { color: var(--text-faint); display:inline-flex; }
+.room-mark .ic { width:14px; height:14px; }
+.sidebar-item.active .room-mark { color: var(--accent-2); }
 .sidebar-sub { grid-column:auto; color: var(--text-faint); font-size:11px; }
 .count-badge {
   min-width:18px; height:18px; padding:0 5px; border-radius:999px;
@@ -675,7 +709,8 @@ h1 { font-size: clamp(18px, 2vw, 24px); line-height:1.2; letter-spacing:-0.02em;
 .task-row:last-child { border-bottom:none; }
 .task-row:hover { background: rgba(255,255,255,0.018); }
 .task-row-head { display:flex; align-items:center; gap:7px; }
-.task-icon { font-size:11px; min-width:1em; flex:none; }
+.task-icon { display:inline-flex; min-width:14px; flex:none; color: var(--text-faint); }
+.task-icon .ic { width:14px; height:14px; }
 .task-icon.good { color: var(--good); }
 .task-icon.accent { color: var(--accent); }
 .task-icon.danger { color: var(--danger); }
@@ -714,7 +749,8 @@ h1 { font-size: clamp(18px, 2vw, 24px); line-height:1.2; letter-spacing:-0.02em;
 .room-meta-row .mono { color: var(--accent); }
 .rail-list-item { display:flex; gap:8px; align-items:flex-start; padding:7px 0; border-bottom:1px solid var(--border); font-size:13px; }
 .rail-list-item:last-child { border-bottom:none; }
-.rail-list-item .mark { flex:none; margin-top:2px; }
+.rail-list-item .mark { display:inline-flex; flex:none; margin-top:2px; color: var(--text-faint); }
+.rail-list-item .mark .ic { width:14px; height:14px; }
 .rail-list-item .mark.good { color: var(--good); }
 .rail-list-item .mark.danger { color: var(--danger); }
 .rail-list-item .text { flex:1; color: var(--text-dim); }
@@ -739,7 +775,8 @@ h1 { font-size: clamp(18px, 2vw, 24px); line-height:1.2; letter-spacing:-0.02em;
 .mc-agent-stat { font-size:12px; min-width:1.4em; text-align:center; }
 .mc-feed-item { display:flex; align-items:flex-start; gap:8px; padding:7px 0; border-bottom:1px solid var(--border); font-size:13px; }
 .mc-feed-item:last-child { border-bottom:none; }
-.mc-feed-icon { flex:none; margin-top:2px; }
+.mc-feed-icon { display:inline-flex; flex:none; margin-top:2px; }
+.mc-feed-icon .ic { width:14px; height:14px; }
 .mc-feed-text { flex:1; color: var(--text-dim); line-height:1.35; }
 .mc-feed-text .agent { color: var(--accent-2); }
 .mc-feed-text .group { color: var(--accent); }
