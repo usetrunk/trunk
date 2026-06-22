@@ -247,7 +247,7 @@ export function createTrunkMcpServer() {
         cursor: cursorParam,
       });
 
-      const conditions = [eq(messages.toAgent, agent.id), eq(messages.status, "pending")];
+      const conditions = [eq(messages.toAgent, agent.id), inArray(messages.status, ["pending", "delivered"])];
       if (cursor) {
         conditions.push(
           or(
