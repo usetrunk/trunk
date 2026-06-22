@@ -1,8 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import WebSocket from "ws";
-import type { RawData } from "ws";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +9,7 @@ import { TrunkApiError, TrunkClient } from "../../src/sdk/index.js";
 // --- Config ---
 
 const RELAY_URL = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
-const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://push.trunk.bot";
+const POLL_INTERVAL = (Number(process.env.TRUNK_POLL_INTERVAL) || 30) * 1000;
 const PROFILE = process.env.TRUNK_PROFILE;
 const CONFIG_DIR = join(homedir(), ".trunk");
 const CONFIG_FILE = join(CONFIG_DIR, PROFILE ? `config.${PROFILE}.json` : "config.json");
@@ -58,28 +56,32 @@ async function relay(path: string, opts: { method?: string; body?: unknown; secr
   }
 }
 
-// --- WebSocket push listener ---
+// --- Inbox poller ---
 
-let ws: WebSocket | null = null;
+let polling = false;
 let pendingNotifications: Array<{ type: string; payload: any }> = [];
+const seenMessageIds = new Set<string>();
+let firstInboxPoll = true;
 
-function connectWebSocket(config: Config) {
-  const url = `${PUSH_URL}/connect/${config.agent_id}?secret=${config.secret}`;
-  ws = new WebSocket(url);
+async function pollInbox(config: Config) {
+  try {
+    const result = await relay("/messages/inbox", { secret: config.secret });
+    const messages: any[] = result.messages || [];
 
-  ws.on("open", () => {
-    process.stderr.write("[trunk] connected to push channel\n");
-  });
+    for (const msg of messages) {
+      const messageId = msg.id;
+      if (!messageId || seenMessageIds.has(messageId)) continue;
+      seenMessageIds.add(messageId);
 
-  ws.on("message", (data: RawData) => {
-    try {
-      const msg = JSON.parse(data.toString());
+      // On the first poll, mark the backlog as seen without notifying.
+      if (firstInboxPoll) continue;
+
       pendingNotifications.push(msg);
-      const content = msg.message?.payload?.content || "(no content)";
-      const type = msg.message?.type || "message";
-      const from = msg.message?.from_agent || "unknown";
+      const content = msg.payload?.content || "(no content)";
+      const type = msg.type || "message";
+      const from = msg.from_agent || "unknown";
 
-      // Send MCP logging notification — this is the real-time push to Claude Code
+      // Send MCP logging notification — surfaces new messages to Claude Code
       server.server.sendLoggingMessage({
         level: "info",
         logger: "trunk",
@@ -87,17 +89,20 @@ function connectWebSocket(config: Config) {
       }).catch(() => {});
 
       process.stderr.write(`[trunk] NEW ${type}: ${content}\n`);
-    } catch {}
-  });
+    }
 
-  ws.on("close", () => {
-    process.stderr.write("[trunk] push disconnected, reconnecting in 5s...\n");
-    setTimeout(() => connectWebSocket(config), 5000);
-  });
+    firstInboxPoll = false;
+  } catch {
+    // Transient errors are ignored; the next interval will retry.
+  }
+}
 
-  ws.on("error", () => {
-    // Will trigger close -> reconnect
-  });
+function startInboxPolling(config: Config) {
+  if (polling) return;
+  polling = true;
+  process.stderr.write("[trunk] polling inbox\n");
+  pollInbox(config);
+  setInterval(() => pollInbox(config), POLL_INTERVAL);
 }
 
 // --- MCP Server ---
@@ -133,7 +138,7 @@ server.tool(
       metadata,
     };
     saveConfig(config);
-    connectWebSocket(config);
+    startInboxPolling(config);
 
     // Sync profile fields to server if provided
     if (role !== undefined || projects !== undefined || metadata !== undefined) {
@@ -1299,7 +1304,7 @@ server.tool(
       agent_id: config.agent_id,
       name: config.name,
       pairing_code: config.pairing_code,
-      push_connected: ws?.readyState === WebSocket.OPEN,
+      inbox_polling: polling,
       pending_notifications: pendingNotifications.length,
     };
     if (config.role !== undefined) status.role = config.role;
@@ -2181,10 +2186,10 @@ server.tool(
 // --- Start ---
 
 async function main() {
-  // Auto-connect WebSocket if already registered
+  // Start polling the inbox if already registered
   const config = loadConfig();
   if (config) {
-    connectWebSocket(config);
+    startInboxPolling(config);
   }
 
   const transport = new StdioServerTransport();
