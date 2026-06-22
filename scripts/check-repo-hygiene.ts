@@ -47,6 +47,41 @@ for (const file of mcpProxyFiles) {
   }
 }
 
+const responseShapeFiles = [
+  {
+    file: "src/routes/messages.ts",
+    required: ["messageToJson"],
+    forbidden: [/messages:\s*page\.items(?!\.map\(messageToJson\))/],
+    reason: "message list responses must use the shared public response mapper",
+  },
+  {
+    file: "src/routes/tasks.ts",
+    required: ["taskToJson"],
+    forbidden: [/tasks:\s*page\.items(?!\.map\(taskToJson\))/],
+    reason: "task list responses must use the shared public response mapper",
+  },
+  {
+    file: "src/mcp/server.ts",
+    required: ["taskToJson"],
+    forbidden: [/tasks:\s*page\.items\.map\(\s*\w+\s*=>\s*\(\s*\{/],
+    reason: "direct MCP task responses must use the shared task response mapper",
+  },
+];
+
+for (const { file, required, forbidden, reason } of responseShapeFiles) {
+  const source = readFileSync(file, "utf8");
+  for (const token of required) {
+    if (!source.includes(token)) {
+      issues.push(`${file}: ${reason}`);
+    }
+  }
+  for (const pattern of forbidden) {
+    if (pattern.test(source)) {
+      issues.push(`${file}: ${reason}`);
+    }
+  }
+}
+
 const adapterFiles = ["adapters/email/index.ts", "adapters/intercom/index.ts", "adapters/slack/index.ts"];
 for (const file of adapterFiles) {
   const source = readFileSync(file, "utf8");

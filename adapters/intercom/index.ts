@@ -212,7 +212,7 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
     event: string;
     message: {
       id: string;
-      threadId: string;
+      thread_id: string;
       payload: { content?: string; source?: string };
     };
   };
@@ -221,7 +221,7 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
   if (body.message.payload.source === "intercom") return new Response("ok"); // avoid echo
 
   const content = body.message.payload.content || "";
-  const conversationId = threadToConversation.get(body.message.threadId);
+  const conversationId = threadToConversation.get(body.message.thread_id);
 
   if (conversationId && content) {
     await intercomReply(conversationId, content, "note");

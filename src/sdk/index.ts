@@ -217,25 +217,27 @@ export type MessageReceipt = {
 
 export type TrunkMessage = {
   id: string;
-  fromAgent: string;
-  toAgent: string;
-  threadId: string | null;
-  replyTo?: string | null;
-  idempotencyKey?: string | null;
+  from_agent: string;
+  to_agent: string;
+  to_workspace?: string | null;
+  to_room?: string | null;
+  thread_id: string | null;
+  reply_to?: string | null;
+  idempotency_key?: string | null;
   type: string;
   payload: TrunkPayload;
   status: string;
-  createdAt: string | Date;
-  readAt?: string | Date | null;
-  deliveredAt?: string | Date | null;
-  processedAt?: string | Date | null;
-  repliedAt?: string | Date | null;
-  deletedAt?: string | Date | null;
-  editedAt?: string | Date | null;
-  pinnedAt?: string | Date | null;
-  pinnedBy?: string | null;
-  scheduledAt?: string | Date | null;
-  expiresAt?: string | Date | null;
+  created_at: string | Date;
+  read_at?: string | Date | null;
+  delivered_at?: string | Date | null;
+  processed_at?: string | Date | null;
+  replied_at?: string | Date | null;
+  deleted_at?: string | Date | null;
+  edited_at?: string | Date | null;
+  pinned_at?: string | Date | null;
+  pinned_by?: string | null;
+  scheduled_at?: string | Date | null;
+  expires_at?: string | Date | null;
 };
 
 export type CreateTaskRequest = {
@@ -256,6 +258,73 @@ export type CreateTaskRequest = {
   metadata?: Record<string, unknown>;
 };
 
+export type VerificationStatus = "pending" | "passed" | "failed" | "skipped";
+
+export type FileClaim = {
+  path: string;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  expires_at: string | null;
+  task_id?: string | null;
+  note?: string | null;
+};
+
+export type VerificationState = {
+  command: string;
+  status: VerificationStatus;
+  output?: string | null;
+  verified_by?: string | null;
+  verified_at?: string | null;
+};
+
+export type BlockerState = {
+  reason: string;
+  waiting_on?: string | null;
+  blocked_by?: string | null;
+  blocked_at?: string | null;
+};
+
+export type CheckpointState = {
+  summary: string;
+  status?: string;
+  files_changed: string[];
+  commands_run: string[];
+  verification?: VerificationState | null;
+  blocker?: BlockerState | null;
+  next_step?: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+};
+
+export type HandoffState = {
+  from_agent: string | null;
+  to_agent: string | null;
+  summary: string;
+  next_action?: string | null;
+  acknowledged_at?: string | null;
+  created_at: string | null;
+};
+
+export type CoordinationActivity = {
+  type: "claim" | "checkpoint" | "handoff" | "release" | "blocker";
+  agent_id: string | null;
+  at: string | null;
+  summary?: string | null;
+  files?: string[];
+  verification?: VerificationState | null;
+  blocker?: BlockerState | null;
+  handoff_to?: string | null;
+};
+
+export type TaskCoordinationState = {
+  claimed_files: FileClaim[];
+  checkpoint: CheckpointState | null;
+  verification: VerificationState | null;
+  blocker: BlockerState | null;
+  handoff: HandoffState | null;
+  activity: CoordinationActivity[];
+};
+
 export type TaskResponse = {
   id: string;
   scope?: string;
@@ -272,6 +341,8 @@ export type TaskResponse = {
   sequence: number | null;
   estimate: number | null;
   context_ref: string | null;
+  metadata: Record<string, unknown>;
+  coordination: TaskCoordinationState;
   created_at: string | Date;
   updated_at?: string | Date;
 };
@@ -313,6 +384,85 @@ export type UpdateTaskRequest = {
   estimate?: number;
   context_ref?: string;
   metadata?: Record<string, unknown>;
+};
+
+export type ClaimTaskRequest = {
+  claimed_files?: string[];
+  ttl_seconds?: number;
+  reason?: string;
+  force?: boolean;
+  expected_status?: "open" | "in-progress" | "done" | "blocked";
+  announce?: boolean;
+  announcement?: string | null;
+};
+
+export type CheckpointTaskRequest = {
+  summary: string;
+  status?: "open" | "in-progress" | "done" | "blocked";
+  files_changed?: string[];
+  commands_run?: string[];
+  verification?: {
+    command: string;
+    status: VerificationStatus;
+    output?: string | null;
+  } | null;
+  blocker?: {
+    reason: string;
+    waiting_on?: string | null;
+  } | null;
+  next_step?: string | null;
+  announce?: boolean;
+  announcement?: string | null;
+};
+
+export type HandoffTaskRequest = {
+  to_agent?: string | null;
+  summary: string;
+  next_action?: string | null;
+  status?: "open" | "in-progress" | "done" | "blocked";
+  announce?: boolean;
+  announcement?: string | null;
+};
+
+export type RoomStateResponse = {
+  room: {
+    id: string;
+    name: string;
+    created_by: string;
+    created_at: string | Date;
+    metadata: Record<string, unknown>;
+  };
+  members: Array<{
+    agent_id: string;
+    name: string;
+    owner?: string | null;
+    role: string;
+    joined_at: string | Date;
+    last_seen_at: string | Date | null;
+    status_text: string | null;
+    active: boolean;
+  }>;
+  tasks: TaskResponse[];
+  file_claims: Array<FileClaim & { task_id: string; task_title: string; stale: boolean }>;
+  blockers: Array<BlockerState & { task_id: string; task_title: string }>;
+  checkpoints: Array<CheckpointState & { task_id: string; task_title: string }>;
+  handoffs: Array<HandoffState & { task_id: string; task_title: string }>;
+  latest_activity: {
+    messages: TrunkMessage[];
+    task_activity: Array<CoordinationActivity & { task_id: string; task_title: string }>;
+  };
+  summary: {
+    members: number;
+    active_members: number;
+    open_tasks: number;
+    in_progress_tasks: number;
+    blocked_tasks: number;
+    done_tasks: number;
+    file_claims: number;
+    stale_claims: number;
+    blockers: number;
+    handoffs: number;
+  };
 };
 
 export type TaskListOptions = {
@@ -1154,6 +1304,27 @@ export class TrunkClient {
     });
   }
 
+  claimTask(scopeId: string, taskId: string, input: ClaimTaskRequest = {}): Promise<TaskResponse> {
+    return this.request(`/tasks/${encodeURIComponent(scopeId)}/${encodeURIComponent(taskId)}/claim`, {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  checkpointTask(scopeId: string, taskId: string, input: CheckpointTaskRequest): Promise<TaskResponse> {
+    return this.request(`/tasks/${encodeURIComponent(scopeId)}/${encodeURIComponent(taskId)}/checkpoint`, {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  handoffTask(scopeId: string, taskId: string, input: HandoffTaskRequest): Promise<TaskResponse> {
+    return this.request(`/tasks/${encodeURIComponent(scopeId)}/${encodeURIComponent(taskId)}/handoff`, {
+      method: "POST",
+      body: input,
+    });
+  }
+
   createRoom(input: CreateRoomRequest): Promise<RoomResponse> {
     return this.request("/rooms", { method: "POST", body: input });
   }
@@ -1168,6 +1339,10 @@ export class TrunkClient {
 
   roomMembers(roomId: string): Promise<RoomMembersResponse> {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/members`);
+  }
+
+  roomState(roomId: string): Promise<RoomStateResponse> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/state`);
   }
 
   runRoomHeartbeats(): Promise<RoomHeartbeatRunResponse> {

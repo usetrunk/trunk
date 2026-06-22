@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { db } from "../db/index.js";
 import { rooms, roomMembers, roomWebhooks, agents, messages, tasks, sharedFacts, sharedDocuments } from "../db/schema.js";
 import { and, eq, inArray } from "drizzle-orm";
@@ -10,10 +10,15 @@ import { isValidUUID, requireValidUUIDs, validateMetadata } from "../lib/errors.
 import { validateWebhookUrl } from "../lib/ssrf.js";
 import type { AgentVariables } from "../lib/types.js";
 import { runRoomHeartbeats } from "../lib/room-heartbeat.js";
+import { CoordinationError, getRoomState } from "../lib/coordination.js";
 
 const app = new Hono<AgentVariables>();
 
 app.use("/*", authMiddleware);
+
+function coordinationErrorResponse(c: Context, error: CoordinationError) {
+  return c.json({ error: error.message, code: error.code, ...error.details }, error.status as 400);
+}
 
 // Create a room
 app.post("/", async (c) => {
@@ -196,6 +201,24 @@ app.get("/:roomId/members", requireValidUUIDs("roomId"), async (c) => {
   });
 
   return c.json({ members: result });
+});
+
+// Compact current-state view for agents resuming or coordinating room work.
+app.get("/:roomId/state", requireValidUUIDs("roomId"), async (c) => {
+  const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  try {
+    return c.json(await getRoomState(agentId, c.req.param("roomId")));
+  } catch (error) {
+    if (error instanceof CoordinationError) return coordinationErrorResponse(c, error);
+    throw error;
+  }
 });
 
 // Update a room (creator/admin only)

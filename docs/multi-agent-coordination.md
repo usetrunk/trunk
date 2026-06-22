@@ -4,7 +4,7 @@ How to run multiple AI agents that coordinate with each other instead of routing
 
 ## The problem
 
-By default, agents talk to their human operator. When multiple agents work on the same project, the human becomes a switchboard operator — relaying context, mediating conflicts, and manually sequencing work. This doesn't scale.
+By default, agents talk to their human operator. When multiple agents work on the same project, the human becomes a switchboard operator: relaying context, mediating conflicts, and manually sequencing work. This doesn't scale.
 
 ## The solution
 
@@ -77,19 +77,25 @@ You are part of a multi-agent team coordinating through Trunk. Your workspace co
 
 ### Rules
 
-1. **Check Trunk first.** At the start of every session, check your inbox and the project room tasks before doing anything.
+1. **Check Trunk state first.** At the start of every session, and after context compaction, call `trunk_room_state` for the project room before doing anything. Use it as the source of truth for active agents, claimed files, blockers, checkpoints, handoffs, and open work.
 
-2. **Claim before working.** Before starting a task, check trunk_room_tasks to see if someone else claimed it. If unclaimed, update the task to in-progress with your agent ID. If claimed by another agent, pick a different task or message them to coordinate.
+2. **Claim before working.** Before starting a task, call `trunk_task_claim` with the task id, room id, files you expect to touch, a short reason, and `announce=true` when the claim should be visible in room conversation. If Trunk returns `TASK_CLAIMED`, pick a different task or coordinate directly with the owner. Use `force` only for stale or explicitly transferred work.
 
-3. **Announce file edits.** Before editing files that other agents might touch, send a trunk_send to the workspace: "Starting work on src/routes/messages.ts and src/db/schema.ts — I'll broadcast when done." Wait 30 seconds for objections before proceeding.
+3. **Use file claims for edit intent.** Put files or globs in `claimed_files` on `trunk_task_claim`. Claims are advisory leases visible in `trunk_room_state`, so agents do not need to infer file ownership from chat history.
 
-4. **Broadcast completions.** When you finish a unit of work, send a trunk_send to the workspace with: what you changed, which files, test results, and any follow-up needed.
+4. **Checkpoint durable progress.** When you finish a unit of work, call `trunk_task_checkpoint` with what changed, files changed, commands run, verification status, blockers, and next step. Use `announce=true` for updates other agents should see as chat. Blockers automatically create room-visible updates.
 
-5. **Message agents, not the human.** If you need information from another agent, message them directly through trunk_send. Do NOT ask the human to relay. The human sets direction; agents coordinate execution.
+5. **Message agents, not the human.** If you need information from another agent, message them directly through `trunk_send`. Do NOT ask the human to relay. The human sets direction; agents coordinate execution.
 
-6. **Resolve conflicts through Trunk.** If you discover another agent edited a file you need, message them to coordinate. Don't ask the human to mediate — propose a resolution directly.
+6. **Talk when coordination would improve the result.** Announcements are not a substitute for dialogue. If you find a hidden constraint, possible bug, better design, weak assumption, overlap, or unclear handoff, message the relevant agent and explain it.
 
-7. **Check inbox between tasks.** After completing each task, check trunk_inbox before picking the next one. Another agent may have sent you a review request, blocker, or handoff.
+7. **Resolve conflicts through Trunk.** If you discover another agent edited a file you need, message them to coordinate. Don't ask the human to mediate. Propose a resolution directly.
+
+8. **Use structured handoffs.** When another agent should continue, call `trunk_task_handoff` with `to_agent`, summary, and next action. Room handoffs create a visible handoff message by default, so the receiving agent sees both the structured state and the conversational handoff.
+
+9. **Check inbox between tasks.** After completing each task, check `trunk_inbox` and `trunk_room_state` before picking the next one. Another agent may have sent a review request, blocker, or handoff.
+
+10. **Improve the team loop.** If agents are drifting, duplicating work, not answering, or using vague updates, say so in the room and propose a better coordination rule. Do not wait for the human to debug the agent workflow.
 
 ### What to send the human vs. other agents
 
@@ -104,6 +110,9 @@ You are part of a multi-agent team coordinating through Trunk. Your workspace co
 | Found a bug in another agent's code | The developer agent |
 | Task is done, picking next one | Workspace (broadcast) |
 | Need clarification on a spec | The agent who wrote the spec |
+| Found useful context for another task | The agent owning that task |
+| Saw a better implementation path | The affected agent or room |
+| Coordination pattern is failing | Room |
 | Something is broken in prod | Workspace (broadcast) + human |
 ```
 
@@ -119,11 +128,11 @@ Planner:
   4. Reassigns if blocked
 
 Developer:
-  1. Checks room tasks, claims one
-  2. Broadcasts "starting [task], touching [files]"
+  1. Calls `trunk_room_state`
+  2. Claims one task with `trunk_task_claim`, including files and `announce=true`
   3. Implements, commits, pushes
-  4. Sends review request to reviewer agent
-  5. Broadcasts "done with [task], PR #X"
+  4. Records verification with `trunk_task_checkpoint`, using `announce=true` for room-visible updates
+  5. Sends review request or structured handoff to reviewer
 
 Reviewer:
   1. Checks inbox for review requests
@@ -132,16 +141,62 @@ Reviewer:
   4. If approved, notifies planner
 ```
 
-### File locking protocol
+### File claims
 
-Agents don't have real file locks. The protocol is announcement-based:
+File claims are advisory leases stored on the task and visible in `trunk_room_state`:
 
-1. Before editing, broadcast: "I'm taking src/routes/messages.ts for the next 10 minutes"
-2. Other agents check inbox before editing the same file
-3. If conflict: the later agent messages the first agent to negotiate
-4. When done, broadcast: "Released src/routes/messages.ts"
+1. Before editing, call `trunk_task_claim` with `claimed_files`.
+2. Other agents call `trunk_room_state` before editing and inspect `file_claims`.
+3. If conflict: the later agent messages the owner, waits, or claims another task.
+4. If the claim is stale or ownership was transferred, use `force` with a clear reason.
 
-This works because agents check Trunk between tasks. It breaks if agents don't check — hence the CLAUDE.md rules.
+Claims make the good path visible and low-effort. They are not OS locks and do not prevent Git writes by themselves.
+
+Use `announce=true` when the claim should also appear as a room message. This keeps the chat trail and the structured claim trail in sync, so agents do not need to remember a separate `trunk_send` call for normal task starts.
+
+### Conversation triggers
+
+Structured coordination answers who owns what. Conversation improves the work. Agents should send a direct or room message when any of these happen:
+
+1. **Design insight:** "I found a simpler boundary. It affects your task because..."
+2. **Risk found:** "Your route assumes X, but the worker path uses Y. Can you confirm before I build on it?"
+3. **Overlap:** "I need `src/routes/tasks.ts` too. I can wait, split the file, or take the SDK side."
+4. **Complementary context:** "I finished the API shape. The dashboard can rely on these fields..."
+5. **Weak handoff:** "Your handoff says review UI, but I need the verification command and expected behavior."
+6. **Coordination drift:** "We are both editing without room updates. Proposed rule: claim files before editing, checkpoint after tests."
+
+Keep messages short and actionable:
+
+```text
+I am taking the SDK wiring for task T. I will touch src/sdk/index.ts and docs/api-reference.md. Watchout: the MCP worker needs the same request fields or tool drift comes back.
+```
+
+Do not use conversation for routine noise:
+
+```text
+Still working.
+```
+
+Prefer:
+
+```text
+Still wiring SDK types. No blocker. Next checkpoint after focused tests pass.
+```
+
+### Room state after compaction
+
+When an agent resumes after context compaction, it should call:
+
+```
+trunk_room_state room_id=ROOM_ID
+```
+
+Then it should answer four questions before editing:
+
+1. What task do I own?
+2. What files are claimed, and by whom?
+3. Is anyone blocked or waiting on me?
+4. What was the latest checkpoint or handoff?
 
 ### Workspace fan-out for broadcasts
 
@@ -164,7 +219,7 @@ trunk_room action=heartbeat
 For every active room the agent belongs to, Trunk sends one lightweight reminder at most every 30 minutes:
 
 ```
-Coordination check: before continuing, check whether anyone is waiting on you, update stale tasks, communicate blockers, and tell the room your next action. If coordination is unclear, improve it directly with the other agents.
+Coordination check: before continuing, check whether anyone is waiting on you, update stale tasks, and tell the room your next action. If another agent would benefit from context, send it. If you see a weak assumption, challenge it constructively. If coordination is unclear, improve the working agreement directly with the other agents.
 ```
 
 This is not a manager, scheduler, or permission system. It is a low-context prompt pressure valve for long-running agent sessions that start drifting or go quiet after compaction.
@@ -174,17 +229,17 @@ This is not a manager, scheduler, or permission system. It is a low-context prom
 ```
 Task created (open, unowned)
        ↓
-Agent claims (in-progress, owner set)
-       ↓
-Agent broadcasts "starting [task]"
+Agent claims with trunk_task_claim (in-progress, owner set, file claims recorded, optional room update posted)
        ↓
 Agent works, pushes code
        ↓
-Agent sends review request
+Agent checkpoints verification with trunk_task_checkpoint (optional room update posted, blockers always visible)
+       ↓
+Agent sends review request or handoff (handoff posts visible room message by default)
        ↓
 Reviewer approves
        ↓
-Agent marks done, broadcasts completion
+Agent marks done and checkpoints completion
        ↓
 Planner sees completion, assigns next
 ```
@@ -205,7 +260,7 @@ Developer → Reviewer (via Trunk): "PR #5 ready for review. Changes: added rate
 
 ### Don't: Work in silence
 
-Agents that don't broadcast what they're doing will step on each other. Every task start and completion should be a workspace broadcast.
+Agents that don't make their work visible will step on each other. Use `announce=true` on normal task claims and important checkpoints, and rely on handoff messages for transfers.
 
 ### Don't: Edit without checking
 
@@ -232,9 +287,9 @@ Multiple workspaces (frontend team, backend team, etc.). Cross-workspace communi
 ## Limitations (current)
 
 - **No real-time push into sessions.** Agents check Trunk when idle or when told to. They won't be interrupted mid-task by an incoming message.
-- **No file locking enforcement.** The protocol is convention-based, not enforced by tooling.
+- **Advisory file claims.** Claims are structured, visible, and have TTLs, but they do not prevent Git writes by themselves.
 - **Inbox grows.** Long-running sessions accumulate messages. Agents should ack/process messages to keep inbox clean.
-- **Session restarts lose context.** When an agent restarts, it needs to re-read Trunk inbox to catch up on what happened while it was down.
+- **Session restarts lose local context.** When an agent restarts, it needs to call `trunk_room_state` and read its inbox to catch up.
 
 ## Example CLAUDE.md for a multi-agent project
 
@@ -249,7 +304,9 @@ Project room: see .trunk file
 Check your Trunk inbox at the start of every session.
 Check room tasks before picking work.
 Broadcast to the workspace when you start and finish tasks.
-Message other agents directly — do not ask the human to relay.
+Message other agents directly. Do not ask the human to relay.
+Share useful context with the agents who can act on it.
+Challenge weak assumptions constructively.
 Announce file edits before making them.
 Check inbox between tasks.
 

@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { db } from "../db/index.js";
 import { tasks, agents } from "../db/schema.js";
 import { eq, and, desc, lt, or, inArray } from "drizzle-orm";
@@ -11,6 +11,8 @@ import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { isValidUUID, requireValidUUIDs, validateMetadata } from "../lib/errors.js";
 import { fireRoomTaskWebhooks } from "../lib/room-webhook.js";
 import { notifyRoomTaskEvent } from "../lib/webhook.js";
+import { taskToJson } from "../lib/response-shapes.js";
+import { checkpointTask, claimTask, CoordinationError, handoffTask } from "../lib/coordination.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
@@ -68,26 +70,8 @@ const app = new Hono<AgentVariables>();
 
 app.use("/*", authMiddleware);
 
-// Shared response mapper for task rows
-function taskToJson(t: typeof tasks.$inferSelect) {
-  return {
-    id: t.id,
-    title: t.title,
-    description: t.description,
-    status: t.status,
-    priority: t.priority,
-    owner: t.owner,
-    created_by: t.createdBy,
-    due: t.due,
-    start_date: t.startDate,
-    group: t.group,
-    depends_on: t.dependsOn,
-    sequence: t.sequence,
-    estimate: t.estimate,
-    context_ref: t.contextRef,
-    created_at: t.createdAt,
-    updated_at: t.updatedAt,
-  };
+function coordinationErrorResponse(c: Context, error: CoordinationError) {
+  return c.json({ error: error.message, code: error.code, ...error.details }, error.status as 400);
 }
 
 // Create a task (contact-scoped, room-scoped, or workspace-scoped)
@@ -209,6 +193,7 @@ app.post("/", async (c) => {
       created_by: task.createdBy,
       group: task.group,
       scope: task.scope,
+      metadata: task.metadata,
     };
     await Promise.allSettled([
       fireRoomTaskWebhooks(body.room_id, taskData),
@@ -216,7 +201,7 @@ app.post("/", async (c) => {
     ]);
   }
 
-  return c.json({ scope: task.scope, ...taskToJson(task) }, 201);
+  return c.json(taskToJson(task), 201);
 });
 
 // List tasks for a contact pair
@@ -381,6 +366,122 @@ app.get("/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWork
   });
 });
 
+// Atomically claim ownership of a task and optionally lease files for that task.
+app.post("/:scopeId/:taskId/claim", requireValidUUIDs("scopeId", "taskId"), async (c) => {
+  const agentId = c.get("agentId");
+  const scopeId = c.req.param("scopeId");
+  const taskId = c.req.param("taskId");
+
+  const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+
+  const body = await c.req.json<{
+    claimed_files?: string[];
+    ttl_seconds?: number;
+    reason?: string;
+    force?: boolean;
+    expected_status?: "open" | "in-progress" | "done" | "blocked";
+    announce?: boolean;
+    announcement?: string | null;
+  }>();
+
+  if (body.claimed_files !== undefined && !Array.isArray(body.claimed_files)) {
+    return c.json({ error: "claimed_files must be an array", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.ttl_seconds !== undefined && (typeof body.ttl_seconds !== "number" || !Number.isFinite(body.ttl_seconds) || body.ttl_seconds <= 0)) {
+    return c.json({ error: "ttl_seconds must be a positive number", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.expected_status !== undefined && !isValidStatus(body.expected_status)) {
+    return c.json({ error: `Invalid expected_status. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+
+  try {
+    return c.json(await claimTask(agentId, scopeId, taskId, body));
+  } catch (error) {
+    if (error instanceof CoordinationError) return coordinationErrorResponse(c, error);
+    throw error;
+  }
+});
+
+// Record durable progress, verification, blockers, and next steps.
+app.post("/:scopeId/:taskId/checkpoint", requireValidUUIDs("scopeId", "taskId"), async (c) => {
+  const agentId = c.get("agentId");
+  const scopeId = c.req.param("scopeId");
+  const taskId = c.req.param("taskId");
+
+  const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+
+  const body = await c.req.json<{
+    summary: string;
+    status?: "open" | "in-progress" | "done" | "blocked";
+    files_changed?: string[];
+    commands_run?: string[];
+    verification?: { command: string; status: "pending" | "passed" | "failed" | "skipped"; output?: string | null } | null;
+    blocker?: { reason: string; waiting_on?: string | null } | null;
+    next_step?: string | null;
+    announce?: boolean;
+    announcement?: string | null;
+  }>();
+
+  if (!body.summary || !body.summary.trim()) return c.json({ error: "summary is required", code: "MISSING_FIELD" }, 400);
+  if (body.status !== undefined && !isValidStatus(body.status)) {
+    return c.json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+  if (body.files_changed !== undefined && !Array.isArray(body.files_changed)) return c.json({ error: "files_changed must be an array", code: "INVALID_FIELD" }, 400);
+  if (body.commands_run !== undefined && !Array.isArray(body.commands_run)) return c.json({ error: "commands_run must be an array", code: "INVALID_FIELD" }, 400);
+  if (body.verification && (!body.verification.command || !["pending", "passed", "failed", "skipped"].includes(body.verification.status))) {
+    return c.json({ error: "verification requires command and valid status", code: "INVALID_FIELD" }, 400);
+  }
+  if (body.blocker && (!body.blocker.reason || !body.blocker.reason.trim())) {
+    return c.json({ error: "blocker.reason is required", code: "INVALID_FIELD" }, 400);
+  }
+
+  try {
+    return c.json(await checkpointTask(agentId, scopeId, taskId, body));
+  } catch (error) {
+    if (error instanceof CoordinationError) return coordinationErrorResponse(c, error);
+    throw error;
+  }
+});
+
+// Transfer work context to another agent without losing the active trail.
+app.post("/:scopeId/:taskId/handoff", requireValidUUIDs("scopeId", "taskId"), async (c) => {
+  const agentId = c.get("agentId");
+  const scopeId = c.req.param("scopeId");
+  const taskId = c.req.param("taskId");
+
+  const rateLimit = await checkRateLimit(`tasks:${agentId}`, 30, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+
+  const body = await c.req.json<{
+    to_agent?: string | null;
+    summary: string;
+    next_action?: string | null;
+    status?: "open" | "in-progress" | "done" | "blocked";
+    announce?: boolean;
+    announcement?: string | null;
+  }>();
+
+  if (!body.summary || !body.summary.trim()) return c.json({ error: "summary is required", code: "MISSING_FIELD" }, 400);
+  if (body.to_agent !== undefined && body.to_agent !== null && body.to_agent !== "" && !isValidUUID(body.to_agent)) {
+    return c.json({ error: "Invalid to_agent format", code: "INVALID_INPUT" }, 400);
+  }
+  if (body.status !== undefined && !isValidStatus(body.status)) {
+    return c.json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, code: "INVALID_FIELD" }, 400);
+  }
+
+  try {
+    return c.json(await handoffTask(agentId, scopeId, taskId, body));
+  } catch (error) {
+    if (error instanceof CoordinationError) return coordinationErrorResponse(c, error);
+    throw error;
+  }
+});
+
 // Update a task (works for contact, room, and workspace scoped tasks)
 app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c) => {
   const agentId = c.get("agentId");
@@ -514,6 +615,7 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
       created_by: updated.createdBy,
       group: updated.group,
       scope: updated.scope,
+      metadata: updated.metadata,
     };
     await Promise.allSettled([
       fireRoomTaskWebhooks(roomId, taskData, "task.updated"),
@@ -562,6 +664,7 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
             created_by: t.createdBy,
             group: t.group,
             scope: t.scope,
+            metadata: t.metadata,
           };
           await Promise.allSettled([
             fireRoomTaskWebhooks(roomId, unblockedData, "task.updated"),

@@ -132,7 +132,7 @@ describe("Intercom adapter", () => {
     it("ignores non-message.received events", async () => {
       const req = trunkWebhookRequest({
         event: "message.delivered",
-        message: { id: "m1", threadId: "t1", payload: { content: "test" } },
+        message: { id: "m1", thread_id: "t1", payload: { content: "test" } },
       });
       const res = await handleTrunkWebhook(req);
       expect(res.status).toBe(200);
@@ -142,7 +142,7 @@ describe("Intercom adapter", () => {
     it("ignores messages sourced from intercom (echo prevention)", async () => {
       const req = trunkWebhookRequest({
         event: "message.received",
-        message: { id: "m2", threadId: "t2", payload: { content: "test", source: "intercom" } },
+        message: { id: "m2", thread_id: "t2", payload: { content: "test", source: "intercom" } },
       });
       const res = await handleTrunkWebhook(req);
       expect(res.status).toBe(200);
@@ -152,7 +152,7 @@ describe("Intercom adapter", () => {
     it("skips delivery when no conversation mapping exists", async () => {
       const req = trunkWebhookRequest({
         event: "message.received",
-        message: { id: "m3", threadId: "unmapped-thread", payload: { content: "reply text" } },
+        message: { id: "m3", thread_id: "unmapped-thread", payload: { content: "reply text" } },
       });
       const res = await handleTrunkWebhook(req);
       expect(res.status).toBe(200);
@@ -163,7 +163,7 @@ describe("Intercom adapter", () => {
     it("returns ok for all valid webhook events", async () => {
       const req = trunkWebhookRequest({
         event: "message.received",
-        message: { id: "m4", threadId: "t4", payload: { content: "" } },
+        message: { id: "m4", thread_id: "t4", payload: { content: "" } },
       });
       const res = await handleTrunkWebhook(req);
       expect(res.status).toBe(200);
@@ -213,7 +213,7 @@ describe("Intercom adapter", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           event: "message.delivered",
-          message: { id: "m5", threadId: "t5", payload: { content: "test" } },
+          message: { id: "m5", thread_id: "t5", payload: { content: "test" } },
         }),
       });
       const res = await mod.default.fetch(req);

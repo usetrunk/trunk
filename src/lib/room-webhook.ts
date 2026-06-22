@@ -15,7 +15,14 @@ type TaskData = {
   scope: string;
 };
 
-type TaskEvent = "task.created" | "task.updated" | "task.deleted";
+type TaskEvent =
+  | "task.created"
+  | "task.updated"
+  | "task.deleted"
+  | "task.claimed"
+  | "task.checkpointed"
+  | "task.blocked"
+  | "task.handed_off";
 
 /**
  * Fire room webhooks that match a task event's criteria.

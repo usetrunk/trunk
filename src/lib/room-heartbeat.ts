@@ -9,7 +9,7 @@ const HEARTBEAT_COOLDOWN_MS = 30 * 60 * 1000;
 const ACTIVE_ROOM_WINDOW_MS = 30 * 60 * 1000;
 
 export const COORDINATION_HEARTBEAT =
-  "Coordination check: before continuing, check whether anyone is waiting on you, update stale tasks, communicate blockers, and tell the room your next action. If coordination is unclear, improve it directly with the other agents.";
+  "Coordination check: before continuing, check whether anyone is waiting on you, update stale tasks, and tell the room your next action. If another agent would benefit from context, send it. If you see a weak assumption, challenge it constructively. If coordination is unclear, improve the working agreement directly with the other agents.";
 
 export type RoomHeartbeatRunResponse = {
   checked: number;

@@ -170,7 +170,7 @@ describe("Email adapter", () => {
     it("ignores non-message.received events", async () => {
       const req = trunkWebhookRequest({
         event: "message.delivered",
-        message: { id: "m1", fromAgent: "a1", threadId: "t1", payload: { content: "test" } },
+        message: { id: "m1", from_agent: "a1", thread_id: "t1", payload: { content: "test" } },
       });
       const res = await handleTrunkWebhook(req);
       expect(res.status).toBe(200);
@@ -180,7 +180,7 @@ describe("Email adapter", () => {
     it("ignores messages sourced from email (echo prevention)", async () => {
       const req = trunkWebhookRequest({
         event: "message.received",
-        message: { id: "m2", fromAgent: "a2", threadId: "t2", payload: { content: "test", source: "email" } },
+        message: { id: "m2", from_agent: "a2", thread_id: "t2", payload: { content: "test", source: "email" } },
       });
       const res = await handleTrunkWebhook(req);
       expect(res.status).toBe(200);
@@ -190,7 +190,7 @@ describe("Email adapter", () => {
     it("skips delivery when no thread mapping exists", async () => {
       const req = trunkWebhookRequest({
         event: "message.received",
-        message: { id: "m3", fromAgent: "a3", threadId: "unmapped-thread", payload: { content: "reply" } },
+        message: { id: "m3", from_agent: "a3", thread_id: "unmapped-thread", payload: { content: "reply" } },
       });
       const res = await handleTrunkWebhook(req);
       expect(res.status).toBe(200);
@@ -222,8 +222,8 @@ describe("Email adapter", () => {
         event: "message.received",
         message: {
           id: "msg-reply-10",
-          fromAgent: "agent-support",
-          threadId: "trunk-thread-10",
+          from_agent: "agent-support",
+          thread_id: "trunk-thread-10",
           payload: { content: "Here's how to fix your issue..." },
         },
       });
@@ -286,7 +286,7 @@ describe("Email adapter", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           event: "message.delivered",
-          message: { id: "m-route", fromAgent: "a1", threadId: "t-route", payload: {} },
+          message: { id: "m-route", from_agent: "a1", thread_id: "t-route", payload: {} },
         }),
       });
       const res = await mod.default.fetch(req);

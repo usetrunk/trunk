@@ -675,11 +675,42 @@ describe("Hono API behavior", () => {
     expect(inbox.messages).toHaveLength(1);
     expect(inbox.messages[0]).toMatchObject({
       id: sent.id,
-      threadId: sent.thread_id,
+      thread_id: sent.thread_id,
       type: "question",
       status: "delivered",
       payload: { content: "Review this API?" },
     });
+  });
+
+  it("normalizes message list responses to the public snake_case shape", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "Can you see normalized metadata?" },
+    });
+
+    const inbox = await betaClient.inbox();
+    const message = inbox.messages[0] as Record<string, unknown>;
+
+    expect(message).toMatchObject({
+      id: sent.id,
+      from_agent: alpha.agent_id,
+      to_agent: beta.agent_id,
+      thread_id: sent.thread_id,
+      type: "question",
+      status: "delivered",
+      payload: { content: "Can you see normalized metadata?" },
+      created_at: expect.any(String),
+      delivered_at: expect.any(String),
+    });
+    expect(message).not.toHaveProperty("fromAgent");
+    expect(message).not.toHaveProperty("toAgent");
+    expect(message).not.toHaveProperty("threadId");
+    expect(message).not.toHaveProperty("createdAt");
+    expect(message).not.toHaveProperty("deliveredAt");
   });
 
   it("ack marks a message read so it leaves pending inbox and appears in read inbox", async () => {
@@ -699,8 +730,8 @@ describe("Hono API behavior", () => {
     expect(processedInbox.messages[0]).toMatchObject({
       id: sent.id,
       status: "processed",
-      readAt: expect.any(String),
-      processedAt: expect.any(String),
+      read_at: expect.any(String),
+      processed_at: expect.any(String),
     });
   });
 
@@ -738,7 +769,7 @@ describe("Hono API behavior", () => {
 
     expect(sent.thread_id).toBe("00000000-0000-4000-8000-aaaaaaaaaaaa");
     await expect(betaClient.thread("00000000-0000-4000-8000-aaaaaaaaaaaa")).resolves.toMatchObject({
-      messages: [expect.objectContaining({ id: sent.id, threadId: "00000000-0000-4000-8000-aaaaaaaaaaaa" })],
+      messages: [expect.objectContaining({ id: sent.id, thread_id: "00000000-0000-4000-8000-aaaaaaaaaaaa" })],
     });
   });
 
@@ -756,8 +787,8 @@ describe("Hono API behavior", () => {
     const inbox = await alphaClient.inbox();
     expect(inbox.messages).toHaveLength(1);
     expect(inbox.messages[0]).toMatchObject({
-      fromAgent: alpha.agent_id,
-      toAgent: alpha.agent_id,
+      from_agent: alpha.agent_id,
+      to_agent: alpha.agent_id,
       type: "handoff",
       payload: { content: "Delegate this task to the developer session" },
     });
@@ -798,7 +829,7 @@ describe("Hono API behavior", () => {
     const plannerInbox = await plannerClient.inbox();
     expect(plannerInbox.messages).toHaveLength(1);
     expect(plannerInbox.messages[0]).toMatchObject({
-      fromAgent: developer.agent_id,
+      from_agent: developer.agent_id,
       type: "update",
       payload: { content: "Done — 3x exponential backoff, tested locally" },
     });
@@ -806,8 +837,8 @@ describe("Hono API behavior", () => {
     // Thread has both messages
     const thread = await plannerClient.thread(task.thread_id);
     expect(thread.messages).toHaveLength(2);
-    expect(thread.messages[0].fromAgent).toBe(planner.agent_id);
-    expect(thread.messages[1].fromAgent).toBe(developer.agent_id);
+    expect(thread.messages[0].from_agent).toBe(planner.agent_id);
+    expect(thread.messages[1].from_agent).toBe(developer.agent_id);
   });
 
   it("thread summary returns structured digest with participants, type counts, decisions, and open questions", async () => {
@@ -944,10 +975,10 @@ describe("Hono API behavior", () => {
 
     // Each agent sees messages from the other with correct fromAgent
     const devInbox = await developerClient.inbox();
-    expect(devInbox.messages[0].fromAgent).toBe(planner.agent_id);
+    expect(devInbox.messages[0].from_agent).toBe(planner.agent_id);
 
     const plannerInbox = await plannerClient.inbox();
-    expect(plannerInbox.messages[0].fromAgent).toBe(developer.agent_id);
+    expect(plannerInbox.messages[0].from_agent).toBe(developer.agent_id);
 
     // Can resolve names by looking up contacts
     const devContacts = await developerClient.contacts();
@@ -986,6 +1017,40 @@ describe("Hono API behavior", () => {
       owner: beta.agent_id,
       created_by: alpha.agent_id,
       due: "2026-06-07",
+    });
+  });
+
+  it("returns task metadata on create, list, and update", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const created = await alphaClient.createTask({
+      contact_id: beta.agent_id,
+      title: "Claim website layout",
+      metadata: {
+        claimed_files: ["index.html", "styles.css"],
+        checkpoint: { status: "starting" },
+      },
+    });
+
+    expect(created.metadata).toEqual({
+      claimed_files: ["index.html", "styles.css"],
+      checkpoint: { status: "starting" },
+    });
+
+    const listed = await betaClient.listTasks(alpha.agent_id);
+    expect(listed.tasks[0].metadata).toEqual(created.metadata);
+
+    const updated = await betaClient.updateTask(alpha.agent_id, created.id, {
+      metadata: {
+        claimed_files: ["index.html", "styles.css"],
+        checkpoint: { status: "verified", command: "npm run verify" },
+      },
+    });
+
+    expect(updated.metadata).toEqual({
+      claimed_files: ["index.html", "styles.css"],
+      checkpoint: { status: "verified", command: "npm run verify" },
     });
   });
 
@@ -1373,6 +1438,162 @@ describe("Hono API behavior", () => {
     expect(betaList.tasks).toHaveLength(1);
   });
 
+  it("SDK roomState summarizes room coordination state", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Coordination Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const task = await alphaClient.createTask({
+      room_id: room.id,
+      title: "Centralize coordination state",
+      description: "Expose the active work session in one call",
+    });
+
+    const claimed = await alphaClient.claimTask(room.id, task.id, {
+      claimed_files: ["src/routes/tasks.ts", "src/lib/coordination.ts"],
+      ttl_seconds: 900,
+      reason: "Taking the API and service layer",
+      announce: true,
+    });
+    expect(claimed.owner).toBe(alpha.agent_id);
+    expect(claimed.status).toBe("in-progress");
+    expect(claimed.coordination.claimed_files.map((claim) => claim.path)).toEqual([
+      "src/routes/tasks.ts",
+      "src/lib/coordination.ts",
+    ]);
+
+    const checkpointed = await alphaClient.checkpointTask(room.id, task.id, {
+      summary: "Routes and service layer drafted",
+      files_changed: ["src/routes/tasks.ts", "src/lib/coordination.ts"],
+      verification: {
+        command: "npm test",
+        status: "passed",
+      },
+      next_step: "Wire MCP surfaces",
+      announce: true,
+    });
+    expect(checkpointed.coordination.checkpoint?.summary).toBe("Routes and service layer drafted");
+    expect(checkpointed.coordination.verification?.status).toBe("passed");
+
+    const state = await betaClient.roomState(room.id);
+    expect(state.room.id).toBe(room.id);
+    expect(state.summary).toMatchObject({
+      members: 2,
+      open_tasks: 0,
+      in_progress_tasks: 1,
+      blocked_tasks: 0,
+      file_claims: 2,
+    });
+    expect(state.members.map((member) => member.agent_id).sort()).toEqual([alpha.agent_id, beta.agent_id].sort());
+    expect(state.tasks[0].coordination.checkpoint?.summary).toBe("Routes and service layer drafted");
+    expect(state.file_claims.map((claim) => claim.path).sort()).toEqual([
+      "src/lib/coordination.ts",
+      "src/routes/tasks.ts",
+    ]);
+    expect(state.checkpoints[0]).toMatchObject({
+      task_id: task.id,
+      summary: "Routes and service layer drafted",
+      next_step: "Wire MCP surfaces",
+    });
+    expect(state.latest_activity.messages).toHaveLength(2);
+    expect(state.latest_activity.messages.map((message) => message.payload.content)).toEqual([
+      "Routes and service layer drafted",
+      "Taking the API and service layer",
+    ]);
+    expect(state.latest_activity.messages[0]).toMatchObject({
+      from_agent: alpha.agent_id,
+      to_room: room.id,
+      type: "update",
+    });
+  });
+
+  it("SDK claimTask rejects conflicting ownership unless forced", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Claim Conflict Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const task = await alphaClient.createTask({
+      room_id: room.id,
+      title: "Own the same files safely",
+    });
+
+    await alphaClient.claimTask(room.id, task.id, {
+      claimed_files: ["src/routes/tasks.ts"],
+      reason: "First owner",
+    });
+
+    await expect(betaClient.claimTask(room.id, task.id, {
+      claimed_files: ["src/routes/tasks.ts"],
+      reason: "Second owner",
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "TASK_CLAIMED",
+    });
+
+    const forced = await betaClient.claimTask(room.id, task.id, {
+      claimed_files: ["src/routes/tasks.ts"],
+      force: true,
+      reason: "Taking over stale work",
+    });
+    expect(forced.owner).toBe(beta.agent_id);
+    expect(forced.coordination.claimed_files[0]).toMatchObject({
+      path: "src/routes/tasks.ts",
+      claimed_by: beta.agent_id,
+    });
+  });
+
+  it("SDK handoffTask transfers owner and records the next action", async () => {
+    const { alpha, beta, alphaClient, betaClient } = await registerPair();
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Handoff Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+
+    const task = await alphaClient.createTask({
+      room_id: room.id,
+      title: "Finish dashboard inspector",
+    });
+    await alphaClient.claimTask(room.id, task.id, {
+      claimed_files: ["src/routes/dashboard.ts"],
+      reason: "Building first pass",
+    });
+
+    const handedOff = await alphaClient.handoffTask(room.id, task.id, {
+      to_agent: beta.agent_id,
+      summary: "Dashboard shell is done",
+      next_action: "Review mobile layout and run browser smoke test",
+    });
+
+    expect(handedOff.owner).toBe(beta.agent_id);
+    expect(handedOff.status).toBe("in-progress");
+    expect(handedOff.coordination.handoff).toMatchObject({
+      from_agent: alpha.agent_id,
+      to_agent: beta.agent_id,
+      summary: "Dashboard shell is done",
+      next_action: "Review mobile layout and run browser smoke test",
+    });
+
+    const state = await betaClient.roomState(room.id);
+    expect(state.handoffs[0]).toMatchObject({
+      task_id: task.id,
+      to_agent: beta.agent_id,
+      next_action: "Review mobile layout and run browser smoke test",
+    });
+    expect(state.latest_activity.messages[0]).toMatchObject({
+      from_agent: alpha.agent_id,
+      to_room: room.id,
+      type: "handoff",
+    });
+    expect(state.latest_activity.messages[0].payload).toMatchObject({
+      content: "Dashboard shell is done",
+      next_action: "Review mobile layout and run browser smoke test",
+    });
+  });
+
   it("SDK listWorkspaceTasks works for workspace-scoped tasks", async () => {
     const anonymous = createClient();
     const alpha = await anonymous.register({ name: "ws-sdk-alpha" });
@@ -1387,15 +1608,18 @@ describe("Hono API behavior", () => {
       workspace_id: ws.id,
       title: "Workspace task via SDK",
       priority: "low",
+      metadata: { claimed_files: ["portfolio-data.js"], checkpoint: { status: "queued" } },
     });
     expect(task.title).toBe("Workspace task via SDK");
     expect(task.priority).toBe("low");
+    expect(task.metadata).toEqual({ claimed_files: ["portfolio-data.js"], checkpoint: { status: "queued" } });
 
     const alphaList = await alphaClient.listWorkspaceTasks(ws.id);
     const betaList = await betaClient.listWorkspaceTasks(ws.id);
     expect(alphaList.tasks).toHaveLength(1);
     expect(betaList.tasks).toHaveLength(1);
     expect(alphaList.tasks[0].id).toBe(task.id);
+    expect(betaList.tasks[0].metadata).toEqual(task.metadata);
   });
 
   // --- Room tests ---
@@ -1463,10 +1687,14 @@ describe("Hono API behavior", () => {
     const room = await roomRes.json();
     await joinRoomRaw(beta.secret, room.pairing_code);
 
-    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, { title: "Room task alpha" });
+    const taskRes = await createRoomTaskRaw(alpha.secret, room.id, {
+      title: "Room task alpha",
+      metadata: { claimed_files: ["src/routes/messages.ts"], checkpoint: { status: "open" } },
+    });
     expect(taskRes.status).toBe(201);
     const task = await taskRes.json();
     expect(task.title).toBe("Room task alpha");
+    expect(task.metadata).toEqual({ claimed_files: ["src/routes/messages.ts"], checkpoint: { status: "open" } });
 
     // Both members can see it
     for (const secret of [alpha.secret, beta.secret]) {
@@ -1475,7 +1703,10 @@ describe("Hono API behavior", () => {
       });
       expect(listRes.status).toBe(200);
       const body = await listRes.json();
-      expect(body.tasks.some((t: { title: string }) => t.title === "Room task alpha")).toBe(true);
+      expect(body.tasks.some((t: { title: string; metadata: Record<string, unknown> }) =>
+        t.title === "Room task alpha" &&
+        Array.isArray(t.metadata.claimed_files)
+      )).toBe(true);
     }
   });
 
@@ -1813,12 +2044,18 @@ describe("Hono API behavior", () => {
     await app.request("/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${alpha.secret}` },
-      body: JSON.stringify({ workspace_id: ws.id, title: "SDK gantt task", group: "core" }),
+      body: JSON.stringify({
+        workspace_id: ws.id,
+        title: "SDK gantt task",
+        group: "core",
+        metadata: { claimed_files: ["src/sdk/index.ts"] },
+      }),
     });
 
     const gantt = await alphaClient.ganttData(ws.id);
     expect(gantt.tasks).toHaveLength(1);
     expect(gantt.tasks[0].title).toBe("SDK gantt task");
+    expect(gantt.tasks[0].metadata).toEqual({ claimed_files: ["src/sdk/index.ts"] });
     expect(gantt.groups.core).toHaveLength(1);
     expect(gantt.ungrouped).toHaveLength(0);
     expect(gantt.summary.total).toBe(1);
@@ -3211,7 +3448,7 @@ describe("Hono API behavior", () => {
       (m: TrunkMessage) => (m.payload as Record<string, unknown>).content === "Room broadcast from alpha"
     );
     expect(roomMsg).toBeDefined();
-    expect(roomMsg!.fromAgent).toBe(alpha.agent_id);
+    expect(roomMsg!.from_agent).toBe(alpha.agent_id);
   });
 
   it("fans out room message to multiple members", async () => {
@@ -3287,14 +3524,16 @@ describe("Hono API behavior", () => {
 
     expect(alphaHeartbeat).toBeDefined();
     expect(betaHeartbeat).toBeDefined();
-    expect(alphaHeartbeat!.threadId).toBe(betaHeartbeat!.threadId);
+    expect(alphaHeartbeat!.thread_id).toBe(betaHeartbeat!.thread_id);
     expect(alphaHeartbeat!.payload).toEqual(expect.objectContaining({
       source: "trunk",
       finality: "fyi",
       requires_reply: false,
       reason: "active_room_interval",
     }));
-    expect((alphaHeartbeat!.payload as Record<string, unknown>).content).toContain("improve it directly with the other agents");
+    expect((alphaHeartbeat!.payload as Record<string, unknown>).content).toContain("benefit from context");
+    expect((alphaHeartbeat!.payload as Record<string, unknown>).content).toContain("challenge it constructively");
+    expect((alphaHeartbeat!.payload as Record<string, unknown>).content).toContain("improve the working agreement directly");
 
     const cooldownRes = await app.request("/rooms/heartbeats/run", {
       method: "POST",
@@ -4571,17 +4810,17 @@ describe("Hono API behavior", () => {
       expect(thread.messages).toHaveLength(2);
       expect(thread.messages[0]).toMatchObject({
         id: sent.id,
-        fromAgent: alpha.agent_id,
-        toAgent: beta.agent_id,
-        threadId: sent.thread_id,
+        from_agent: alpha.agent_id,
+        to_agent: beta.agent_id,
+        thread_id: sent.thread_id,
         status: "replied",
       });
       expect(thread.messages[1]).toMatchObject({
         id: reply.id,
-        fromAgent: beta.agent_id,
-        toAgent: alpha.agent_id,
-        threadId: sent.thread_id,
-        replyTo: sent.id,
+        from_agent: beta.agent_id,
+        to_agent: alpha.agent_id,
+        thread_id: sent.thread_id,
+        reply_to: sent.id,
         status: "delivered",
       });
     }
@@ -5705,7 +5944,7 @@ describe("Hono API behavior", () => {
 
     const thread = await betaClient.thread(sent.thread_id);
     expect(thread.messages[0].payload).toMatchObject({ content: "fixed typo" });
-    expect(thread.messages[0].editedAt).toBeDefined();
+    expect(thread.messages[0].edited_at).toBeDefined();
   });
 
   it("cannot edit a message after 15-minute window", async () => {
@@ -9036,7 +9275,7 @@ describe("Hono API behavior", () => {
 
     // Verify beta received nothing from the outsider
     const betaInbox = await betaClient.inbox();
-    const fromOutsider = betaInbox.messages.filter((m: any) => m.fromAgent === outsider.agent_id);
+    const fromOutsider = betaInbox.messages.filter((m: any) => m.from_agent === outsider.agent_id);
     expect(fromOutsider).toHaveLength(0);
   });
 
@@ -10638,6 +10877,34 @@ describe("Hono API behavior", () => {
     expect(body).toContain("Members");
     expect(body).toContain("Messages");
     expect(body).toContain("Tasks");
+  });
+
+  it("dashboard room view groups fan-out copies into one visible message", async () => {
+    const anon = createClient();
+    const alpha = await anon.register({ name: "room-sender" });
+    const beta = await anon.register({ name: "room-recipient-a" });
+    const gamma = await anon.register({ name: "room-recipient-b" });
+    const alphaClient = createClient(alpha.secret);
+
+    const roomRes = await createRoomRaw(alpha.secret, { name: "Fanout Room" });
+    const room = await roomRes.json();
+    await joinRoomRaw(beta.secret, room.pairing_code);
+    await joinRoomRaw(gamma.secret, room.pairing_code);
+
+    await alphaClient.send({
+      to: `room:${room.id}`,
+      type: "update",
+      payload: { content: "One fanout update for the room." },
+    });
+
+    const res = await app.request(`/dashboard/room/${room.id}`, {
+      headers: { Authorization: `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+
+    expect((body.match(/One fanout update for the room\./g) ?? [])).toHaveLength(1);
+    expect(body).toContain("2 recipients");
   });
 
   it("dashboard room view rejects invalid UUID", async () => {
@@ -18671,7 +18938,7 @@ describe("Hono API behavior", () => {
       // Verify message exists in beta's inbox
       const inboxBefore = await betaClient.inbox();
       const roomMsgBefore = inboxBefore.messages.find(
-        (m: TrunkMessage & { toRoom?: string | null }) => m.toRoom === room.id
+        (m: TrunkMessage) => m.to_room === room.id
       );
       expect(roomMsgBefore).toBeDefined();
 
@@ -18754,7 +19021,7 @@ describe("Hono API behavior", () => {
       // Beta sees the message in inbox
       const betaInbox = await betaClient.inbox();
       const roomMsg = betaInbox.messages.find(
-        (m: TrunkMessage) => m.threadId === receipt.thread_id
+        (m: TrunkMessage) => m.thread_id === receipt.thread_id
       );
       expect(roomMsg).toBeDefined();
 
@@ -18772,7 +19039,7 @@ describe("Hono API behavior", () => {
         (m: TrunkMessage) => (m.payload as Record<string, unknown>).content === "Looks good!"
       );
       expect(replyInThread).toBeDefined();
-      expect(replyInThread!.fromAgent).toBe(beta.agent_id);
+      expect(replyInThread!.from_agent).toBe(beta.agent_id);
     });
 
     it("thread summary works for room-originated threads", async () => {
@@ -18792,7 +19059,7 @@ describe("Hono API behavior", () => {
       // Beta replies
       const betaInbox = await betaClient.inbox();
       const roomMsg = betaInbox.messages.find(
-        (m: TrunkMessage) => m.threadId === receipt.thread_id
+        (m: TrunkMessage) => m.thread_id === receipt.thread_id
       );
       await betaClient.reply(roomMsg!.id, {
         type: "decision",
@@ -18830,7 +19097,7 @@ describe("Hono API behavior", () => {
       // Beta replies
       const betaInbox = await betaClient.inbox();
       const betaMsg = betaInbox.messages.find(
-        (m: TrunkMessage) => m.threadId === receipt.thread_id
+        (m: TrunkMessage) => m.thread_id === receipt.thread_id
       );
       const betaReply = await betaClient.reply(betaMsg!.id, {
         type: "ack",
@@ -18860,7 +19127,7 @@ describe("Hono API behavior", () => {
       // Beta pins the room message they received
       const betaInbox = await betaClient.inbox();
       const roomMsg = betaInbox.messages.find(
-        (m: TrunkMessage) => m.threadId === receipt.thread_id
+        (m: TrunkMessage) => m.thread_id === receipt.thread_id
       );
       await betaClient.pin(roomMsg!.id);
 
@@ -18919,7 +19186,7 @@ describe("Hono API behavior", () => {
       // Beta replies
       const betaInbox = await betaClient.inbox();
       const wsMsg = betaInbox.messages.find(
-        (m: TrunkMessage) => m.threadId === receipt.thread_id
+        (m: TrunkMessage) => m.thread_id === receipt.thread_id
       );
       expect(wsMsg).toBeDefined();
 
@@ -18936,7 +19203,7 @@ describe("Hono API behavior", () => {
         (m: TrunkMessage) => (m.payload as Record<string, unknown>).content === "Team answer"
       );
       expect(answer).toBeDefined();
-      expect(answer!.fromAgent).toBe(beta.agent_id);
+      expect(answer!.from_agent).toBe(beta.agent_id);
     });
 
     it("thread summary works for workspace fan-out threads", async () => {
@@ -18957,7 +19224,7 @@ describe("Hono API behavior", () => {
 
       const betaInbox = await betaClient.inbox();
       const wsMsg = betaInbox.messages.find(
-        (m: TrunkMessage) => m.threadId === receipt.thread_id
+        (m: TrunkMessage) => m.thread_id === receipt.thread_id
       );
       await betaClient.reply(wsMsg!.id, {
         type: "decision",
@@ -21463,7 +21730,7 @@ describe("Hono API behavior", () => {
       await alphaClient.pair({ code: beta.pairing_code });
       await alphaClient.send({ to: beta.agent_id, type: "test", payload: { content: "hi" } });
 
-      const res = await app.request("/messages/thread/" + (await betaClient.inbox()).messages[0].threadId + "?limit=500", {
+      const res = await app.request("/messages/thread/" + (await betaClient.inbox()).messages[0].thread_id + "?limit=500", {
         headers: { Authorization: `Bearer ${beta.secret}` },
       });
       expect(res.status).toBe(200);
@@ -21476,7 +21743,7 @@ describe("Hono API behavior", () => {
       await alphaClient.send({ to: beta.agent_id, type: "test", payload: { content: "hi" } });
 
       const inbox = await betaClient.inbox();
-      const threadId = inbox.messages[0].threadId;
+      const threadId = inbox.messages[0].thread_id;
       const res = await app.request(`/messages/thread/${threadId}`, {
         headers: { Authorization: `Bearer ${beta.secret}` },
       });

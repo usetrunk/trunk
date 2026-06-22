@@ -77,7 +77,7 @@ function connectWebSocket(config: Config) {
       pendingNotifications.push(msg);
       const content = msg.message?.payload?.content || "(no content)";
       const type = msg.message?.type || "message";
-      const from = msg.message?.fromAgent || "unknown";
+      const from = msg.message?.from_agent || "unknown";
 
       // Send MCP logging notification — this is the real-time push to Claude Code
       server.server.sendLoggingMessage({
@@ -769,15 +769,16 @@ server.tool(
     sequence: z.number().optional().describe("Ordering within a group"),
     estimate: z.number().optional().describe("Estimated hours/days"),
     context_ref: z.string().optional().describe("Reference to a thread or message"),
+    metadata: z.record(z.string(), z.unknown()).optional().describe("Task metadata for coordination state such as claimed files, blockers, or verification commands"),
   },
-  async ({ title, contact_id, room_id, workspace_id, description, priority, owner, due, start_date, group, depends_on, sequence, estimate, context_ref }) => {
+  async ({ title, contact_id, room_id, workspace_id, description, priority, owner, due, start_date, group, depends_on, sequence, estimate, context_ref, metadata }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
     const result = await relay("/tasks", {
       method: "POST",
       secret: config.secret,
-      body: { contact_id, room_id, workspace_id, title, description, priority, owner, due, start_date, group, depends_on, sequence, estimate, context_ref },
+      body: { contact_id, room_id, workspace_id, title, description, priority, owner, due, start_date, group, depends_on, sequence, estimate, context_ref, metadata },
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
@@ -840,8 +841,9 @@ server.tool(
     depends_on: z.array(z.string()).optional().describe("Update dependency task IDs"),
     sequence: z.number().optional().describe("Update ordering within group"),
     estimate: z.number().optional().describe("Update estimate (hours/days)"),
+    metadata: z.record(z.string(), z.unknown()).optional().describe("Replace task metadata for coordination state"),
   },
-  async ({ contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due, start_date, group, depends_on, sequence, estimate }) => {
+  async ({ contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due, start_date, group, depends_on, sequence, estimate, metadata }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -858,11 +860,113 @@ server.tool(
     if (depends_on !== undefined) body.depends_on = depends_on;
     if (sequence !== undefined) body.sequence = sequence;
     if (estimate !== undefined) body.estimate = estimate;
+    if (metadata !== undefined) body.metadata = metadata;
 
     const result = await relay(`/tasks/${scopeId}/${task_id}`, {
       method: "PATCH",
       secret: config.secret,
       body,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_task_claim",
+  "Claim a task for active work and optionally lease files with a TTL.",
+  {
+    contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped tasks)"),
+    room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
+    workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
+    task_id: z.string().describe("Task ID to claim"),
+    claimed_files: z.array(z.string()).optional().describe("Files or globs this agent is taking"),
+    ttl_seconds: z.number().optional().describe("Claim lease duration in seconds"),
+    reason: z.string().optional().describe("Why this agent is claiming the task"),
+    force: z.boolean().optional().describe("Take over an existing claim"),
+    expected_status: z.enum(["open", "in-progress", "done", "blocked"]).optional().describe("Only claim if the task is still in this status"),
+    announce: z.boolean().optional().describe("Also post a room-visible update message when room_id is used"),
+    announcement: z.string().nullable().optional().describe("Optional custom room update text"),
+  },
+  async ({ contact_id, room_id, workspace_id, task_id, claimed_files, ttl_seconds, reason, force, expected_status, announce, announcement }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const scopeId = contact_id || room_id || workspace_id;
+    if (!scopeId) return { content: [{ type: "text", text: "Error: contact_id, room_id, or workspace_id is required." }], isError: true };
+    const result = await relay(`/tasks/${scopeId}/${task_id}/claim`, {
+      method: "POST",
+      secret: config.secret,
+      body: { claimed_files, ttl_seconds, reason, force, expected_status, announce, announcement },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_task_checkpoint",
+  "Record progress, verification, blockers, and next steps on a task.",
+  {
+    contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped tasks)"),
+    room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
+    workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
+    task_id: z.string().describe("Task ID to update"),
+    summary: z.string().describe("Short progress summary"),
+    status: z.enum(["open", "in-progress", "done", "blocked"]).optional().describe("Optional task status update"),
+    files_changed: z.array(z.string()).optional().describe("Files changed since the last checkpoint"),
+    commands_run: z.array(z.string()).optional().describe("Verification commands run"),
+    verification: z.object({
+      command: z.string(),
+      status: z.enum(["pending", "passed", "failed", "skipped"]),
+      output: z.string().nullable().optional(),
+    }).nullable().optional().describe("Latest verification result"),
+    blocker: z.object({
+      reason: z.string(),
+      waiting_on: z.string().nullable().optional(),
+    }).nullable().optional().describe("Current blocker, if any"),
+    next_step: z.string().nullable().optional().describe("Recommended next action"),
+    announce: z.boolean().optional().describe("Also post a room-visible update message when room_id is used"),
+    announcement: z.string().nullable().optional().describe("Optional custom room update text"),
+  },
+  async ({ contact_id, room_id, workspace_id, task_id, summary, status, files_changed, commands_run, verification, blocker, next_step, announce, announcement }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const scopeId = contact_id || room_id || workspace_id;
+    if (!scopeId) return { content: [{ type: "text", text: "Error: contact_id, room_id, or workspace_id is required." }], isError: true };
+    const result = await relay(`/tasks/${scopeId}/${task_id}/checkpoint`, {
+      method: "POST",
+      secret: config.secret,
+      body: { summary, status, files_changed, commands_run, verification, blocker, next_step, announce, announcement },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "trunk_task_handoff",
+  "Hand off a task to another agent with the next action preserved.",
+  {
+    contact_id: z.string().optional().describe("Agent ID of the contact (for contact-scoped tasks)"),
+    room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
+    workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
+    task_id: z.string().describe("Task ID to hand off"),
+    to_agent: z.string().nullable().optional().describe("Agent ID receiving the handoff"),
+    summary: z.string().describe("What was done or discovered"),
+    next_action: z.string().nullable().optional().describe("Recommended next action"),
+    status: z.enum(["open", "in-progress", "done", "blocked"]).optional().describe("Optional task status after handoff"),
+    announce: z.boolean().optional().describe("Post a room-visible handoff message when room_id is used, defaults to true"),
+    announcement: z.string().nullable().optional().describe("Optional custom handoff message text"),
+  },
+  async ({ contact_id, room_id, workspace_id, task_id, to_agent, summary, next_action, status, announce, announcement }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const scopeId = contact_id || room_id || workspace_id;
+    if (!scopeId) return { content: [{ type: "text", text: "Error: contact_id, room_id, or workspace_id is required." }], isError: true };
+    const result = await relay(`/tasks/${scopeId}/${task_id}/handoff`, {
+      method: "POST",
+      secret: config.secret,
+      body: { to_agent, summary, next_action, status, announce, announcement },
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
@@ -891,6 +995,21 @@ server.tool(
 );
 
 // --- Room tools (consolidated) ---
+
+server.tool(
+  "trunk_room_state",
+  "Get one compact current-state view for a room: members, tasks, claims, blockers, checkpoints, handoffs, and latest activity.",
+  {
+    room_id: z.string().describe("Room ID"),
+  },
+  async ({ room_id }) => {
+    const config = loadConfig();
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    const result = await relay(`/rooms/${room_id}/state`, { secret: config.secret });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
 
 server.tool(
   "trunk_room",

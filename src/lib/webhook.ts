@@ -2,6 +2,7 @@ import { db } from "../db/index.js";
 import { agents, messages, webhookDeliveries, roomMembers } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { audit } from "./audit.js";
+import { messageToJson } from "./response-shapes.js";
 import { signTrunkWebhook } from "./verify-webhook.js";
 
 // Notify the push worker (Cloudflare DO) for real-time delivery
@@ -17,7 +18,7 @@ export async function notifyPushWorker(agentId: string, message: typeof messages
         "Content-Type": "application/json",
         "Authorization": `Bearer ${pushSecret}`,
       },
-      body: JSON.stringify({ event: "message.received", message }),
+      body: JSON.stringify({ event: "message.received", message: messageToJson(message) }),
       signal: AbortSignal.timeout(5000),
     });
   } catch {
@@ -71,7 +72,7 @@ export async function deliverWebhook(
 
   const body = JSON.stringify({
     event: "message.received",
-    message,
+    message: messageToJson(message),
   });
 
   const headers: Record<string, string> = {

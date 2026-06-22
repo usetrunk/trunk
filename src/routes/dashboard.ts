@@ -29,11 +29,73 @@ import {
   statusTone,
   type SidebarData,
 } from "../lib/dashboard-ui.js";
+import { taskCoordinationFromMetadata } from "../lib/coordination-metadata.js";
 
 const app = new Hono<AgentVariables>();
 
 const COOKIE_NAME = "trunk_session";
 const VALID_STATUSES = ["pending", "delivered", "processed", "replied"];
+
+type DashboardMessageRow = typeof messages.$inferSelect;
+
+interface RoomMessageDisplay {
+  message: DashboardMessageRow;
+  recipientCount: number;
+  recipientLabel: string;
+}
+
+function exactMessageTime(date: Date): string {
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function roomMessageGroupKey(message: DashboardMessageRow): string {
+  return [
+    message.threadId ?? message.id,
+    message.fromAgent,
+    message.toRoom ?? "",
+    message.type,
+    message.replyTo ?? "",
+    JSON.stringify(message.payload),
+  ].join("\u001f");
+}
+
+function groupRoomMessagesForDisplay(
+  rows: DashboardMessageRow[],
+  nameMap: Map<string, string>,
+): RoomMessageDisplay[] {
+  const groups = new Map<string, { message: DashboardMessageRow; recipients: Set<string> }>();
+  for (const row of rows) {
+    const key = roomMessageGroupKey(row);
+    const group = groups.get(key);
+    if (!group) {
+      groups.set(key, { message: row, recipients: new Set([row.toAgent]) });
+      continue;
+    }
+    group.recipients.add(row.toAgent);
+    if (row.createdAt.getTime() > group.message.createdAt.getTime()) {
+      group.message = row;
+    }
+  }
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const recipientNames = Array.from(group.recipients)
+        .map((id) => nameMap.get(id) ?? id.slice(0, 8))
+        .sort();
+      return {
+        message: group.message,
+        recipientCount: group.recipients.size,
+        recipientLabel: group.recipients.size > 1 ? `delivered to ${recipientNames.join(", ")}` : "",
+      };
+    })
+    .sort((a, b) => b.message.createdAt.getTime() - a.message.createdAt.getTime());
+}
 
 function loginPage(error?: string) {
   return html`<!DOCTYPE html>
@@ -261,8 +323,19 @@ app.get("/", async (c) => {
             const context = payload.context as string | undefined;
             const finality = payload.finality as string | undefined;
             return messageBubble({
-              from, to, type: m.type, content, context, finality,
-              time: timeAgo(m.createdAt), isMine: m.fromAgent === agentId,
+              from,
+              fromId: m.fromAgent,
+              to,
+              toId: m.toAgent,
+              type: m.type,
+              content,
+              context,
+              finality,
+              time: timeAgo(m.createdAt),
+              exactTime: exactMessageTime(m.createdAt),
+              isMine: m.fromAgent === agentId,
+              messageId: m.id,
+              threadId: m.threadId,
             });
           })}
 
@@ -529,6 +602,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, allAgentIds))
     : [];
   const nameMap = new Map(agentRows.map((a) => [a.id, a.name]));
+  const visibleRoomMessages = groupRoomMessagesForDisplay(roomMessages, nameMap);
 
   const totalTasks = roomTasks.length;
   const doneTasks = roomTasks.filter((t) => t.status === "done").length;
@@ -554,6 +628,13 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     const deps = (t.dependsOn as string[]) || [];
     const blockedBy = deps.filter((d) => !doneIds.has(d));
     const owner = t.owner ? (nameMap.get(t.owner) || t.owner.slice(0, 8)) : null;
+    const coordination = taskCoordinationFromMetadata(t.metadata, { taskId: t.id, owner: t.owner });
+    const details = [
+      coordination.claimed_files.length > 0 ? `files ${coordination.claimed_files.map((claim) => claim.path).join(", ")}` : null,
+      coordination.checkpoint ? `checkpoint ${coordination.checkpoint.summary}` : null,
+      coordination.blocker ? `blocked ${coordination.blocker.reason}` : null,
+      coordination.handoff ? `handoff ${coordination.handoff.to_agent ? nameMap.get(coordination.handoff.to_agent) || coordination.handoff.to_agent.slice(0, 8) : "unassigned"}` : null,
+    ].filter((detail): detail is string => Boolean(detail));
     return taskRow({
       title: t.title,
       status: t.status,
@@ -561,6 +642,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
       priority: t.priority,
       blockedByCount: blockedBy.length,
       hasDeps: deps.length > 0,
+      details,
       age: timeAgo(t.updatedAt),
     });
   }
@@ -647,7 +729,7 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     title: `# ${room.name}`,
     stats: [
       { label: "Members", value: String(members.length) },
-      { label: "Messages", value: String(roomMessages.length) },
+      { label: "Messages", value: String(visibleRoomMessages.length) },
       { label: "Tasks", value: String(totalTasks) },
       { label: "Progress", value: `${overallProgress}%`, tone: "good" },
     ],
@@ -674,18 +756,31 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
         </div>
 
         ${sectionLabel("Messages")}
-        ${roomMessages.length === 0
+        ${visibleRoomMessages.length === 0
           ? emptyState({ icon: "inbox", title: "No messages in this room", hint: "Room messages sent by members will appear here." })
           : html`<div class="stack">
-            ${roomMessages.map((m) => {
+            ${visibleRoomMessages.map((entry) => {
+              const m = entry.message;
               const from = nameMap.get(m.fromAgent) ?? m.fromAgent.slice(0, 8);
               const payload = m.payload as Record<string, unknown>;
               const content = (payload.content as string) || JSON.stringify(m.payload);
               const context = payload.context as string | undefined;
               const finality = payload.finality as string | undefined;
               return messageBubble({
-                from, type: m.type, content, context, finality,
-                time: timeAgo(m.createdAt), isMine: m.fromAgent === agentId,
+                from,
+                fromId: m.fromAgent,
+                toId: entry.recipientCount === 1 ? m.toAgent : undefined,
+                type: m.type,
+                content,
+                context,
+                finality,
+                time: timeAgo(m.createdAt),
+                exactTime: exactMessageTime(m.createdAt),
+                isMine: m.fromAgent === agentId,
+                messageId: m.id,
+                threadId: m.threadId,
+                recipientCount: entry.recipientCount,
+                recipientLabel: entry.recipientLabel,
               });
             })}
           </div>`}

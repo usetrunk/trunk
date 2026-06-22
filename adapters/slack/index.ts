@@ -153,12 +153,12 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
 
   const body = JSON.parse(rawBody) as {
     event: string;
-    message: { id: string; payload: { content?: string }; threadId: string };
+    message: { id: string; payload: { content?: string }; thread_id: string };
   };
 
   if (body.event === "message.received") {
     const content = body.message.payload.content || "(no content)";
-    const destination = trunkToSlackThread.get(body.message.threadId);
+    const destination = trunkToSlackThread.get(body.message.thread_id);
 
     if (destination) {
       await slackPost(destination.channel, content, destination.threadTs);

@@ -11,6 +11,7 @@ import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
 import { canMessage, canMessageWorkspace, getWorkspaceMembers, isBlocked, getBlockedRecipients } from "../lib/workspace.js";
 import { isValidUUID, requireValidUUIDs, validatePayload } from "../lib/errors.js";
+import { messageToJson } from "../lib/response-shapes.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const VALID_INBOX_STATUSES = ["pending", "delivered", "processed", "replied"] as const;
@@ -482,7 +483,7 @@ app.get("/inbox", async (c) => {
   ).filter((row) => !row.expiresAt || row.expiresAt > now);
 
   const page = paginateResults(visible, limit);
-  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+  return c.json({ messages: page.items.map(messageToJson), next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
 // Get inbox stats (unread count + breakdown by type/status)
@@ -677,7 +678,7 @@ app.get("/sent", async (c) => {
 
   const visible = rows.filter((row) => row.status !== "deleted");
   const page = paginateResults(visible, limit);
-  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+  return c.json({ messages: page.items.map(messageToJson), next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
 // Search messages by content, type, contact, and date range
@@ -765,7 +766,7 @@ app.get("/search", async (c) => {
   }
 
   const page = paginateResults(filtered, limit);
-  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+  return c.json({ messages: page.items.map(messageToJson), next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
 // --- Saved searches ---
@@ -902,7 +903,7 @@ app.get("/scheduled", async (c) => {
     .limit(limit + 1);
 
   const page = paginateResults(rows, limit);
-  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+  return c.json({ messages: page.items.map(messageToJson), next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
 // List all messages with a specific label
@@ -953,7 +954,7 @@ app.get("/by-label/:label", async (c) => {
 
   const visible = rows.filter((r) => r.status !== "deleted");
   const page = paginateResults(visible, limit);
-  return c.json({ messages: page.items, next_cursor: page.next_cursor, has_more: page.has_more });
+  return c.json({ messages: page.items.map(messageToJson), next_cursor: page.next_cursor, has_more: page.has_more });
 });
 
 // List all labels used by the agent
@@ -1268,7 +1269,7 @@ app.get("/thread/:threadId", requireValidUUIDs("threadId"), async (c) => {
   const has_more = rows.length > queryLimit;
   const next_cursor = has_more && page.length > 0 ? page[page.length - 1].id : null;
 
-  return c.json({ messages: page, has_more, next_cursor });
+  return c.json({ messages: page.map(messageToJson), has_more, next_cursor });
 });
 
 app.delete("/:id", requireValidUUIDs("id"), async (c) => {

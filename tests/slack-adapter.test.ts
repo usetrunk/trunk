@@ -380,7 +380,7 @@ describe("Slack adapter", () => {
         message: {
           id: "msg-reply-10",
           payload: { content: "Here is the answer" },
-          threadId: "trunk-thread-10",
+          thread_id: "trunk-thread-10",
         },
       });
       const res = await handleTrunkWebhook(webhookReq);
@@ -410,7 +410,7 @@ describe("Slack adapter", () => {
         message: {
           id: "msg-orphan",
           payload: { content: "No thread match" },
-          threadId: "unknown-trunk-thread",
+          thread_id: "unknown-trunk-thread",
         },
       });
       const res = await handleTrunkWebhook(webhookReq);
@@ -447,7 +447,7 @@ describe("Slack adapter", () => {
         message: {
           id: "msg-empty",
           payload: {},
-          threadId: "trunk-thread-20",
+          thread_id: "trunk-thread-20",
         },
       });
       await handleTrunkWebhook(webhookReq);
@@ -462,7 +462,7 @@ describe("Slack adapter", () => {
         message: {
           id: "msg-other",
           payload: { content: "delivered" },
-          threadId: "some-thread",
+          thread_id: "some-thread",
         },
       });
       const res = await handleTrunkWebhook(webhookReq);
@@ -490,7 +490,7 @@ describe("Slack adapter", () => {
         },
         body: JSON.stringify({
           event: "message.received",
-          message: { id: "msg-1", payload: { content: "test" }, threadId: "t-1" },
+          message: { id: "msg-1", payload: { content: "test" }, thread_id: "t-1" },
         }),
       });
 
@@ -514,7 +514,7 @@ describe("Slack adapter", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           event: "message.received",
-          message: { id: "msg-1", payload: { content: "test" }, threadId: "t-1" },
+          message: { id: "msg-1", payload: { content: "test" }, thread_id: "t-1" },
         }),
       });
 

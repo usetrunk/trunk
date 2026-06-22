@@ -44,7 +44,7 @@ function connect(config: Config) {
       const messageId = msg.message?.id;
       const content = msg.message?.payload?.content || "(no content)";
       const type = msg.message?.type || "message";
-      const fromAgent = msg.message?.fromAgent || "unknown";
+      const fromAgent = msg.message?.from_agent || "unknown";
 
       // OS notification
       sendNotification(

@@ -157,8 +157,8 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
     event: string;
     message: {
       id: string;
-      fromAgent: string;
-      threadId: string;
+      from_agent: string;
+      thread_id: string;
       payload: { content?: string; source?: string };
     };
   };
@@ -173,7 +173,7 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
   }
 
   const content = body.message.payload.content || "(no content)";
-  const threadId = body.message.threadId;
+  const threadId = body.message.thread_id;
 
   // Look up the original email's Message-ID for threading
   const originalMessageId = reverseThreadMap.get(threadId);
