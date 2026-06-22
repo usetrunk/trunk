@@ -44,6 +44,10 @@ interface RoomMessageDisplay {
   recipientLabel: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function exactMessageTime(date: Date): string {
   return date.toLocaleString("en-US", {
     month: "short",
@@ -599,9 +603,13 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
     ...roomTasks.map((t) => t.createdBy).filter(Boolean) as string[],
   ]);
   const agentRows = allAgentIds.length > 0
-    ? await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, allAgentIds))
+    ? await db.select({ id: agents.id, name: agents.name, metadata: agents.metadata }).from(agents).where(inArray(agents.id, allAgentIds))
     : [];
   const nameMap = new Map(agentRows.map((a) => [a.id, a.name]));
+  const profileRoleMap = new Map(agentRows.map((a) => {
+    const metadata = isRecord(a.metadata) ? a.metadata : {};
+    return [a.id, typeof metadata.role === "string" ? metadata.role : null] as const;
+  }));
   const visibleRoomMessages = groupRoomMessagesForDisplay(roomMessages, nameMap);
 
   const totalTasks = roomTasks.length;
@@ -750,7 +758,9 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), async (c) => {
             <span class="member-pill">
               <span class="avatar">${initials(nameMap.get(m.agentId) ?? m.agentId.slice(0, 8))}</span>
               ${nameMap.get(m.agentId) ?? m.agentId.slice(0, 8)}
-              <span class="role">${m.role}</span>
+              ${profileRoleMap.get(m.agentId) ? html`<span class="role">${profileRoleMap.get(m.agentId)}</span>` : ""}
+              ${m.collaborationRole ? html`<span class="role">${m.collaborationRole}</span>` : ""}
+              <span class="role">perm:${m.role}</span>
             </span>
           `)}
         </div>

@@ -92,6 +92,7 @@ export const roomMembers = pgTable("room_members", {
   roomId: text("room_id").notNull().references(() => rooms.id),
   agentId: text("agent_id").notNull().references(() => agents.id),
   role: text("role").notNull().default("member"), // creator, admin, member
+  collaborationRole: text("collaboration_role"), // optional room-specific role, e.g. orchestrator, builder, reviewer
   joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("room_members_idx").on(table.roomId, table.agentId),

@@ -16,6 +16,10 @@ import { checkpointTask, claimTask, CoordinationError, getRoomState, handoffTask
 
 type MessageRow = typeof messages.$inferSelect;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function createTrunkMcpServer() {
   const server = new McpServer({
     name: "trunk",
@@ -2054,18 +2058,19 @@ export function createTrunkMcpServer() {
 
   server.tool(
     "trunk_room",
-    "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, delete.",
+    "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, collaboration_role, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
+      action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "collaboration_role", "delete"]).describe("What to do"),
       name: z.string().optional().describe("Room name (for create/update)"),
       code: z.string().optional().describe("Join code (for join)"),
-      room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
-      agent_id: z.string().optional().describe("Target agent ID (for kick/role)"),
-      role: z.enum(["admin", "member"]).optional().describe("New role (for role action)"),
+      room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/collaboration_role/delete)"),
+      agent_id: z.string().optional().describe("Target agent ID (for kick/role/collaboration_role)"),
+      role: z.enum(["admin", "member"]).optional().describe("New permission role (for role action)"),
+      collaboration_role: z.string().nullable().optional().describe("Optional room-specific collaboration role (for collaboration_role action); null clears it"),
       metadata: z.record(z.string(), z.unknown()).optional().describe("Room metadata (for create/update)"),
     },
-    async ({ secret, action, name, code, room_id, agent_id, role, metadata }) => {
+    async ({ secret, action, name, code, room_id, agent_id, role, collaboration_role, metadata }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
 
@@ -2097,11 +2102,23 @@ export function createTrunkMcpServer() {
 
       if (action === "members") {
         if (!room_id) return errorResult("room_id is required for members");
-        const members = await db.select({ agentId: roomMembers.agentId, role: roomMembers.role, joinedAt: roomMembers.joinedAt }).from(roomMembers).where(eq(roomMembers.roomId, room_id));
+        const members = await db.select({ agentId: roomMembers.agentId, role: roomMembers.role, collaborationRole: roomMembers.collaborationRole, joinedAt: roomMembers.joinedAt }).from(roomMembers).where(eq(roomMembers.roomId, room_id));
         const agentIds = members.map(m => m.agentId);
-        const agentList = agentIds.length > 0 ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner }).from(agents).where(inArray(agents.id, agentIds)) : [];
+        const agentList = agentIds.length > 0 ? await db.select({ id: agents.id, name: agents.name, owner: agents.owner, metadata: agents.metadata }).from(agents).where(inArray(agents.id, agentIds)) : [];
         const agentMap = Object.fromEntries(agentList.map(a => [a.id, a]));
-        return { content: [{ type: "text", text: JSON.stringify({ members: members.map(m => ({ ...agentMap[m.agentId], role: m.role, joined_at: m.joinedAt })) }, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ members: members.map(m => {
+          const profile = agentMap[m.agentId];
+          const metadata = isRecord(profile?.metadata) ? profile.metadata : {};
+          return {
+            id: profile?.id,
+            name: profile?.name,
+            owner: profile?.owner,
+            role: m.role,
+            profile_role: typeof metadata.role === "string" ? metadata.role : null,
+            collaboration_role: m.collaborationRole ?? null,
+            joined_at: m.joinedAt,
+          };
+        }) }, null, 2) }] };
       }
 
       if (action === "heartbeat") {
@@ -2157,6 +2174,23 @@ export function createTrunkMcpServer() {
         if (!targetMem) return errorResult("Target is not a member");
         await db.update(roomMembers).set({ role }).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent_id)));
         return { content: [{ type: "text", text: JSON.stringify({ ok: true, agent_id, role, room_id }) }] };
+      }
+
+      if (action === "collaboration_role") {
+        if (!room_id) return errorResult("room_id is required for collaboration_role");
+        if (!agent_id) return errorResult("agent_id is required for collaboration_role");
+        if (collaboration_role === undefined) return errorResult("collaboration_role is required; use null to clear it");
+        const allMembers = await db.select().from(roomMembers).where(eq(roomMembers.roomId, room_id)).limit(500);
+        const caller = allMembers.find(m => m.agentId === agent.id);
+        if (!caller) return errorResult("Not a member of this room");
+        const target = allMembers.find(m => m.agentId === agent_id);
+        if (!target) return errorResult("Target is not a member");
+        if (agent_id !== agent.id && caller.role !== "creator" && caller.role !== "admin") return errorResult("Only the member, creator, or admin can set collaboration_role");
+        const normalized = typeof collaboration_role === "string" ? collaboration_role.trim() : null;
+        if (normalized === "") return errorResult("collaboration_role must not be blank; use null to clear it");
+        if (normalized && normalized.length > 80) return errorResult("collaboration_role must be 80 characters or fewer");
+        await db.update(roomMembers).set({ collaborationRole: normalized }).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent_id)));
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, agent_id, collaboration_role: normalized, room_id }) }] };
       }
 
       if (action === "delete") {

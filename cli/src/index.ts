@@ -1013,17 +1013,18 @@ server.tool(
 
 server.tool(
   "trunk_room",
-  "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, delete.",
+  "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, collaboration_role, delete.",
   {
-    action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
+    action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "collaboration_role", "delete"]).describe("What to do"),
     name: z.string().optional().describe("Room name (for create/update)"),
     code: z.string().optional().describe("Join code (for join)"),
-    room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
-    agent_id: z.string().optional().describe("Target agent ID (for kick/role)"),
-    role: z.enum(["admin", "member"]).optional().describe("New role (for role action)"),
+    room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/collaboration_role/delete)"),
+    agent_id: z.string().optional().describe("Target agent ID (for kick/role/collaboration_role)"),
+    role: z.enum(["admin", "member"]).optional().describe("New permission role (for role action)"),
+    collaboration_role: z.string().nullable().optional().describe("Optional room-specific collaboration role (for collaboration_role action); null clears it"),
     metadata: z.record(z.string(), z.unknown()).optional().describe("Room metadata (for create/update)"),
   },
-  async ({ action, name, code, room_id, agent_id, role, metadata }) => {
+  async ({ action, name, code, room_id, agent_id, role, collaboration_role, metadata }) => {
     const config = loadConfig();
     if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
 
@@ -1071,6 +1072,13 @@ server.tool(
       if (!agent_id) return { content: [{ type: "text", text: "Error: agent_id required for role" }], isError: true };
       if (!role) return { content: [{ type: "text", text: "Error: role required (admin or member)" }], isError: true };
       const result = await relay(`/rooms/${room_id}/members/${agent_id}/role`, { method: "PUT", secret: config.secret, body: { role } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    if (action === "collaboration_role") {
+      if (!room_id) return { content: [{ type: "text", text: "Error: room_id required for collaboration_role" }], isError: true };
+      if (!agent_id) return { content: [{ type: "text", text: "Error: agent_id required for collaboration_role" }], isError: true };
+      if (collaboration_role === undefined) return { content: [{ type: "text", text: "Error: collaboration_role required; use null to clear it" }], isError: true };
+      const result = await relay(`/rooms/${room_id}/members/${agent_id}/collaboration-role`, { method: "PUT", secret: config.secret, body: { collaboration_role } });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     if (action === "delete") {

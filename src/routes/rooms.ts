@@ -13,11 +13,16 @@ import { runRoomHeartbeats } from "../lib/room-heartbeat.js";
 import { CoordinationError, getRoomState } from "../lib/coordination.js";
 
 const app = new Hono<AgentVariables>();
+const MAX_COLLABORATION_ROLE_LENGTH = 80;
 
 app.use("/*", authMiddleware);
 
 function coordinationErrorResponse(c: Context, error: CoordinationError) {
   return c.json({ error: error.message, code: error.code, ...error.details }, error.status as 400);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // Create a room
@@ -190,14 +195,23 @@ app.get("/:roomId/members", requireValidUUIDs("roomId"), async (c) => {
   const memberIds = allMembers.map((m) => m.agentId);
   const memberAgents = memberIds.length > 0
     ? await db
-        .select({ id: agents.id, name: agents.name, owner: agents.owner })
+        .select({ id: agents.id, name: agents.name, owner: agents.owner, metadata: agents.metadata })
         .from(agents)
         .where(inArray(agents.id, memberIds))
     : [];
 
   const result = memberAgents.map((a) => {
     const m = allMembers.find((m) => m.agentId === a.id);
-    return { ...a, role: m?.role, joined_at: m?.joinedAt };
+    const metadata = isRecord(a.metadata) ? a.metadata : {};
+    return {
+      id: a.id,
+      name: a.name,
+      owner: a.owner,
+      role: m?.role,
+      profile_role: typeof metadata.role === "string" ? metadata.role : null,
+      collaboration_role: m?.collaborationRole ?? null,
+      joined_at: m?.joinedAt,
+    };
   });
 
   return c.json({ members: result });
@@ -384,6 +398,66 @@ app.put("/:roomId/members/:agentId/role", requireValidUUIDs("roomId", "agentId")
   await audit(callerId, "room.role_changed", "room", roomId, { target_agent: targetId, new_role: body.role });
 
   return c.json({ ok: true, agent_id: targetId, role: body.role, room_id: roomId });
+});
+
+// Set a member's optional room-specific collaboration role.
+app.put("/:roomId/members/:agentId/collaboration-role", requireValidUUIDs("roomId", "agentId"), async (c) => {
+  const callerId = c.get("agentId");
+  const roomId = c.req.param("roomId");
+  const targetId = c.req.param("agentId");
+
+  const rateLimit = await checkRateLimit(`rooms:write:${callerId}`, 20, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  const body = await c.req.json<{ collaboration_role?: string | null }>();
+  if (body.collaboration_role === undefined) {
+    return c.json({ error: "collaboration_role is required; use null to clear it", code: "MISSING_FIELD" }, 400);
+  }
+
+  let collaborationRole: string | null = null;
+  if (body.collaboration_role !== null) {
+    if (typeof body.collaboration_role !== "string") {
+      return c.json({ error: "collaboration_role must be a string or null", code: "INVALID_FIELD" }, 400);
+    }
+    collaborationRole = body.collaboration_role.trim();
+    if (!collaborationRole) {
+      return c.json({ error: "collaboration_role must not be blank; use null to clear it", code: "INVALID_FIELD" }, 400);
+    }
+    if (collaborationRole.length > MAX_COLLABORATION_ROLE_LENGTH) {
+      return c.json({ error: `collaboration_role must be ${MAX_COLLABORATION_ROLE_LENGTH} characters or fewer`, code: "INVALID_FIELD" }, 400);
+    }
+  }
+
+  const allMembers = await db
+    .select()
+    .from(roomMembers)
+    .where(eq(roomMembers.roomId, roomId))
+    .limit(500);
+  const callerMembership = allMembers.find((member) => member.agentId === callerId);
+  if (!callerMembership) return c.json({ error: "Not a member of this room", code: "NOT_MEMBER" }, 403);
+
+  const targetMembership = allMembers.find((member) => member.agentId === targetId);
+  if (!targetMembership) return c.json({ error: "Target is not a member", code: "NOT_FOUND" }, 404);
+
+  const canSetTarget = callerId === targetId || callerMembership.role === "creator" || callerMembership.role === "admin";
+  if (!canSetTarget) {
+    return c.json({ error: "Only the member, creator, or admin can set collaboration_role", code: "INSUFFICIENT_ROLE" }, 403);
+  }
+
+  await db
+    .update(roomMembers)
+    .set({ collaborationRole })
+    .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.agentId, targetId)));
+
+  await audit(callerId, "room.collaboration_role_changed", "room", roomId, {
+    target_agent: targetId,
+    collaboration_role: collaborationRole,
+  });
+
+  return c.json({ ok: true, agent_id: targetId, collaboration_role: collaborationRole, room_id: roomId });
 });
 
 // Delete a room (creator only)

@@ -314,6 +314,8 @@ export async function getRoomState(agentId: string, roomId: string) {
       name: agent?.name ?? member.agentId,
       owner: agent?.owner ?? null,
       role: member.role,
+      profile_role: typeof metadata.role === "string" ? metadata.role : null,
+      collaboration_role: member.collaborationRole ?? null,
       joined_at: member.joinedAt,
       last_seen_at: lastSeenAt,
       status_text: typeof metadata.status_text === "string" ? metadata.status_text : null,

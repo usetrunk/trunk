@@ -437,6 +437,8 @@ export type RoomStateResponse = {
     name: string;
     owner?: string | null;
     role: string;
+    profile_role?: string | null;
+    collaboration_role?: string | null;
     joined_at: string | Date;
     last_seen_at: string | Date | null;
     status_text: string | null;
@@ -506,6 +508,8 @@ export type RoomMember = {
   name: string;
   owner?: string | null;
   role?: string;
+  profile_role?: string | null;
+  collaboration_role?: string | null;
   joined_at?: string | Date;
 };
 
@@ -556,6 +560,17 @@ export type ChangeRoleResponse = {
   ok: boolean;
   agent_id: string;
   role: string;
+  room_id: string;
+};
+
+export type SetCollaborationRoleRequest = {
+  collaboration_role: string | null;
+};
+
+export type SetCollaborationRoleResponse = {
+  ok: boolean;
+  agent_id: string;
+  collaboration_role: string | null;
   room_id: string;
 };
 
@@ -1363,6 +1378,10 @@ export class TrunkClient {
 
   changeRoomMemberRole(roomId: string, agentId: string, input: ChangeRoleRequest): Promise<ChangeRoleResponse> {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(agentId)}/role`, { method: "PUT", body: input });
+  }
+
+  setRoomMemberCollaborationRole(roomId: string, agentId: string, input: SetCollaborationRoleRequest): Promise<SetCollaborationRoleResponse> {
+    return this.request(`/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(agentId)}/collaboration-role`, { method: "PUT", body: input });
   }
 
   deleteRoom(roomId: string): Promise<{ ok: boolean; deleted: string }> {

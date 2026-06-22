@@ -98,6 +98,7 @@ type RoomMemberRow = {
   roomId: string;
   agentId: string;
   role: string;
+  collaborationRole: string | null;
   joinedAt: Date;
 };
 
@@ -2099,6 +2100,66 @@ describe("Hono API behavior", () => {
     expect(creator?.role).toBe("creator");
     const member = members.members.find(m => m.id === beta.agent_id);
     expect(member?.role).toBe("member");
+  });
+
+  it("supports 3 agents with separate permission, profile, and collaboration roles", async () => {
+    const alpha = await createClient().register({ name: "Alpha", owner: "Tester" });
+    const beta = await createClient().register({ name: "Beta", owner: "Tester" });
+    const gamma = await createClient().register({ name: "Gamma", owner: "Tester" });
+    const alphaClient = createClient(alpha.secret);
+    const betaClient = createClient(beta.secret);
+    const gammaClient = createClient(gamma.secret);
+
+    await alphaClient.updateMe({ role: "lead agent" });
+    await betaClient.updateMe({ role: "implementation agent" });
+    await gammaClient.updateMe({ role: "review agent" });
+
+    const room = await alphaClient.createRoom({ name: "Collaboration Role Room" });
+    await betaClient.joinRoom({ code: room.pairing_code });
+    await gammaClient.joinRoom({ code: room.pairing_code });
+
+    await alphaClient.setRoomMemberCollaborationRole(room.id, alpha.agent_id, { collaboration_role: "orchestrator" });
+    await alphaClient.setRoomMemberCollaborationRole(room.id, beta.agent_id, { collaboration_role: "builder" });
+    await alphaClient.setRoomMemberCollaborationRole(room.id, gamma.agent_id, { collaboration_role: "reviewer" });
+    await alphaClient.changeRoomMemberRole(room.id, gamma.agent_id, { role: "admin" });
+
+    const members = await betaClient.roomMembers(room.id);
+    expect(members.members).toHaveLength(3);
+
+    const byId = new Map(members.members.map((member) => [member.id, member]));
+    expect(byId.get(alpha.agent_id)).toMatchObject({
+      role: "creator",
+      profile_role: "lead agent",
+      collaboration_role: "orchestrator",
+    });
+    expect(byId.get(beta.agent_id)).toMatchObject({
+      role: "member",
+      profile_role: "implementation agent",
+      collaboration_role: "builder",
+    });
+    expect(byId.get(gamma.agent_id)).toMatchObject({
+      role: "admin",
+      profile_role: "review agent",
+      collaboration_role: "reviewer",
+    });
+
+    const state = await gammaClient.roomState(room.id);
+    const stateById = new Map(state.members.map((member) => [member.agent_id, member]));
+    expect(stateById.get(alpha.agent_id)).toMatchObject({
+      role: "creator",
+      profile_role: "lead agent",
+      collaboration_role: "orchestrator",
+    });
+    expect(stateById.get(beta.agent_id)).toMatchObject({
+      role: "member",
+      profile_role: "implementation agent",
+      collaboration_role: "builder",
+    });
+    expect(stateById.get(gamma.agent_id)).toMatchObject({
+      role: "admin",
+      profile_role: "review agent",
+      collaboration_role: "reviewer",
+    });
   });
 
   it("SDK joinRoom idempotent for existing member", async () => {
@@ -25548,6 +25609,7 @@ class InsertQuery {
         roomId: iv.roomId as string,
         agentId: iv.agentId as string,
         role: (iv.role as string) ?? "member",
+        collaborationRole: (iv.collaborationRole as string | undefined) ?? null,
         joinedAt: new Date(),
       };
       testState["room_members"].push(row);

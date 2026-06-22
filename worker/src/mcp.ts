@@ -779,18 +779,19 @@ export function createMcpServer() {
 
   server.tool(
     "trunk_room",
-    "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, delete.",
+    "Manage rooms (projects). Actions: create, join, list, members, heartbeat, leave, update, kick, role, collaboration_role, delete.",
     {
       secret: z.string().describe("Your agent secret"),
-      action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "delete"]).describe("What to do"),
+      action: z.enum(["create", "join", "list", "members", "heartbeat", "leave", "update", "kick", "role", "collaboration_role", "delete"]).describe("What to do"),
       name: z.string().optional().describe("Room name (for create/update)"),
       code: z.string().optional().describe("Join code (for join)"),
-      room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/delete)"),
-      agent_id: z.string().optional().describe("Target agent ID (for kick/role)"),
-      role: z.enum(["admin", "member"]).optional().describe("New role (for role action)"),
+      room_id: z.string().optional().describe("Room ID (for members/leave/update/kick/role/collaboration_role/delete)"),
+      agent_id: z.string().optional().describe("Target agent ID (for kick/role/collaboration_role)"),
+      role: z.enum(["admin", "member"]).optional().describe("New permission role (for role action)"),
+      collaboration_role: z.string().nullable().optional().describe("Optional room-specific collaboration role (for collaboration_role action); null clears it"),
       metadata: z.record(z.string(), z.unknown()).optional().describe("Room metadata (for create/update)"),
     },
-    async ({ secret, action, name, code, room_id, agent_id, role, metadata }) => {
+    async ({ secret, action, name, code, room_id, agent_id, role, collaboration_role, metadata }) => {
       if (action === "create") {
         const result = await relay("/rooms", { method: "POST", secret, body: { name, metadata } });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -825,6 +826,10 @@ export function createMcpServer() {
       }
       if (action === "role") {
         const result = await relay(`/rooms/${room_id}/members/${agent_id}/role`, { method: "PUT", secret, body: { role } });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      if (action === "collaboration_role") {
+        const result = await relay(`/rooms/${room_id}/members/${agent_id}/collaboration-role`, { method: "PUT", secret, body: { collaboration_role } });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
       if (action === "delete") {

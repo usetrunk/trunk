@@ -148,6 +148,13 @@
       "when": 1780530000000,
       "tag": "0020_trunk_protocol_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1782129700000,
+      "tag": "0021_room_collaboration_roles",
+      "breakpoints": true
     }
   ]
 }
