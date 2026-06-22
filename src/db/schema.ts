@@ -99,6 +99,33 @@ export const roomMembers = pgTable("room_members", {
   index("room_members_agent_idx").on(table.agentId),
 ]);
 
+export const agentDelegations = pgTable("agent_delegations", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  parentAgentId: text("parent_agent_id").notNull().references(() => agents.id),
+  childAgentId: text("child_agent_id").references(() => agents.id),
+  roomId: text("room_id").notNull().references(() => rooms.id),
+  taskId: text("task_id").references(() => tasks.id),
+  relationship: text("relationship").notNull().default("delegated_worker"),
+  runtime: text("runtime").notNull().default("custom"),
+  name: text("name").notNull(),
+  collaborationRole: text("collaboration_role"),
+  tokenHash: text("token_hash").notNull(),
+  tokenId: text("token_id").notNull().unique(),
+  status: text("status").notNull().default("open"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  runtimeSessionRef: text("runtime_session_ref"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("agent_delegations_parent_idx").on(table.parentAgentId, table.createdAt),
+  index("agent_delegations_child_idx").on(table.childAgentId, table.createdAt),
+  index("agent_delegations_room_idx").on(table.roomId, table.status),
+  index("agent_delegations_task_idx").on(table.taskId),
+  index("agent_delegations_token_idx").on(table.tokenHash),
+]);
+
 export const tasks = pgTable("tasks", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   scope: text("scope").notNull(), // "contact:<a>-<b>", "room:<id>", or "self:<id>"

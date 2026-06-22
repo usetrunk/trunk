@@ -39,6 +39,12 @@ const required: Array<[string, unknown]> = [
   ["GrantRecord", P.GrantRecord],
   ["CreateGrantResponse", P.CreateGrantResponse],
   ["ListGrantsResponse", P.ListGrantsResponse],
+  ["CreateDelegationRequest", P.CreateDelegationRequest],
+  ["DelegationRecord", P.DelegationRecord],
+  ["CreateDelegationResponse", P.CreateDelegationResponse],
+  ["ClaimDelegationRequest", P.ClaimDelegationRequest],
+  ["ClaimDelegationResponse", P.ClaimDelegationResponse],
+  ["ListDelegationsResponse", P.ListDelegationsResponse],
   ["AuthContext", P.AuthContext],
   ["AgentCard", P.AgentCard],
   ["UpsertAgentCardRequest", P.UpsertAgentCardRequest],
@@ -117,6 +123,43 @@ const positiveCases: Array<[string, unknown, unknown]> = [
     },
   ],
   ["CreateGrantRequest", P.CreateGrantRequest, { name: "test-bot", scopes: ["messages:send", "facts:read"] }],
+  [
+    "CreateDelegationRequest",
+    P.CreateDelegationRequest,
+    {
+      room_id: "73b4ba62-812e-4b5a-a98a-92d46afe92b1",
+      task_id: "d03fdd94-f04f-4448-b169-1e09d7b1ca81",
+      name: "Codex reviewer",
+      runtime: "codex",
+      relationship: "delegated_worker",
+      collaboration_role: "reviewer",
+      ttl_seconds: 3600,
+    },
+  ],
+  [
+    "DelegationRecord",
+    P.DelegationRecord,
+    {
+      id: "73b4ba62-812e-4b5a-a98a-92d46afe92b1",
+      parent_agent_id: "d03fdd94-f04f-4448-b169-1e09d7b1ca81",
+      child_agent_id: null,
+      room_id: "73b4ba62-812e-4b5a-a98a-92d46afe92b1",
+      task_id: null,
+      relationship: "delegated_worker",
+      runtime: "codex",
+      name: "Codex reviewer",
+      collaboration_role: "reviewer",
+      token_id: "td_example",
+      status: "open",
+      expires_at: "2026-01-01T00:00:00.000Z",
+      claimed_at: null,
+      revoked_at: null,
+      runtime_session_ref: null,
+      metadata: {},
+      created_at: "2025-01-01T00:00:00.000Z",
+    },
+  ],
+  ["ClaimDelegationRequest", P.ClaimDelegationRequest, { claim_token: "td_token.secret", name: "Codex reviewer" }],
 ];
 
 const negativeCases: Array<[string, unknown, unknown]> = [
@@ -151,6 +194,8 @@ const negativeCases: Array<[string, unknown, unknown]> = [
     },
   ],
   ["CreateGrantRequest (no scopes)", P.CreateGrantRequest, { name: "test" }],
+  ["CreateDelegationRequest (missing room)", P.CreateDelegationRequest, { name: "worker" }],
+  ["ClaimDelegationRequest (missing token)", P.ClaimDelegationRequest, { name: "worker" }],
 ];
 
 for (const [name, schema, value] of positiveCases) {

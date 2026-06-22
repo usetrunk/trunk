@@ -22,4 +22,5 @@ export * from "./contacts.js";
 export * from "./facts.js";
 export * from "./grants.js";
 export * from "./agent-cards.js";
+export * from "./delegations.js";
 export * from "./inspector.js";

@@ -13,6 +13,7 @@ import { taskToJson } from "../lib/response-shapes.js";
 import { validateWebhookUrl } from "../lib/ssrf.js";
 import { runRoomHeartbeats } from "../lib/room-heartbeat.js";
 import { checkpointTask, claimTask, CoordinationError, getRoomState, handoffTask } from "../lib/coordination.js";
+import { claimDelegation, createDelegation, DelegationError, listDelegations, revokeDelegation } from "../lib/delegations.js";
 
 type MessageRow = typeof messages.$inferSelect;
 
@@ -2033,6 +2034,71 @@ export function createTrunkMcpServer() {
       if (!deleted) return errorResult("Task not found");
 
       return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted_id: deleted.id }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "trunk_delegate",
+    "Create, claim, list, or revoke runtime-owned subagent delegations. Trunk records lineage and room/task context; Codex, Claude Code, OpenCode, or another runtime still spawns the worker.",
+    {
+      secret: z.string().optional().describe("Your agent secret, required except for claim"),
+      action: z.enum(["create", "claim", "list", "revoke"]).describe("What to do"),
+      room_id: z.string().optional().describe("Room ID for create/list"),
+      task_id: z.string().optional().describe("Optional room task ID for create"),
+      name: z.string().optional().describe("Delegation or child agent name"),
+      runtime: z.string().optional().describe("Runtime that will spawn the child, e.g. codex, claude_code, opencode, custom"),
+      relationship: z.string().optional().describe("Relationship label, default delegated_worker"),
+      collaboration_role: z.string().optional().describe("Room-specific role for the child, e.g. reviewer, scout, builder"),
+      ttl_seconds: z.number().optional().describe("Claim-token lifetime in seconds, max 30 days"),
+      expires_at: z.string().optional().describe("Claim-token expiry as ISO timestamp"),
+      metadata: z.record(z.string(), z.unknown()).optional().describe("Delegation metadata"),
+      claim_token: z.string().optional().describe("One-time claim token for claim action"),
+      owner: z.string().optional().describe("Child owner name for claim action"),
+      webhook_url: z.string().optional().describe("Child webhook URL for claim action"),
+      profile_role: z.string().optional().describe("Child profile role for claim action"),
+      runtime_session_ref: z.string().optional().describe("Runtime session/thread id for claim action"),
+      delegation_id: z.string().optional().describe("Delegation ID for revoke action"),
+      reason: z.string().optional().describe("Revoke reason"),
+    },
+    async ({ secret, action, room_id, task_id, name, runtime, relationship, collaboration_role, ttl_seconds, expires_at, metadata, claim_token, owner, webhook_url, profile_role, runtime_session_ref, delegation_id, reason }) => {
+      try {
+        if (action === "claim") {
+          const result = await claimDelegation({ claim_token: claim_token ?? "", name, owner, webhook_url, profile_role, runtime_session_ref, metadata });
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+
+        if (!secret) return errorResult("secret is required");
+        const agent = await resolveAgent(secret);
+        if (!agent) return errorResult("Invalid secret");
+
+        if (action === "create") {
+          const result = await createDelegation(agent.id, {
+            room_id: room_id ?? "",
+            task_id,
+            name: name ?? "",
+            runtime: runtime ?? "custom",
+            relationship: relationship ?? "delegated_worker",
+            collaboration_role,
+            ttl_seconds,
+            expires_at,
+            metadata,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        if (action === "list") {
+          const delegations = await listDelegations(agent.id, { room_id });
+          return { content: [{ type: "text", text: JSON.stringify({ delegations, count: delegations.length }, null, 2) }] };
+        }
+        if (action === "revoke") {
+          if (!delegation_id) return errorResult("delegation_id is required for revoke");
+          const delegation = await revokeDelegation(agent.id, delegation_id, reason);
+          return { content: [{ type: "text", text: JSON.stringify({ ok: true, delegation }, null, 2) }] };
+        }
+        return errorResult("Unknown action");
+      } catch (error) {
+        if (error instanceof DelegationError) return errorResult(`${error.code}: ${error.message}`);
+        throw error;
+      }
     }
   );
 

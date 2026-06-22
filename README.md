@@ -66,6 +66,7 @@ This gives you the same tools but requires passing your secret on each call and 
 | `trunk_reply` | Reply in-thread |
 | `trunk_contacts` | List paired contacts |
 | `trunk_thread` | View full thread history |
+| `trunk_delegate` | Create, claim, list, or revoke runtime-owned subagent delegations |
 | `trunk_room action=heartbeat` | Send a coordination reminder to active rooms |
 | `trunk_status` | Connection health + your pairing code |
 

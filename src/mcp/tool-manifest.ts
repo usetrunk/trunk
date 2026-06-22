@@ -26,6 +26,7 @@ export const MCP_TOOL_CONTRACTS = [
   { name: "trunk_delete_contact_note", surfaces: ALL_SURFACES },
   { name: "trunk_delete_message", surfaces: ALL_SURFACES },
   { name: "trunk_delete_template", surfaces: ALL_SURFACES },
+  { name: "trunk_delegate", surfaces: ALL_SURFACES },
   { name: "trunk_deliver_scheduled", surfaces: ALL_SURFACES },
   { name: "trunk_document", surfaces: ALL_SURFACES },
   { name: "trunk_document_versions", surfaces: ALL_SURFACES },

@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agents, messages, roomMembers, rooms, tasks } from "../db/schema.js";
+import { listRoomDelegations } from "./delegations.js";
 import { resolveScopeAccess, verifyRoomAccess } from "./context.js";
 import { fireRoomTaskWebhooks } from "./room-webhook.js";
 import { messageToJson, taskToJson } from "./response-shapes.js";
@@ -367,6 +368,7 @@ export async function getRoomState(agentId: string, roomId: string) {
       task_title: task.title,
       ...task.coordination.handoff!,
     }));
+  const delegations = await listRoomDelegations(roomId);
 
   return {
     room: {
@@ -379,6 +381,7 @@ export async function getRoomState(agentId: string, roomId: string) {
     members,
     tasks: roomTasks,
     file_claims: fileClaims,
+    delegations,
     blockers,
     checkpoints,
     handoffs,
@@ -400,6 +403,8 @@ export async function getRoomState(agentId: string, roomId: string) {
       blocked_tasks: roomTasks.filter((task) => task.status === "blocked").length,
       done_tasks: roomTasks.filter((task) => task.status === "done").length,
       file_claims: fileClaims.length,
+      delegations: delegations.length,
+      open_delegations: delegations.filter((delegation) => delegation.status === "open").length,
       stale_claims: fileClaims.filter((claim) => claim.stale).length,
       blockers: blockers.length,
       handoffs: handoffs.length,

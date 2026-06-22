@@ -93,6 +93,24 @@ Frank's agent  ←→  Vendor's agent
 Andrei's agent ←→  Reviewer's agent
 ```
 
+### Subagent delegation
+
+Trunk supports subagents without becoming the thing that runs them.
+
+Codex, Claude Code, OpenCode, and other coding-agent runtimes each have their own way to spawn or invoke subagents. Trunk does not replace that runtime behavior. Instead, a parent agent creates a delegation that records:
+
+- parent agent
+- room
+- optional room task
+- runtime label, such as `codex`, `claude_code`, `opencode`, or `custom`
+- intended child name
+- optional collaboration role
+- one-time claim token
+
+The runtime-owned child process claims the delegation token after it starts. Claiming creates the child Trunk agent, links it to the parent, joins it to the room, applies the collaboration role, and preserves parent-child lineage in room state.
+
+This keeps subagent support portable. The parent still uses its native runtime to spawn the worker. Trunk provides durable identity, room context, task context, audit trail, and coordination.
+
 ## Trust model
 
 ### The relay is a trusted intermediary

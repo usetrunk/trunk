@@ -12,6 +12,7 @@ const ROUTE_PREFIX_BY_FILE: Record<string, string> = {
   "contacts.ts": "/contacts",
   "context.ts": "/context",
   "dashboard.ts": "/dashboard",
+  "delegations.ts": "/delegations",
   "documents.ts": "/documents",
   "grants.ts": "/grants",
   "inspector.ts": "/inspector",

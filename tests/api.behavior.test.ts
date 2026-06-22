@@ -335,6 +335,27 @@ type ScopedGrantRow = {
   createdAt: Date;
 };
 
+type AgentDelegationRow = {
+  id: string;
+  parentAgentId: string;
+  childAgentId: string | null;
+  roomId: string;
+  taskId: string | null;
+  relationship: string;
+  runtime: string;
+  name: string;
+  collaborationRole: string | null;
+  tokenHash: string;
+  tokenId: string;
+  status: string;
+  expiresAt: Date | null;
+  claimedAt: Date | null;
+  revokedAt: Date | null;
+  runtimeSessionRef: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 type FactHistoryRow = {
   id: string;
   scope: string;
@@ -379,6 +400,7 @@ type TableName =
   | "room_webhooks"
   | "agent_cards"
   | "scoped_grants"
+  | "agent_delegations"
   | "fact_history";
 
 const testState = vi.hoisted(() => ({
@@ -410,6 +432,7 @@ const testState = vi.hoisted(() => ({
   "room_webhooks": [] as RoomWebhookRow[],
   "agent_cards": [] as AgentCardRow[],
   "scoped_grants": [] as ScopedGrantRow[],
+  "agent_delegations": [] as AgentDelegationRow[],
   "fact_history": [] as FactHistoryRow[],
   idCounter: 0,
 }));
@@ -458,6 +481,7 @@ describe("Hono API behavior", () => {
     testState["room_webhooks"].length = 0;
     testState["agent_cards"].length = 0;
     testState["scoped_grants"].length = 0;
+    testState["agent_delegations"].length = 0;
     testState["fact_history"].length = 0;
     testState.idCounter = 0;
     vi.clearAllMocks();
@@ -2159,6 +2183,125 @@ describe("Hono API behavior", () => {
       role: "admin",
       profile_role: "review agent",
       collaboration_role: "reviewer",
+    });
+  });
+
+  it("delegation claim registers a runtime-owned subagent and links it to room task context", async () => {
+    const parent = await createClient().register({ name: "Parent Agent", owner: "Andrei" });
+    const parentClient = createClient(parent.secret);
+
+    await parentClient.updateMe({ role: "orchestrator" });
+    const room = await parentClient.createRoom({ name: "Delegation Room" });
+    const task = await parentClient.createTask({
+      room_id: room.id,
+      title: "Review the dashboard messaging",
+    });
+
+    const created = await parentClient.createDelegation({
+      room_id: room.id,
+      task_id: task.id,
+      name: "Codex reviewer worker",
+      runtime: "codex",
+      collaboration_role: "reviewer",
+      ttl_seconds: 3600,
+      metadata: { source: "codex-subagent" },
+    });
+
+    expect(created.claim_token).toMatch(/^td_[^.]+\.[a-f0-9]{64}$/);
+    expect(created.delegation).toMatchObject({
+      parent_agent_id: parent.agent_id,
+      room_id: room.id,
+      task_id: task.id,
+      runtime: "codex",
+      name: "Codex reviewer worker",
+      collaboration_role: "reviewer",
+      status: "open",
+    });
+
+    const claimed = await createClient().claimDelegation({
+      claim_token: created.claim_token,
+      name: "Codex Reviewer",
+      owner: "Andrei",
+      profile_role: "delegated reviewer",
+      runtime_session_ref: "codex-thread-1",
+      metadata: { model: "deepseek-v4-flash" },
+    });
+
+    expect(claimed.agent).toMatchObject({
+      agent_id: expect.any(String),
+      name: "Codex Reviewer",
+      owner: "Andrei",
+      pairing_code: expect.any(String),
+      secret: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(claimed.delegation).toMatchObject({
+      id: created.delegation.id,
+      parent_agent_id: parent.agent_id,
+      child_agent_id: claimed.agent.agent_id,
+      status: "claimed",
+      runtime_session_ref: "codex-thread-1",
+    });
+
+    const members = await parentClient.roomMembers(room.id);
+    const childMember = members.members.find((member) => member.id === claimed.agent.agent_id);
+    expect(childMember).toMatchObject({
+      role: "member",
+      profile_role: "delegated reviewer",
+      collaboration_role: "reviewer",
+    });
+
+    const childClient = createClient(claimed.agent.secret);
+    const sent = await childClient.send({
+      to: parent.agent_id,
+      type: "update",
+      payload: { content: "Review complete" },
+    });
+    expect(sent.status).toBe("delivered");
+
+    const list = await parentClient.listDelegations({ room_id: room.id });
+    expect(list.delegations).toEqual([
+      expect.objectContaining({
+        id: created.delegation.id,
+        status: "claimed",
+        child_agent_id: claimed.agent.agent_id,
+      }),
+    ]);
+
+    const state = await parentClient.roomState(room.id);
+    expect(state.delegations).toEqual([
+      expect.objectContaining({
+        id: created.delegation.id,
+        status: "claimed",
+        child_agent_id: claimed.agent.agent_id,
+        collaboration_role: "reviewer",
+      }),
+    ]);
+  });
+
+  it("delegation claim token is single use", async () => {
+    const parent = await createClient().register({ name: "Parent Agent" });
+    const parentClient = createClient(parent.secret);
+    const room = await parentClient.createRoom({ name: "Single Use Room" });
+    const created = await parentClient.createDelegation({
+      room_id: room.id,
+      name: "OpenCode scout worker",
+      runtime: "opencode",
+      collaboration_role: "scout",
+    });
+
+    await expect(createClient().claimDelegation({
+      claim_token: created.claim_token,
+      name: "OpenCode Scout",
+    })).resolves.toMatchObject({
+      delegation: expect.objectContaining({ status: "claimed" }),
+    });
+
+    await expect(createClient().claimDelegation({
+      claim_token: created.claim_token,
+      name: "Second Scout",
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "DELEGATION_CLAIMED",
     });
   });
 
@@ -25962,6 +26105,31 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "agent_delegations") {
+      const row: AgentDelegationRow = {
+        id: nextId("delegation"),
+        parentAgentId: iv.parentAgentId as string,
+        childAgentId: (iv.childAgentId as string | undefined) ?? null,
+        roomId: iv.roomId as string,
+        taskId: (iv.taskId as string | undefined) ?? null,
+        relationship: (iv.relationship as string | undefined) ?? "delegated_worker",
+        runtime: (iv.runtime as string | undefined) ?? "custom",
+        name: iv.name as string,
+        collaborationRole: (iv.collaborationRole as string | undefined) ?? null,
+        tokenHash: iv.tokenHash as string,
+        tokenId: iv.tokenId as string,
+        status: (iv.status as string | undefined) ?? "open",
+        expiresAt: (iv.expiresAt as Date | undefined) ?? null,
+        claimedAt: (iv.claimedAt as Date | undefined) ?? null,
+        revokedAt: (iv.revokedAt as Date | undefined) ?? null,
+        runtimeSessionRef: (iv.runtimeSessionRef as string | undefined) ?? null,
+        metadata: (iv.metadata as Record<string, unknown> | undefined) ?? {},
+        createdAt: new Date(),
+      };
+      testState["agent_delegations"].push(row);
+      return row;
+    }
+
     if (this.table === "fact_history") {
       const row: FactHistoryRow = {
         id: nextId("facth"),
@@ -26083,8 +26251,8 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow | AgentCardRow | ScopedGrantRow | FactHistoryRow> {
-  return testState[table] as Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow | AgentCardRow | ScopedGrantRow | FactHistoryRow>;
+function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow | AgentCardRow | ScopedGrantRow | AgentDelegationRow | FactHistoryRow> {
+  return testState[table] as Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow | AgentCardRow | ScopedGrantRow | AgentDelegationRow | FactHistoryRow>;
 }
 
 function nextId(_prefix: string): string {
@@ -26128,6 +26296,7 @@ function getTableName(table: unknown): TableName {
     name === "room_webhooks" ||
     name === "agent_cards" ||
     name === "scoped_grants" ||
+    name === "agent_delegations" ||
     name === "fact_history"
   ) return name;
   throw new Error(`Unsupported table ${String(name)}`);
@@ -26337,6 +26506,12 @@ const columnToProperty: Record<string, string> = {
   not_before: "notBefore",
   token_id: "tokenId",
   token_hash: "tokenHash",
+  parent_agent_id: "parentAgentId",
+  child_agent_id: "childAgentId",
+  task_id: "taskId",
+  collaboration_role: "collaborationRole",
+  claimed_at: "claimedAt",
+  runtime_session_ref: "runtimeSessionRef",
   contact_policy: "contactPolicy",
   message_types: "messageTypes",
   homepage_url: "homepageUrl",

@@ -161,6 +161,35 @@ const PATHS: Record<string, unknown> = {
     response: "ApiError",
     parameters: [{ name: "id", in: "path", required: true, schema: PARAM_UUID }],
   }),
+  "/delegations": {
+    ...endpoint("get", "/delegations", {
+      summary: "List subagent delegations",
+      operationId: "listDelegations",
+      auth: true,
+      response: "ListDelegationsResponse",
+      parameters: [{ name: "room_id", in: "query", schema: PARAM_UUID }],
+    }),
+    ...endpoint("post", "/delegations", {
+      summary: "Create a subagent delegation",
+      operationId: "createDelegation",
+      auth: true,
+      requestBody: "CreateDelegationRequest",
+      response: "CreateDelegationResponse",
+    }),
+  },
+  "/delegations/claim": endpoint("post", "/delegations/claim", {
+    summary: "Claim a subagent delegation",
+    operationId: "claimDelegation",
+    requestBody: "ClaimDelegationRequest",
+    response: "ClaimDelegationResponse",
+  }),
+  "/delegations/{id}": endpoint("delete", "/delegations/{id}", {
+    summary: "Revoke an open delegation",
+    operationId: "revokeDelegation",
+    auth: true,
+    response: "ApiError",
+    parameters: [{ name: "id", in: "path", required: true, schema: PARAM_UUID }],
+  }),
   "/inspector/health": endpoint("get", "/inspector/health", { summary: "Delivery health", operationId: "inspectorHealth", auth: true, response: "DeliveryHealth" }),
   "/inspector/thread/{threadId}": endpoint("get", "/inspector/thread/{threadId}", {
     summary: "Thread timeline",
@@ -187,6 +216,7 @@ export function buildOpenApi(): Record<string, unknown> {
       { name: "messages" },
       { name: "facts" },
       { name: "grants" },
+      { name: "delegations" },
       { name: "agent_cards" },
       { name: "inspector" },
     ],

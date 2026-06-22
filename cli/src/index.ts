@@ -997,6 +997,67 @@ server.tool(
 // --- Room tools (consolidated) ---
 
 server.tool(
+  "trunk_delegate",
+  "Create, claim, list, or revoke runtime-owned subagent delegations. Trunk records lineage and room/task context; Codex, Claude Code, OpenCode, or another runtime still spawns the worker.",
+  {
+    action: z.enum(["create", "claim", "list", "revoke"]).describe("What to do"),
+    room_id: z.string().optional().describe("Room ID for create/list"),
+    task_id: z.string().optional().describe("Optional room task ID for create"),
+    name: z.string().optional().describe("Delegation or child agent name"),
+    runtime: z.string().optional().describe("Runtime that will spawn the child, e.g. codex, claude_code, opencode, custom"),
+    relationship: z.string().optional().describe("Relationship label, default delegated_worker"),
+    collaboration_role: z.string().optional().describe("Room-specific role for the child, e.g. reviewer, scout, builder"),
+    ttl_seconds: z.number().optional().describe("Claim-token lifetime in seconds, max 30 days"),
+    expires_at: z.string().optional().describe("Claim-token expiry as ISO timestamp"),
+    metadata: z.record(z.string(), z.unknown()).optional().describe("Delegation metadata"),
+    claim_token: z.string().optional().describe("One-time claim token for claim action"),
+    owner: z.string().optional().describe("Child owner name for claim action"),
+    webhook_url: z.string().optional().describe("Child webhook URL for claim action"),
+    profile_role: z.string().optional().describe("Child profile role for claim action"),
+    runtime_session_ref: z.string().optional().describe("Runtime session/thread id for claim action"),
+    delegation_id: z.string().optional().describe("Delegation ID for revoke action"),
+    reason: z.string().optional().describe("Revoke reason"),
+  },
+  async ({ action, room_id, task_id, name, runtime, relationship, collaboration_role, ttl_seconds, expires_at, metadata, claim_token, owner, webhook_url, profile_role, runtime_session_ref, delegation_id, reason }) => {
+    const config = loadConfig();
+
+    if (action === "claim") {
+      const result = await relay("/delegations/claim", {
+        method: "POST",
+        body: { claim_token, name, owner, webhook_url, profile_role, runtime_session_ref, metadata },
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (!config) return { content: [{ type: "text", text: "Error: Not registered." }], isError: true };
+
+    if (action === "create") {
+      const result = await relay("/delegations", {
+        method: "POST",
+        secret: config.secret,
+        body: { room_id, task_id, name, runtime, relationship, collaboration_role, ttl_seconds, expires_at, metadata },
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (action === "list") {
+      const params = new URLSearchParams();
+      if (room_id) params.set("room_id", room_id);
+      const query = params.toString();
+      const result = await relay(`/delegations${query ? `?${query}` : ""}`, { secret: config.secret });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (action === "revoke") {
+      const result = await relay(`/delegations/${delegation_id}`, { method: "DELETE", secret: config.secret, body: { reason } });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    return { content: [{ type: "text", text: "Unknown action" }], isError: true };
+  }
+);
+
+server.tool(
   "trunk_room_state",
   "Get one compact current-state view for a room: members, tasks, claims, blockers, checkpoints, handoffs, and latest activity.",
   {

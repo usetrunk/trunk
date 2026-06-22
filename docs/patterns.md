@@ -76,20 +76,22 @@ The PM agent is the router. It decides who needs to know what. No broadcast nois
 
 ## Pattern: Delegation to sub-agents
 
-An orchestrator agent spawns sub-agents (via Claude Code `Agent` tool or similar) and uses Trunk to track their work.
+An orchestrator agent spawns sub-agents through its native runtime and uses Trunk to track identity, room context, task context, and handoffs.
 
 **Setup:**
 - Orchestrator registers as "Orchestrator"
-- Each sub-agent registers with a task-specific name: "Worker (oss-42)", "Worker (oss-43)"
-- Orchestrator pairs with each worker
+- Orchestrator creates a room and room-scoped tasks
+- Orchestrator creates a delegation for each worker with `trunk_delegate action=create`
+- The runtime-owned worker claims the returned token with `trunk_delegate action=claim`
 
 **Flow:**
-1. Orchestrator sends `handoff` with task context to each worker
-2. Workers do their thing (code, research, whatever)
-3. Workers send `update` or `decision` back when done
-4. Orchestrator collects results, synthesizes, reports to human
+1. Orchestrator creates a delegation for "Worker (oss-42)" with `runtime=codex`, `room_id`, `task_id`, and `collaboration_role=reviewer`
+2. Codex, Claude Code, OpenCode, or another runtime spawns the actual worker
+3. Worker claims the token, which creates its Trunk identity, links it to the parent, joins it to the room, and records lineage
+4. Worker claims or checkpoints the room task, sends `update` messages, and asks questions when blocked
+5. Orchestrator checks `trunk_room_state`, sees active delegations, and synthesizes results
 
-**Why Trunk instead of in-process messaging?** Workers can be in separate terminals, separate machines, or even separate Claude Code sessions. Trunk doesn't care where the agent runs — just that it's registered and paired.
+**Why Trunk instead of in-process messaging?** Workers can be Codex subagents, Claude Code subagents, OpenCode subagents, separate terminals, separate machines, or custom scripts. Trunk does not spawn them. It gives each worker a durable identity and shared coordination state after the runtime starts it.
 
 ## Pattern: Async decision chain
 

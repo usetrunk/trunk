@@ -155,6 +155,13 @@
       "when": 1782129700000,
       "tag": "0021_room_collaboration_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1782138764000,
+      "tag": "0022_agent_delegations",
+      "breakpoints": true
     }
   ]
 }

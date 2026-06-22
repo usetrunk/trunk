@@ -446,6 +446,7 @@ export type RoomStateResponse = {
   }>;
   tasks: TaskResponse[];
   file_claims: Array<FileClaim & { task_id: string; task_title: string; stale: boolean }>;
+  delegations: DelegationRecord[];
   blockers: Array<BlockerState & { task_id: string; task_title: string }>;
   checkpoints: Array<CheckpointState & { task_id: string; task_title: string }>;
   handoffs: Array<HandoffState & { task_id: string; task_title: string }>;
@@ -461,10 +462,70 @@ export type RoomStateResponse = {
     blocked_tasks: number;
     done_tasks: number;
     file_claims: number;
+    delegations: number;
+    open_delegations: number;
     stale_claims: number;
     blockers: number;
     handoffs: number;
   };
+};
+
+export type DelegationRecord = {
+  id: string;
+  parent_agent_id: string;
+  child_agent_id: string | null;
+  room_id: string;
+  task_id: string | null;
+  relationship: string;
+  runtime: string;
+  name: string;
+  collaboration_role: string | null;
+  token_id: string;
+  status: "open" | "claimed" | "revoked" | "expired";
+  expires_at: string | null;
+  claimed_at: string | null;
+  revoked_at: string | null;
+  runtime_session_ref: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type CreateDelegationRequest = {
+  room_id: string;
+  task_id?: string;
+  name: string;
+  runtime?: string;
+  relationship?: string;
+  collaboration_role?: string;
+  ttl_seconds?: number;
+  expires_at?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type CreateDelegationResponse = {
+  delegation: DelegationRecord;
+  claim_token: string;
+  warning?: string;
+};
+
+export type ClaimDelegationRequest = {
+  claim_token: string;
+  name?: string;
+  owner?: string;
+  webhook_url?: string;
+  profile_role?: string;
+  runtime_session_ref?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type ClaimDelegationResponse = {
+  delegation: DelegationRecord;
+  agent: RegisterResponse;
+};
+
+export type ListDelegationsResponse = {
+  delegations: DelegationRecord[];
+  count: number;
 };
 
 export type TaskListOptions = {
@@ -1358,6 +1419,28 @@ export class TrunkClient {
 
   roomState(roomId: string): Promise<RoomStateResponse> {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/state`);
+  }
+
+  createDelegation(input: CreateDelegationRequest): Promise<CreateDelegationResponse> {
+    return this.request("/delegations", { method: "POST", body: input });
+  }
+
+  claimDelegation(input: ClaimDelegationRequest): Promise<ClaimDelegationResponse> {
+    return this.request("/delegations/claim", { method: "POST", body: input, auth: false });
+  }
+
+  listDelegations(options: { room_id?: string } = {}): Promise<ListDelegationsResponse> {
+    const search = new URLSearchParams();
+    if (options.room_id) search.set("room_id", options.room_id);
+    const query = search.toString();
+    return this.request(`/delegations${query ? `?${query}` : ""}`);
+  }
+
+  revokeDelegation(delegationId: string, reason?: string): Promise<{ ok: true; delegation: DelegationRecord }> {
+    return this.request(`/delegations/${encodeURIComponent(delegationId)}`, {
+      method: "DELETE",
+      body: reason ? { reason } : {},
+    });
   }
 
   runRoomHeartbeats(): Promise<RoomHeartbeatRunResponse> {
