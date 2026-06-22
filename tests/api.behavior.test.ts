@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SQL } from "drizzle-orm";
 import app from "../src/app.js";
 import { createTrunkInboxNode, createTrunkSendNode } from "../src/adapters/langgraph.js";
-import { notifyPushWorker } from "../src/lib/webhook.js";
 import { TrunkApiError, TrunkClient, signWebhookPayload, verifyWebhookSignature, type RegisterResponse, type TrunkMessage } from "../src/sdk/index.js";
 
 type CascadeAuditMetadata = {
@@ -438,8 +437,6 @@ const testState = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/lib/webhook.js", () => ({
-  notifyPushWorker: vi.fn(async () => undefined),
-  notifyRoomTaskEvent: vi.fn(async () => undefined),
   deliverWebhook: vi.fn(async () => true),
 }));
 
@@ -5098,30 +5095,6 @@ describe("Hono API behavior", () => {
     expect(second).toMatchObject({ id: first.id, thread_id: first.thread_id });
     expect(inbox.messages).toHaveLength(1);
     expect(inbox.messages[0].payload).toMatchObject({ content: "once" });
-  });
-
-  it("keeps messages durable when real-time push fails", async () => {
-    const { beta, alphaClient, betaClient } = await registerPair();
-    await alphaClient.pair({ code: beta.pairing_code });
-    vi.mocked(notifyPushWorker).mockRejectedValueOnce(new Error("push worker down"));
-
-    const sent = await alphaClient.send({
-      to: beta.agent_id,
-      type: "update",
-      payload: { content: "Still lands in inbox." },
-    });
-
-    expect(sent.status).toBe("delivered");
-    await expect(betaClient.inbox()).resolves.toMatchObject({
-      messages: [expect.objectContaining({ id: sent.id, payload: { content: "Still lands in inbox." } })],
-    });
-    const pushFailedEvent = testState["audit_events"].find(
-      (e: any) => e.action === "message.push_failed" && e.targetId === sent.id
-    );
-    if (!pushFailedEvent) throw new Error("Expected message.push_failed audit event");
-    // Verify audit logs error_type (class name) not raw error message
-    expect(pushFailedEvent.metadata.error_type).toBe("Error");
-    expect(pushFailedEvent.metadata.error_type).not.toContain("push worker down");
   });
 
   it("stores shared facts through context CRUD for either contact", async () => {

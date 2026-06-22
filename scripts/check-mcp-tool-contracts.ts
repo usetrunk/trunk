@@ -5,7 +5,6 @@ import { MCP_TOOL_CONTRACTS, type McpSurface } from "../src/mcp/tool-manifest.js
 const SURFACE_FILES: Record<McpSurface, string> = {
   server: "src/mcp/server.ts",
   cli: "cli/src/index.ts",
-  worker: "worker/src/mcp.ts",
 };
 
 const TOOL_REGISTRATION_RE = /server\.tool\(\s*\n?\s*["']([^"']+)["']/g;

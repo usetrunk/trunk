@@ -5,7 +5,6 @@ import { listRoomDelegations } from "./delegations.js";
 import { resolveScopeAccess, verifyRoomAccess } from "./context.js";
 import { fireRoomTaskWebhooks } from "./room-webhook.js";
 import { messageToJson, taskToJson } from "./response-shapes.js";
-import { notifyPushWorker, notifyRoomTaskEvent } from "./webhook.js";
 import {
   type CheckpointState,
   type CoordinationActivity,
@@ -23,7 +22,6 @@ const MAX_CLAIM_TTL_SECONDS = 24 * 60 * 60;
 const MAX_FILES_PER_EVENT = 100;
 
 type TaskRow = typeof tasks.$inferSelect;
-type TaskMessageRow = typeof messages.$inferSelect;
 type CoordinationTaskEvent = "task.claimed" | "task.checkpointed" | "task.blocked" | "task.handed_off" | "task.updated";
 
 export class CoordinationError extends Error {
@@ -451,10 +449,7 @@ async function emitRoomTaskEvent(task: TaskRow, event: CoordinationTaskEvent = "
   if (!task.scope.startsWith("room:")) return;
   const roomId = task.scope.slice(5);
   const payload = taskToJson(task);
-  await Promise.allSettled([
-    fireRoomTaskWebhooks(roomId, payload, event),
-    notifyRoomTaskEvent(roomId, event, payload),
-  ]);
+  await fireRoomTaskWebhooks(roomId, payload, event);
 }
 
 async function announceRoomCoordination(
@@ -498,10 +493,9 @@ async function announceRoomCoordination(
     to_agent: announcement.to_agent ?? null,
   };
 
-  const created = await db.transaction(async (tx) => {
-    const inserted: TaskMessageRow[] = [];
+  await db.transaction(async (tx) => {
     for (const recipientId of recipientIds) {
-      const [message] = await tx
+      await tx
         .insert(messages)
         .values({
           fromAgent: agentId,
@@ -513,14 +507,9 @@ async function announceRoomCoordination(
           payload,
           status: "delivered",
           deliveredAt: now,
-        })
-        .returning();
-      inserted.push(message);
+        });
     }
-    return inserted;
   });
-
-  await Promise.allSettled(created.map((message) => notifyPushWorker(message.toAgent, message)));
 }
 
 function isStaleClaim(claim: FileClaim): boolean {

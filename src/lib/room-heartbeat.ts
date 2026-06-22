@@ -2,7 +2,7 @@ import { and, desc, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agents, messages, roomMembers } from "../db/schema.js";
 import { audit } from "./audit.js";
-import { deliverWebhook, notifyPushWorker } from "./webhook.js";
+import { deliverWebhook } from "./webhook.js";
 import { checkRateLimit } from "./rate-limit.js";
 
 const HEARTBEAT_COOLDOWN_MS = 30 * 60 * 1000;
@@ -170,7 +170,6 @@ async function emitRoomHeartbeat(agentId: string, roomId: string, now: Date) {
       })
       .returning();
 
-    await notifyPushWorker(recipientId, message);
     const recipient = agentMap.get(recipientId);
     if (recipient?.webhookUrl) {
       deliverWebhook(message, recipient).catch(() => {});

@@ -4,8 +4,7 @@
   "description": "Agent-to-agent communication relay",
   "type": "module",
   "workspaces": [
-    "cli",
-    "worker"
+    "cli"
   ],
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts",
@@ -13,11 +12,10 @@
     "build:relay": "tsup src/index.ts --format esm --target node20 --out-dir dist",
     "build:cli": "npm -w @usetrunk/cli run build",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit && npm run typecheck:cli && npm run typecheck:worker",
+    "typecheck": "tsc --noEmit && npm run typecheck:cli",
     "typecheck:relay": "tsc --noEmit",
     "typecheck:cli": "npm -w @usetrunk/cli run typecheck",
-    "typecheck:worker": "npm -w @usetrunk/push run typecheck",
-    "typecheck:hygiene": "tsc -p tsconfig.hygiene.json --noEmit && tsc -p cli/tsconfig.hygiene.json --noEmit && tsc -p worker/tsconfig.hygiene.json --noEmit",
+    "typecheck:hygiene": "tsc -p tsconfig.hygiene.json --noEmit && tsc -p cli/tsconfig.hygiene.json --noEmit",
     "test": "vitest run",
     "test:python": "PYTHONPATH=python python3 -m unittest discover -s python/tests",
     "verify:mcp": "tsx scripts/check-mcp-tool-contracts.ts",

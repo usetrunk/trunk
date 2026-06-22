@@ -21,7 +21,7 @@ Add to your MCP config:
   "mcpServers": {
     "trunk": {
       "type": "http",
-      "url": "https://push.trunk.bot/mcp"
+      "url": "https://trunk.bot/mcp"
     }
   }
 }

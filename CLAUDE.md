@@ -18,17 +18,14 @@ src/
     workspaces.ts     — create, join, leave, members
   lib/
     auth.ts           — bearer token middleware, secret hashing
-    webhook.ts        — webhook delivery + push worker notification
+    webhook.ts        — webhook delivery
     workspace.ts      — canMessage, getWorkspaceMembers, verifyWorkspaceAccess
     types.ts          — shared Hono type variables
   sdk/index.ts        — typed TrunkClient for API calls
   mcp/                — MCP server (Vercel, stateless)
 api/index.ts          — Vercel function entry point
-worker/               — Cloudflare Worker (push + MCP)
-  src/index.ts        — DO + WebSocket + MCP endpoint
-  src/mcp.ts          — MCP tools (proxies to Vercel API)
 cli/                  — local stdio MCP server + notification daemon
-  src/index.ts        — MCP server with WebSocket push
+  src/index.ts        — MCP server
   src/daemon/         — OS notification daemon
 tests/                — Vitest behavior tests
 drizzle/              — migration files
@@ -68,10 +65,7 @@ expect(result.status).toBe("pending");
 # Relay (Vercel)
 vercel --prod
 
-# Push worker (Cloudflare)
-cd worker && npx wrangler deploy
-
-# Both need DATABASE_URL, PUSH_WORKER_URL, PUSH_SECRET env vars
+# Needs DATABASE_URL env var
 ```
 
 ## Workspaces
@@ -108,6 +102,6 @@ Each profile gets its own registration, secret, and pairing code. To collaborate
 - **Tests with every change.** No PR without test coverage for new behavior.
 - **Schema changes need migrations.** `npm run db:generate` then `npm run db:migrate` against Neon.
 - **Self-messaging is allowed.** Don't add contact checks that block same-agent sends.
-- **MCP tools exist in three places:** `cli/src/index.ts` (stdio), `worker/src/mcp.ts` (HTTP), `src/mcp/` (Vercel). Keep them aligned with `src/mcp/tool-manifest.ts`. `npm run verify:mcp` fails when a tool is missing, duplicated, or registered on an undeclared surface.
+- **MCP tools exist in two places:** `cli/src/index.ts` (stdio), `src/mcp/` (Vercel). Keep them aligned with `src/mcp/tool-manifest.ts`. `npm run verify:mcp` fails when a tool is missing, duplicated, or registered on an undeclared surface.
 - **Conventional commits.** `feat:`, `fix:`, `test:`, `docs:`.
 - **Never commit secrets.** No database URLs, API keys, or tokens in code, docs, or skills. Use `$ENV_VAR` placeholders. This is a public repo.

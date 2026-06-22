@@ -8,7 +8,7 @@ import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { applyFactUpdates } from "../lib/context.js";
 import { requireIdempotencyKey } from "../lib/idempotency.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
-import { deliverWebhook, notifyPushWorker } from "../lib/webhook.js";
+import { deliverWebhook } from "../lib/webhook.js";
 import { canMessage, canMessageWorkspace, getWorkspaceMembers, isBlocked, getBlockedRecipients } from "../lib/workspace.js";
 import { isValidUUID, requireValidUUIDs, validatePayload } from "../lib/errors.js";
 import { messageToJson } from "../lib/response-shapes.js";
@@ -205,7 +205,6 @@ app.post("/", async (c) => {
     // Notify and deliver webhooks after transaction commits
     if (!scheduledAt) {
       for (const message of created) {
-        await notifyRealtime(message.toAgent, message);
         const recipient = agentMap.get(message.toAgent);
         if (recipient?.webhookUrl) {
           deliverWebhook(message, recipient).catch(() => {});
@@ -318,7 +317,6 @@ app.post("/", async (c) => {
     // Notify and deliver webhooks after transaction commits
     if (!scheduledAt) {
       for (const message of created) {
-        await notifyRealtime(message.toAgent, message);
         const recipient = agentMap.get(message.toAgent);
         if (recipient?.webhookUrl) {
           deliverWebhook(message, recipient).catch(() => {});
@@ -415,9 +413,6 @@ app.post("/", async (c) => {
   if (scheduledAt) {
     return c.json({ ...receipt(message), scheduled_at: scheduledAt.toISOString() }, 201);
   }
-
-  // Push notification is best-effort. Durable inbox delivery must not depend on it.
-  await notifyRealtime(body.to, message);
 
   await db
     .update(messages)
@@ -1056,7 +1051,6 @@ app.post("/deliver-scheduled", async (c) => {
       continue;
     }
 
-    await notifyRealtime(msg.toAgent, msg);
     await db
       .update(messages)
       .set({ status: "delivered", deliveredAt: now })
@@ -1752,7 +1746,6 @@ app.post("/:id/reply", requireValidUUIDs("id"), async (c) => {
     .limit(1);
 
   if (recipient) {
-    await notifyRealtime(original.fromAgent, reply);
     await db
       .update(messages)
       .set({ status: "delivered", deliveredAt: new Date() })
@@ -1856,7 +1849,6 @@ app.post("/:id/forward", requireValidUUIDs("id"), async (c) => {
     .limit(1);
 
   if (recipient) {
-    await notifyRealtime(body.to, forwarded);
     await db
       .update(messages)
       .set({ status: "delivered", deliveredAt: new Date() })
@@ -2263,14 +2255,3 @@ function payloadSizeBytes(payload: Record<string, unknown>): number {
   return new TextEncoder().encode(JSON.stringify(payload)).length;
 }
 
-async function notifyRealtime(agentId: string, message: MessageRow): Promise<void> {
-  try {
-    await notifyPushWorker(agentId, message);
-  } catch (error) {
-    const errorType = error instanceof Error ? error.constructor.name : "unknown";
-    await audit(message.fromAgent, "message.push_failed", "message", message.id, {
-      to: agentId,
-      error_type: errorType,
-    }).catch(() => {});
-  }
-}

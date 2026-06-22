@@ -14,7 +14,6 @@ const tracked = trackedFiles();
 const forbiddenTrackedPatterns = [
   { pattern: /^dist\//, reason: "root build output must not be tracked" },
   { pattern: /^cli\/dist\//, reason: "CLI build output must not be tracked" },
-  { pattern: /^worker\/dist\//, reason: "worker build output must not be tracked" },
   { pattern: /^node_modules\//, reason: "dependencies must not be tracked" },
   { pattern: /(^|\/)__pycache__\//, reason: "Python cache output must not be tracked" },
   { pattern: /\.py[cod]$/, reason: "Python bytecode must not be tracked" },
@@ -30,13 +29,13 @@ for (const file of tracked) {
   }
 }
 
-for (const nestedLockfile of ["cli/package-lock.json", "worker/package-lock.json"]) {
+for (const nestedLockfile of ["cli/package-lock.json"]) {
   if (existsSync(nestedLockfile)) {
     issues.push(`${nestedLockfile}: use the root workspace lockfile instead`);
   }
 }
 
-const mcpProxyFiles = ["cli/src/index.ts", "worker/src/mcp.ts"];
+const mcpProxyFiles = ["cli/src/index.ts"];
 for (const file of mcpProxyFiles) {
   const source = readFileSync(file, "utf8");
   if (!source.includes("TrunkClient")) {
