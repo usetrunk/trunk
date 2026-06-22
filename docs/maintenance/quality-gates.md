@@ -1,10 +1,9 @@
 # Quality Gates
 
-This repo has three product surfaces over the same relay behavior:
+This repo has two product surfaces over the same relay behavior:
 
 - API and SDK in `src/`
 - local CLI and stdio MCP in `cli/`
-- push worker and HTTP MCP in `worker/`
 
 The maintenance goal is one install, one verification command, and explicit contracts for behavior that appears on more than one surface.
 
@@ -18,7 +17,7 @@ npm run verify
 
 `verify` runs:
 
-- relay, CLI, worker, and production-source hygiene type checks
+- relay, CLI, and production-source hygiene type checks
 - MCP surface contract checks
 - repository hygiene checks
 - API behavior tests
@@ -34,15 +33,14 @@ Use the root `package-lock.json` as the only lockfile. The root package owns the
 
 - `@usetrunk/relay`
 - `@usetrunk/cli`
-- `@usetrunk/push`
 
-Do not add nested lockfiles under `cli/` or `worker/`. If dependency placement looks wrong, repair it from the root with `npm install` or `npm ci`, then verify with:
+Do not add nested lockfiles under `cli/`. If dependency placement looks wrong, repair it from the root with `npm install` or `npm ci`, then verify with:
 
 ```bash
 npm ls esbuild drizzle-kit tsup tsx vitest wrangler --all
 ```
 
-The repo intentionally declares root `esbuild` so Vite, tsx, and the worker share a version that satisfies their peer ranges. Older esbuild versions may remain nested under tools that require them.
+The repo intentionally declares root `esbuild` so Vite and tsx share a version that satisfies their peer ranges. Older esbuild versions may remain nested under tools that require them.
 
 ## Repository hygiene
 
@@ -56,13 +54,12 @@ The check fails when generated output or environment files are tracked, nested w
 
 ## MCP tool contract
 
-MCP tools are registered on three surfaces:
+MCP tools are registered on two surfaces:
 
 - `src/mcp/server.ts`
 - `cli/src/index.ts`
-- `worker/src/mcp.ts`
 
-Every tool must be declared in `src/mcp/tool-manifest.ts`. Most tools are available on all three surfaces. Surface-specific tools must be explicitly marked there.
+Every tool must be declared in `src/mcp/tool-manifest.ts`. Most tools are available on both surfaces. Surface-specific tools must be explicitly marked there.
 
 Run:
 
@@ -70,7 +67,7 @@ Run:
 npm run verify:mcp
 ```
 
-The check fails when a tool is missing from a declared surface, registered on an undeclared surface, duplicated, has a different top-level input schema across shared surfaces, or gives the same shared hosted tool conflicting descriptions in `src/mcp/server.ts` and `worker/src/mcp.ts`. CLI descriptions may mention local credential storage or push behavior when that surface behaves differently.
+The check fails when a tool is missing from a declared surface, registered on an undeclared surface, duplicated, or has a different top-level input schema across shared surfaces. CLI descriptions may mention local credential storage when that surface behaves differently.
 
 When adding a tool:
 

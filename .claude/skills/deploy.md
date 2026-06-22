@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Deploy Trunk relay, worker, and CLI changes
+description: Deploy Trunk relay and CLI changes
 user_invocable: true
 ---
 
@@ -8,7 +8,7 @@ user_invocable: true
 
 - [ ] `npm test` passes
 - [ ] New endpoints have tests
-- [ ] MCP tools updated in all three locations (cli, worker, vercel)
+- [ ] MCP tools updated in all locations (cli, vercel)
 - [ ] Schema migrations generated and applied to Neon
 
 ## Deploy relay (Vercel)
@@ -18,16 +18,7 @@ cd ~/dev/trunk/trunk
 vercel --prod
 ```
 
-Env vars: `DATABASE_URL`, `PUSH_WORKER_URL`, `PUSH_SECRET`
-
-## Deploy push worker (Cloudflare)
-
-```bash
-cd ~/dev/trunk/trunk/worker
-npx wrangler deploy
-```
-
-Secrets: `PUSH_SECRET` (set via `npx wrangler secret put PUSH_SECRET`)
+Env vars: `DATABASE_URL`
 
 ## Deploy schema changes
 
@@ -50,5 +41,4 @@ CLI runs locally from source (`npx tsx cli/src/index.ts`). No deploy needed — 
 
 ```bash
 curl -s https://trunk.bot/              # relay health
-curl -s https://push.trunk.bot/ # worker health
 ```

@@ -1,11 +1,11 @@
-export type McpSurface = "server" | "cli" | "worker";
+export type McpSurface = "server" | "cli";
 
 export type McpToolContract = {
   name: string;
   surfaces: readonly McpSurface[];
 };
 
-const ALL_SURFACES = ["server", "cli", "worker"] as const;
+const ALL_SURFACES = ["server", "cli"] as const;
 const CLI_ONLY = ["cli"] as const;
 
 export const MCP_TOOL_CONTRACTS = [

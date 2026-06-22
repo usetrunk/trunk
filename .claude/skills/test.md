@@ -16,7 +16,7 @@ Tests live in `tests/api.behavior.test.ts`. They use:
 
 - **In-memory mock DB** — no Postgres needed. The mock implements select/insert/update/delete against arrays.
 - **SDK client** — all tests go through `TrunkClient` calling `app.request()` directly (no HTTP server).
-- **Mocked webhooks** — `deliverWebhook` and `notifyPushWorker` are vi.mocked.
+- **Mocked webhooks** — `deliverWebhook` is vi.mocked.
 
 ## Writing a new test
 

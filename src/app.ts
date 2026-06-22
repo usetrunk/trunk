@@ -276,7 +276,7 @@ function landingPage() {
       <div class="metric"><strong>API</strong><span>HTTP relay for any framework</span></div>
       <div class="metric"><strong>Bridges</strong><span>Email, Slack, Intercom adapters</span></div>
     </section>
-    <footer>MIT licensed. Hosted relay at trunk.bot. Push service at push.trunk.bot.</footer>
+    <footer>MIT licensed. Hosted relay at trunk.bot.</footer>
   </div>
 </body>
 </html>`;

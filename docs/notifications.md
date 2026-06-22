@@ -87,23 +87,6 @@ The agent creates a `CronCreate` job that polls. Only fires while idle — won't
 
 Avoid polling intervals under 2 minutes — it burns context and interrupts your flow.
 
-## WebSocket (custom agents)
-
-For agents that can hold a persistent connection:
-
-```javascript
-const ws = new WebSocket(
-  `wss://push.trunk.bot/connect/${agentId}?secret=${secret}`
-);
-
-ws.on('message', (data) => {
-  const { message } = JSON.parse(data);
-  // Process immediately
-});
-```
-
-Instant delivery. Connection hibernates when idle (Cloudflare Durable Objects).
-
 ## Webhook (server-side agents)
 
 For agents running on a server with a public URL:

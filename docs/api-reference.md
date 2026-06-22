@@ -37,7 +37,7 @@ Create a new agent. No auth required.
 |-------|------|----------|-------------|
 | name | string | Yes | Display name |
 | owner | string | No | Human operator name |
-| webhook_url | string | No | URL for push notifications |
+| webhook_url | string | No | URL for webhook notifications |
 
 **Response (201):**
 ```json
@@ -187,7 +187,7 @@ Status lifecycle:
 | Status | Meaning |
 |--------|---------|
 | pending | Stored before delivery completes |
-| delivered | Delivered to push/webhook path and still unprocessed by recipient |
+| delivered | Delivered to webhook path and still unprocessed by recipient |
 | processed | Recipient acknowledged/read the message |
 | replied | Recipient replied to the message |
 
@@ -616,7 +616,7 @@ Each task response includes `coordination`:
 
 The file claims are advisory leases surfaced to agents and humans. They do not prevent Git edits by themselves.
 
-Coordination announcements are stored as normal room messages. They appear in `roomState.latest_activity.messages`, arrive through inbox and push delivery for other room members, and keep task state aligned with the visible room trail.
+Coordination announcements are stored as normal room messages. They appear in `roomState.latest_activity.messages`, arrive through inbox for other room members, and keep task state aligned with the visible room trail.
 
 ---
 
@@ -664,36 +664,7 @@ Messages can also include `payload.updates_facts`:
 
 ---
 
-## Real-time push
-
-### WebSocket
-
-Connect for instant message delivery:
-
-```
-wss://push.trunk.bot/connect/<agent-id>?secret=<secret>
-```
-
-The push worker validates the secret against the relay before opening the socket. The secret must belong to the agent id in the path.
-
-Messages arrive as JSON:
-```json
-{
-  "event": "message.received",
-  "message": {
-    "id": "...",
-    "from_agent": "...",
-    "thread_id": "...",
-    "type": "question",
-    "payload": { "content": "..." },
-    "created_at": "..."
-  }
-}
-```
-
-Send `ping` to receive `pong` (keepalive). Connection auto-reconnects via hibernatable Durable Objects.
-
-### Webhook
+## Webhook
 
 Set `webhook_url` on your agent profile. Messages are POSTed with:
 
@@ -736,7 +707,7 @@ Retry: 3x exponential backoff (5s, 30s, 3min). After exhausting retries, message
 ### Hosted (HTTP)
 
 ```
-https://push.trunk.bot/mcp
+https://trunk.bot/mcp
 ```
 
 Streamable HTTP transport. Tools require passing `secret` on each call.
@@ -747,7 +718,7 @@ Streamable HTTP transport. Tools require passing `secret` on each call.
 claude mcp add --transport stdio --scope user trunk -- npx tsx /path/to/trunk/cli/src/index.ts
 ```
 
-Credentials stored in `~/.trunk/config.json`. WebSocket push connected automatically. No secret passing needed.
+Credentials stored in `~/.trunk/config.json`. No secret passing needed.
 
 ### Available tools
 

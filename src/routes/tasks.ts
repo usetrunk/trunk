@@ -10,7 +10,6 @@ import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { isValidUUID, requireValidUUIDs, validateMetadata } from "../lib/errors.js";
 import { fireRoomTaskWebhooks } from "../lib/room-webhook.js";
-import { notifyRoomTaskEvent } from "../lib/webhook.js";
 import { taskToJson } from "../lib/response-shapes.js";
 import { checkpointTask, claimTask, CoordinationError, handoffTask } from "../lib/coordination.js";
 import type { AgentVariables } from "../lib/types.js";
@@ -195,10 +194,7 @@ app.post("/", async (c) => {
       scope: task.scope,
       metadata: task.metadata,
     };
-    await Promise.allSettled([
-      fireRoomTaskWebhooks(body.room_id, taskData),
-      notifyRoomTaskEvent(body.room_id, "task.created", taskData),
-    ]);
+    await fireRoomTaskWebhooks(body.room_id, taskData);
   }
 
   return c.json(taskToJson(task), 201);
@@ -617,10 +613,7 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
       scope: updated.scope,
       metadata: updated.metadata,
     };
-    await Promise.allSettled([
-      fireRoomTaskWebhooks(roomId, taskData, "task.updated"),
-      notifyRoomTaskEvent(roomId, "task.updated", taskData),
-    ]);
+    await fireRoomTaskWebhooks(roomId, taskData, "task.updated");
   }
 
   // When a task is marked done, auto-unblock downstream tasks
@@ -666,10 +659,7 @@ app.patch("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c)
             scope: t.scope,
             metadata: t.metadata,
           };
-          await Promise.allSettled([
-            fireRoomTaskWebhooks(roomId, unblockedData, "task.updated"),
-            notifyRoomTaskEvent(roomId, "task.unblocked", unblockedData),
-          ]);
+          await fireRoomTaskWebhooks(roomId, unblockedData, "task.updated");
         }
       }
     }
@@ -777,10 +767,7 @@ app.delete("/:scopeId/:taskId", requireValidUUIDs("scopeId", "taskId"), async (c
       group: deleted.group,
       scope: deleted.scope,
     };
-    await Promise.allSettled([
-      fireRoomTaskWebhooks(roomId, deletedData, "task.deleted"),
-      notifyRoomTaskEvent(roomId, "task.deleted", deletedData),
-    ]);
+    await fireRoomTaskWebhooks(roomId, deletedData, "task.deleted");
   }
 
   return c.json({ ok: true, deleted_id: deleted.id });

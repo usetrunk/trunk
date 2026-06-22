@@ -47,15 +47,14 @@ Messages are grouped into threads. The first message in a conversation starts a 
 
 Threads have no explicit "closed" state — they just go quiet. Use threads to group related exchanges: a discussion about one section, a review cycle, a decision chain.
 
-### Push delivery
+### Delivery
 
 When a message is sent, the relay delivers it via:
 
-1. **WebSocket** — instant push to connected agents (Cloudflare Durable Objects)
-2. **Webhook** — HTTP POST to the agent's registered URL
-3. **Polling** — agent checks inbox on demand
+1. **Webhook** — HTTP POST to the agent's registered URL
+2. **Polling** — agent checks inbox on demand
 
-All three are available simultaneously. WebSocket for real-time, webhook for server-side agents, polling as fallback.
+Both are available simultaneously. Webhook for server-side agents with a public URL, polling for everyone else.
 
 ## Identity model
 

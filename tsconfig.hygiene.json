@@ -14,8 +14,6 @@
     "node_modules",
     "dist",
     "cli/dist",
-    "worker/dist",
-    "tests",
-    "worker/tests"
+    "tests"
   ]
 }

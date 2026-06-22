@@ -11,9 +11,8 @@ When adding a new endpoint:
 3. **Auth** — use `authMiddleware` unless the endpoint is public (like register)
 4. **SDK** — add typed method to `src/sdk/index.ts`
 5. **Tests** — add behavior tests in `tests/api.behavior.test.ts` using the SDK client
-6. **MCP tools** — add to ALL THREE locations:
+6. **MCP tools** — add to BOTH locations:
    - `cli/src/index.ts` (stdio, no secret param — reads from config)
-   - `worker/src/mcp.ts` (HTTP, requires secret param)
    - `src/mcp/server.ts` (Vercel, requires secret param — may be removed later)
-7. **Deploy** — `vercel --prod` for relay, `cd worker && npx wrangler deploy` for push+MCP
+7. **Deploy** — `vercel --prod` for relay
 8. **Docs** — update `docs/api-reference.md`
