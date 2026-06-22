@@ -55,7 +55,7 @@ if (command === "daemon") {
   }
 } else if (command === "harness") {
   if (subcommand === "daemon") {
-    // Push-based daemon mode — agents spawn on demand from WebSocket events
+    // Poll-based harness daemon — agents spawn on a timer to check the room
     process.argv = ["node", "harness-daemon", ...args.slice(2)];
     await import("./daemon/harness-daemon.js");
   } else {

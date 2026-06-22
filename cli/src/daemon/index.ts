@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import WebSocket from "ws";
-import type { RawData } from "ws";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -9,8 +7,8 @@ import { executeWithClaude, formatExecutionReply } from "./executor.js";
 import { classifyCommand, loadPolicy } from "./policy.js";
 
 const CONFIG_FILE = join(homedir(), ".trunk", "config.json");
-const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://push.trunk.bot";
 const RELAY_URL = process.env.TRUNK_RELAY_URL || "https://trunk.bot";
+const POLL_INTERVAL = (Number(process.env.TRUNK_POLL_INTERVAL) || 30) * 1000;
 const EXECUTE_MODE = process.argv.includes("--execute");
 
 type Config = {
@@ -29,22 +27,32 @@ function loadConfig(): Config | null {
   }
 }
 
-function connect(config: Config) {
-  const url = `${PUSH_URL}/connect/${config.agent_id}?secret=${config.secret}`;
-  const ws = new WebSocket(url);
+const seen = new Set<string>();
+let firstPoll = true;
 
-  ws.on("open", () => {
-    console.log(`[trunk-daemon] connected as ${config.name} (${config.agent_id})`);
-    console.log(`[trunk-daemon] listening for messages...`);
-  });
+async function poll(config: Config) {
+  try {
+    const res = await fetch(`${RELAY_URL}/messages/inbox`, {
+      headers: { Authorization: `Bearer ${config.secret}` },
+    });
+    if (!res.ok) {
+      console.error(`[trunk-daemon] inbox poll failed: ${res.status}`);
+      return;
+    }
+    const body = await res.json();
+    const messages: any[] = body.messages || [];
 
-  ws.on("message", async (data: RawData) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      const messageId = msg.message?.id;
-      const content = msg.message?.payload?.content || "(no content)";
-      const type = msg.message?.type || "message";
-      const fromAgent = msg.message?.from_agent || "unknown";
+    for (const msg of messages) {
+      const messageId = msg.id;
+      if (!messageId || seen.has(messageId)) continue;
+      seen.add(messageId);
+
+      // On the first poll, mark the backlog as seen without notifying.
+      if (firstPoll) continue;
+
+      const content = msg.payload?.content || "(no content)";
+      const type = msg.type || "message";
+      const fromAgent = msg.from_agent || "unknown";
 
       // OS notification
       sendNotification(
@@ -57,19 +65,12 @@ function connect(config: Config) {
       if (EXECUTE_MODE) {
         await handleExecutableMessage(config, messageId, type, content);
       }
-    } catch (e) {
-      console.error("[trunk-daemon] failed to parse message:", e);
     }
-  });
 
-  ws.on("close", () => {
-    console.log("[trunk-daemon] disconnected, reconnecting in 5s...");
-    setTimeout(() => connect(config), 5000);
-  });
-
-  ws.on("error", (err: Error) => {
-    console.error("[trunk-daemon] websocket error:", err.message);
-  });
+    firstPoll = false;
+  } catch (e) {
+    console.error("[trunk-daemon] failed to poll inbox:", e);
+  }
 }
 
 async function handleExecutableMessage(config: Config, messageId: string | undefined, type: string, content: string) {
@@ -121,7 +122,9 @@ if (!config) {
 }
 
 console.log(`[trunk-daemon] Trunk daemon starting in ${EXECUTE_MODE ? "execute" : "notify"} mode...`);
-connect(config);
+console.log(`[trunk-daemon] polling inbox every ${POLL_INTERVAL / 1000}s as ${config.name} (${config.agent_id})`);
+poll(config);
+setInterval(() => poll(config), POLL_INTERVAL);
 
 // Keep alive
 process.on("SIGINT", () => {

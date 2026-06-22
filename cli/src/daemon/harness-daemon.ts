@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 /**
- * Push-based agent harness daemon.
+ * Poll-based agent harness daemon.
  *
- * Connects to Trunk WebSocket for each agent profile, listens for task events,
- * and spawns the appropriate agent in a zellij tab on demand. No polling.
- * Agents only run when there's actual work.
+ * Spawns each configured agent in a zellij tab on a timer. Every agent is
+ * woken on startup and then re-checked on its poll interval; an agent that is
+ * still running is skipped until it finishes. Agents inspect the room for
+ * tasks that need attention and act on them.
  *
  * Usage:
  *   trunk harness daemon [--config ~/.trunk/agents.json]
  */
 
-import WebSocket from "ws";
-import type { RawData } from "ws";
 import { spawn, execSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -20,7 +19,6 @@ import { homedir } from "node:os";
 const STATE_DIR = join(homedir(), ".trunk");
 const SESSION_NAME = "trunk-harness";
 
-const PUSH_URL = process.env.TRUNK_PUSH_URL || "wss://push.trunk.bot";
 type AgentConfig = {
   name: string;
   profile: string;
@@ -34,7 +32,6 @@ type AgentConfig = {
   gooseProvider?: string;
   gooseModel?: string;
   maxTurns?: number;
-  poll?: boolean;           // run on a timer instead of event-driven
   pollInterval?: number;    // seconds between polls (default: 120)
 };
 
@@ -42,85 +39,6 @@ type HarnessConfig = {
   workspace?: string;
   agents: AgentConfig[];
 };
-
-type ProfileConfig = {
-  agent_id: string;
-  secret: string;
-  name: string;
-};
-
-// --- Role routing ---
-
-type TaskEvent = {
-  event: string;
-  room_id: string;
-  task: {
-    id: string;
-    title: string;
-    description?: string;
-    status: string;
-    priority: string;
-    owner?: string;
-    created_by: string;
-    group?: string;
-  };
-};
-
-/**
- * Map a task event to which agent role should handle it.
- * Returns the profile name of the agent to wake, or null if no action needed.
- */
-function routeEvent(event: TaskEvent, agents: AgentConfig[]): AgentConfig | null {
-  const task = event.task;
-  const eventType = event.event;
-
-  // Find agents by role pattern in their name
-  const findAgent = (pattern: RegExp) => agents.find(a => pattern.test(a.name.toLowerCase()));
-
-  const builder = findAgent(/build/);
-  const planner = findAgent(/plan/);
-  const qa = findAgent(/qa|test/);
-  const docs = findAgent(/doc/);
-
-  switch (eventType) {
-    case "task.created":
-      // New task — wake the planner to triage, or builder if it's assigned
-      if (task.owner) {
-        // Task is assigned — find the agent whose profile matches the owner
-        const assigned = agents.find(a => {
-          const configPath = join(STATE_DIR, `config.${a.profile}.json`);
-          try {
-            const config = JSON.parse(readFileSync(configPath, "utf-8"));
-            return config.agent_id === task.owner;
-          } catch { return false; }
-        });
-        return assigned || builder || null;
-      }
-      if (task.group === "bugs") return builder || qa || null;
-      if (task.group === "tests") return qa || builder || null;
-      if (task.group === "docs") return docs || null;
-      if (task.group === "security") return builder || null;
-      if (task.group === "human") return null; // Human escalation — don't wake an agent
-      return builder || planner || null;
-
-    case "task.updated":
-      // Task status changed — route based on new status
-      if (task.status === "done") return docs || null; // Docs should check if guide needed
-      if (task.status === "open") return builder || null; // Newly open = ready for work
-      if (task.status === "blocked") return planner || null; // Planner should re-triage
-      return null;
-
-    case "task.unblocked":
-      // Dependency resolved — wake builder to claim it
-      return builder || null;
-
-    case "task.deleted":
-      return null; // No action needed
-
-    default:
-      return null;
-  }
-}
 
 // --- Agent spawning ---
 
@@ -224,7 +142,7 @@ ${runCommand}
 
 echo ""
 echo "[daemon] ${config.name} finished at $(date)"
-echo "[daemon] Waiting for next event..."
+echo "[daemon] Waiting for next poll..."
 `;
 
   writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
@@ -301,79 +219,9 @@ echo "[daemon] Waiting for next event..."
     } catch {
       activeAgents.set(config.profile, false);
       clearInterval(checkInterval);
-      console.log(`[daemon] ${config.name} finished, ready for next event`);
+      console.log(`[daemon] ${config.name} finished, ready for next poll`);
     }
   }, 5000);
-}
-
-// --- WebSocket connections ---
-
-function loadProfileConfig(profile: string): ProfileConfig | null {
-  const configPath = join(STATE_DIR, `config.${profile}.json`);
-  try {
-    if (!existsSync(configPath)) return null;
-    return JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-function connectAgent(agentConfig: AgentConfig, allAgents: AgentConfig[]) {
-  const profileConfig = loadProfileConfig(agentConfig.profile);
-  if (!profileConfig) {
-    console.error(`[daemon] no config for profile "${agentConfig.profile}" — agent needs to register first`);
-    return;
-  }
-  const activeProfile = profileConfig;
-
-  const url = `${PUSH_URL}/connect/${activeProfile.agent_id}?secret=${activeProfile.secret}`;
-  let ws: WebSocket;
-
-  function connect() {
-    ws = new WebSocket(url);
-
-    ws.on("open", () => {
-      console.log(`[daemon] ${agentConfig.name} connected to push (${activeProfile.agent_id.slice(0, 8)}...)`);
-    });
-
-    ws.on("message", (data: RawData) => {
-      try {
-        const msg = JSON.parse(data.toString());
-
-        // Handle task events
-        if (msg.event?.startsWith("task.")) {
-          const taskEvent = msg as TaskEvent;
-          console.log(`[daemon] ${msg.event}: "${taskEvent.task?.title}" (${taskEvent.task?.status})`);
-
-          const target = routeEvent(taskEvent, allAgents);
-          if (target) {
-            const context = `Event: ${msg.event}\nTask: ${taskEvent.task.title}\nStatus: ${taskEvent.task.status}\nGroup: ${taskEvent.task.group || "none"}\nPriority: ${taskEvent.task.priority}\nRoom: ${taskEvent.room_id}`;
-            spawnAgent(target, context);
-          }
-        }
-
-        // Handle message events (existing behavior)
-        if (msg.event === "message.received") {
-          const content = msg.message?.payload?.content || "(no content)";
-          const type = msg.message?.type || "message";
-          console.log(`[daemon] message.${type}: ${content.slice(0, 80)}`);
-        }
-      } catch (e) {
-        console.error(`[daemon] failed to parse event:`, e);
-      }
-    });
-
-    ws.on("close", () => {
-      console.log(`[daemon] ${agentConfig.name} disconnected, reconnecting in 5s...`);
-      setTimeout(connect, 5000);
-    });
-
-    ws.on("error", (err: Error) => {
-      console.error(`[daemon] ${agentConfig.name} ws error: ${err.message}`);
-    });
-  }
-
-  connect();
 }
 
 // --- Main ---
@@ -390,33 +238,13 @@ if (!existsSync(configPath)) {
 
 const config: HarnessConfig = JSON.parse(readFileSync(configPath, "utf-8"));
 
-console.log(`[daemon] Push-based harness daemon starting`);
+console.log(`[daemon] Poll-based harness daemon starting`);
 console.log(`[daemon] ${config.agents.length} agents configured`);
-console.log(`[daemon] Connecting WebSockets...`);
 console.log(``);
 
-// Connect a WebSocket for each agent that has a profile config
-// We only need one connection per unique profile to receive room events
-const connectedProfiles = new Set<string>();
-
+// Poll every agent: wake it on startup, then on its interval. An agent that is
+// still running is skipped until it finishes.
 for (const agent of config.agents) {
-  if (connectedProfiles.has(agent.profile)) continue;
-
-  const profileConfig = loadProfileConfig(agent.profile);
-  if (!profileConfig) {
-    console.log(`[daemon] skipping ${agent.name} — no profile config (needs registration)`);
-    continue;
-  }
-
-  connectAgent(agent, config.agents);
-  connectedProfiles.add(agent.profile);
-}
-
-console.log(`[daemon] ${connectedProfiles.size} WebSocket connections established`);
-
-// Start polling loops for agents with poll: true
-const pollingAgents = config.agents.filter(a => a.poll);
-for (const agent of pollingAgents) {
   const interval = (agent.pollInterval ?? 120) * 1000;
   console.log(`[daemon] ${agent.name} will poll every ${agent.pollInterval ?? 120}s`);
 
@@ -433,9 +261,7 @@ for (const agent of pollingAgents) {
   }, interval);
 }
 
-const eventAgents = config.agents.filter(a => !a.poll);
-console.log(`[daemon] ${eventAgents.length} event-driven, ${pollingAgents.length} polling`);
-console.log(`[daemon] Listening for task events... (Ctrl+C to stop)`);
+console.log(`[daemon] Polling ${config.agents.length} agents... (Ctrl+C to stop)`);
 console.log(`[daemon] Agents will spawn in zellij session "${SESSION_NAME}" on demand`);
 console.log(``);
 
