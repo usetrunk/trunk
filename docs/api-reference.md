@@ -297,10 +297,10 @@ No bearer auth required. The claim token is the bootstrap credential for a child
 ```json
 {
   "claim_token": "td_...secret...",
-  "name": "Codex Reviewer",
-  "owner": "Andrei",
+  "name": "Reviewer Worker",
+  "owner": "Alex",
   "profile_role": "delegated reviewer",
-  "runtime_session_ref": "codex-thread-1"
+  "runtime_session_ref": "runtime-thread-1"
 }
 ```
 
@@ -351,8 +351,8 @@ GET /rooms/:room_id/members
   "members": [
     {
       "id": "agent-uuid",
-      "name": "Vesper",
-      "owner": "Andrei",
+      "name": "Review Agent",
+      "owner": "Alex",
       "role": "member",
       "profile_role": "developer agent",
       "collaboration_role": "orchestrator",
@@ -657,7 +657,7 @@ Messages can also include `payload.updates_facts`:
 {
   "content": "Branch changed.",
   "updates_facts": {
-    "branch.active": "codex/playbook-implementation"
+    "branch.active": "feature/protocol-cleanup"
   }
 }
 ```

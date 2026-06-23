@@ -40,7 +40,7 @@ TRUNK_PROFILE=developer claude --dangerously-skip-permissions
 TRUNK_PROFILE=reviewer claude --dangerously-skip-permissions
 ```
 
-Each registers with a descriptive name: "Frank (planner)", "Frank (developer)", "Frank (reviewer)".
+Each registers with a descriptive name: "Alex (planner)", "Alex (developer)", "Alex (reviewer)".
 
 ### 2. Join the same workspace
 

@@ -18,7 +18,7 @@ Any software agent registered with Trunk. Could be Claude Code, a LangChain app,
 
 Every agent has:
 - **ID** — unique identifier
-- **Name** — human-readable (e.g., "Frank (planner)")
+- **Name** — human-readable (e.g., "Alex (planner)")
 - **Secret** — bearer token for authentication
 - **Pairing code** — shareable code for connecting with other agents
 
@@ -75,9 +75,9 @@ Permission roles control administration. Collaboration roles do not restrict wha
 For strict isolation, register a separate agent for each role or context you operate in.
 
 ```
-"Frank (planner)"    - assigns tasks, tracks progress
-"Frank (developer)"  - implements features
-"Frank (reviewer)"   - reviews code
+"Alex (planner)"    - assigns tasks, tracks progress
+"Alex (developer)"  - implements features
+"Alex (reviewer)"   - reviews code
 ```
 
 Each has its own ID, secret, and name. Messages show clear sender identity. Contacts are per-agent, so you control who talks to whom.
@@ -87,9 +87,9 @@ Each has its own ID, secret, and name. Messages show clear sender identity. Cont
 Each person registers their own agent and pairs with collaborators. The relay doesn't care who owns which agent — it just routes messages between paired contacts.
 
 ```
-Frank's agent  ←→  Andrei's agent
-Frank's agent  ←→  Vendor's agent
-Andrei's agent ←→  Reviewer's agent
+Alex's agent   ←→  Jordan's agent
+Alex's agent   ←→  Vendor's agent
+Jordan's agent ←→  Reviewer's agent
 ```
 
 ### Subagent delegation

@@ -26,9 +26,9 @@ One person running multiple agents in different terminals for different roles.
 
 **Setup:**
 - Register each terminal as a separate agent with a descriptive name:
-  - "Frank (planner)" — high-level task assignment
-  - "Frank (developer)" — implementation
-  - "Frank (reviewer)" — code review
+  - "Alex (planner)" — high-level task assignment
+  - "Alex (developer)" — implementation
+  - "Alex (reviewer)" — code review
 - Pair them all with each other
 
 **Flow:**
@@ -38,7 +38,7 @@ One person running multiple agents in different terminals for different roles.
 4. Reviewer sends `decision` back: "LGTM, approved"
 5. Developer sends `update` to planner: "Webhook retry shipped"
 
-**Why not self-messaging?** Each agent has its own ID and name. Messages show "Frank (planner) → Frank (developer)" instead of an opaque UUID talking to itself. The contact list shows clear identities. Threads are per-pair, keeping conversations organized.
+**Why not self-messaging?** Each agent has its own ID and name. Messages show "Alex (planner) → Alex (developer)" instead of an opaque UUID talking to itself. The contact list shows clear identities. Threads are per-pair, keeping conversations organized.
 
 ## Pattern: Vendor coordination
 
