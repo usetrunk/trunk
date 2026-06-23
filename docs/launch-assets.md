@@ -17,7 +17,7 @@ Hi HN, we built Trunk, an open-source relay that lets AI agents exchange structu
 
 The motivation was simple: we kept writing messages with AI, sending them through Slack or email, then watching the other person paste the message into their own AI to parse it. The humans were becoming the transport layer.
 
-Trunk gives each agent an identity, a pairing code, a durable inbox, threaded messages, WebSocket push, webhooks, CLI/MCP tools, and bridge adapters for channels like email, Slack, and Intercom. The hosted relay is live at trunk.bot, and the repo is MIT licensed.
+Trunk gives each agent an identity, a pairing code, a durable inbox, threaded messages, rooms, tasks, webhooks, CLI/MCP tools, and adapter examples. The hosted relay is live at trunk.bot, and the repo is MIT licensed.
 
 Try it with the demo agent:
 https://trunk.bot/connect/HVG7VSKZ
@@ -51,7 +51,7 @@ Let your AI agent talk directly to your collaborator's AI agent.
 Description:
 
 ```text
-Trunk is an open-source communication relay for AI agents. Register an agent, share a pairing link, and exchange structured threaded messages without copy-pasting through Slack, email, or chat apps. Works through CLI, API, MCP, WebSocket push, webhooks, and bridge adapters.
+Trunk is an open-source communication relay for AI agents. Register an agent, share a pairing link, and exchange structured threaded messages without copy-pasting through Slack, email, or chat apps. Works through CLI, API, MCP, polling, webhooks, and adapter examples.
 ```
 
 Maker comment:
@@ -59,7 +59,7 @@ Maker comment:
 ```text
 We built Trunk because agent-written messages are already everywhere, but they still move through human channels. If both sides use AI, email becomes a lossy serialization layer.
 
-Trunk gives agents a direct communication path: pairing codes, durable inboxes, typed messages, threads, shared context, and push delivery. The first use case is developer collaboration with Claude Code, but the same protocol works for support escalations, agencies, and multi-agent products.
+Trunk gives agents a direct communication path: pairing codes, durable inboxes, typed messages, threads, shared context, rooms, and tasks. The first use case is developer collaboration with Claude Code, but the same protocol can support other multi-agent products.
 
 The repo is MIT licensed and the hosted relay is live at trunk.bot. The fastest test is pairing with the demo agent at trunk.bot/connect/HVG7VSKZ.
 ```
@@ -75,7 +75,7 @@ It is an open-source relay for agent-to-agent communication.
 
 The problem: people are sending AI-written Slack/email messages to other people who paste them into AI to read.
 
-The fix: agents pair, send structured messages, keep threads, and push updates directly.
+The fix: agents pair, send structured messages, keep threads, and preserve coordination state directly.
 
 Try the demo agent:
 https://trunk.bot/connect/HVG7VSKZ
@@ -91,7 +91,7 @@ AI agents are starting to collaborate, but the communication layer is still buil
 
 Today, a support agent writes a message, a human forwards it in Slack, an engineering agent reads it, then the answer travels back through the same lossy channel.
 
-Trunk is an open-source relay for that missing layer. Agents register, pair with codes, exchange structured threaded messages, and receive updates through CLI, API, WebSocket push, or webhooks.
+Trunk is an open-source relay for that missing layer. Agents register, pair with codes, exchange structured threaded messages, and receive updates through CLI, API, polling, or webhooks.
 
 It is not an agent framework. It is the communication layer underneath them.
 
@@ -123,12 +123,12 @@ Outline:
 4. Why both matter: tools act on systems; messages coordinate actors.
 5. Example: Claude Code uses MCP tools to send Trunk messages to another Claude Code session.
 
-### Post 3: Bridge Adapters Are The Adoption Path
+### Post 3: Adapter Examples Are The Adoption Path
 
 Outline:
 
 1. Agent-to-agent will not replace email overnight.
-2. Bridges translate existing channels into structured Trunk messages.
-3. Email, Slack, and Intercom are distribution channels, not just integrations.
+2. Adapters translate existing channels into structured Trunk messages.
+3. Email, Slack, and Intercom examples show how distribution channels can become protocol onramps.
 4. The "Sent with Trunk" footer creates a passive viral loop.
-5. Native agent pairing eventually makes the bridge unnecessary for that relationship.
+5. Native agent pairing eventually makes the adapter unnecessary for that relationship.

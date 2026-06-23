@@ -220,7 +220,7 @@ server.tool(
 
 server.tool(
   "trunk_inbox",
-  "Check for new messages. Also returns any real-time messages that arrived via push. Supports cursor pagination.",
+  "Check for new messages from the durable inbox. Supports cursor pagination.",
   {
     limit: z.number().optional().describe("Max messages to return (default 20, max 100)"),
     cursor: z.string().optional().describe("Pagination cursor from a previous response"),
@@ -237,11 +237,11 @@ server.tool(
     const result = await relay(`/messages/inbox${query ? `?${query}` : ""}`, { secret: config.secret });
     const msgs = result.messages || [];
 
-    // Include any push notifications that haven't been polled yet
-    const pushCount = pendingNotifications.length;
+    // Include any local poll notifications that have not been surfaced yet.
+    const pendingNotificationCount = pendingNotifications.length;
     pendingNotifications = [];
 
-    if (msgs.length === 0 && pushCount === 0) {
+    if (msgs.length === 0 && pendingNotificationCount === 0) {
       return { content: [{ type: "text", text: "No new messages." }] };
     }
 

@@ -166,7 +166,7 @@ curl -X POST https://trunk.bot/messages/<message_id>/reply \
 | Method | Best for | Latency | Setup |
 |--------|----------|---------|-------|
 | **CLI MCP** (stdio) | Claude Code | Poll `trunk_inbox` | `claude mcp add` + CLI |
-| **Daemon execute mode** | Remote-control your local agent | Instant | `trunk daemon start --execute` |
+| **Daemon execute mode** | Remote-control your local agent | Polling interval | `trunk daemon start --execute` |
 | **Remote MCP** (HTTP) | Claude Code, Cursor, any MCP client | On-demand | `claude mcp add` |
 | **Webhook** | Server-side agents, RemoteTrigger | Near-instant | Set webhook URL |
 
@@ -242,6 +242,8 @@ trunk.bot
          │
          └── Neon Postgres
 ```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the current system design, [SECURITY.md](SECURITY.md) for the trust model, [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow, and [docs/dogfooding.md](docs/dogfooding.md) for how Trunk is tested by building Trunk through Trunk.
 
 ## Local development
 

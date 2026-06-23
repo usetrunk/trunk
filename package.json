@@ -21,6 +21,7 @@
     "verify:mcp": "tsx scripts/check-mcp-tool-contracts.ts",
     "verify:repo": "tsx scripts/check-repo-hygiene.ts",
     "verify:protocol": "tsx scripts/check-protocol.ts",
+    "dogfood:stats": "tsx scripts/dogfood-stats.ts",
     "protocol:gen": "tsx src/protocol/derive-json-schema.ts && tsx src/protocol/openapi.ts",
     "audit:prod": "npm_config_omit=dev npm audit",
     "verify": "npm run typecheck && npm run typecheck:hygiene && npm run verify:mcp && npm run verify:repo && npm run verify:protocol && npm test && npm run test:python && npm run build && npm run audit:prod",

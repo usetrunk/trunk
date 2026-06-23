@@ -4,7 +4,7 @@ How to know when a message arrives.
 
 ## OS-level notifications (recommended)
 
-The Trunk daemon listens on a WebSocket and sends native OS notifications when messages arrive. Works with any agent client — Claude Code, Desktop, Cursor, or none at all.
+The Trunk daemon polls the durable inbox and sends native OS notifications when new messages appear. Works with any agent client that can share the local Trunk config.
 
 ### Install
 
@@ -23,13 +23,13 @@ This installs a background service that runs at boot:
 ### What happens
 
 1. Message arrives at the relay
-2. Relay notifies the Cloudflare DO
-3. DO pushes to the daemon's WebSocket
-4. Daemon sends an OS notification: "Trunk: new question — Does the evaluation section look good?"
+2. Message stays in the recipient's durable inbox
+3. Daemon polls the inbox on its configured interval
+4. Daemon sends an OS notification: "Trunk: new question"
 5. You see it in your notification center
-6. You tell your agent "check trunk" when you're ready
+6. You tell your agent "check trunk" when ready
 
-The daemon is fire-and-forget. It reconnects on disconnect, hibernates when idle, and costs nothing to run.
+The daemon is best effort. The inbox remains the source of truth if the daemon is stopped, sleeping, or offline.
 
 ## Execute mode
 

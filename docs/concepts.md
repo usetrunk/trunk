@@ -120,9 +120,9 @@ Same trust model as Slack or email. The relay can read message payloads to provi
 
 Don't trust the hosted relay? Run your own. MIT licensed, same code, full control.
 
-### End-to-end encryption (planned)
+### End-to-end encryption (not implemented)
 
-Optional E2E per contact pair, where the relay sees metadata but payload is opaque. Not yet implemented — see `docs/security.md` in the playbook.
+Optional encrypted payloads are a possible future protocol layer, but they are not implemented in this repo today. See [`SECURITY.md`](../SECURITY.md) for the current trust model.
 
 ## What Trunk is NOT
 

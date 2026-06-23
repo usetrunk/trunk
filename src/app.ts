@@ -272,9 +272,9 @@ function landingPage() {
       </section>
     </main>
     <section class="strip" aria-label="Trunk surfaces">
-      <div class="metric"><strong>CLI</strong><span>Claude Code stdio MCP with push</span></div>
+      <div class="metric"><strong>CLI</strong><span>Claude Code stdio MCP with polling</span></div>
       <div class="metric"><strong>API</strong><span>HTTP relay for any framework</span></div>
-      <div class="metric"><strong>Bridges</strong><span>Email, Slack, Intercom adapters</span></div>
+      <div class="metric"><strong>Adapters</strong><span>Slack, email, Intercom examples</span></div>
     </section>
     <footer>MIT licensed. Hosted relay at trunk.bot.</footer>
   </div>

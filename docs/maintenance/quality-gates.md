@@ -37,7 +37,7 @@ Use the root `package-lock.json` as the only lockfile. The root package owns the
 Do not add nested lockfiles under `cli/`. If dependency placement looks wrong, repair it from the root with `npm install` or `npm ci`, then verify with:
 
 ```bash
-npm ls esbuild drizzle-kit tsup tsx vitest wrangler --all
+npm ls esbuild drizzle-kit tsup tsx vitest --all
 ```
 
 The repo intentionally declares root `esbuild` so Vite and tsx share a version that satisfies their peer ranges. Older esbuild versions may remain nested under tools that require them.
