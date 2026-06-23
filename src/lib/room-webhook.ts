@@ -24,6 +24,26 @@ type TaskEvent =
   | "task.blocked"
   | "task.handed_off";
 
+// Slack incoming webhooks require a { text } body, not the Trunk payload shape.
+export function isSlackWebhook(url: string): boolean {
+  try {
+    return new URL(url).hostname === "hooks.slack.com";
+  } catch {
+    return false;
+  }
+}
+
+export function formatSlackText(event: TaskEvent, task: TaskData): string {
+  const emoji = task.priority === "critical" ? "🚨" : task.group === "human" ? "🙋" : "📋";
+  const tag = task.group ? `[${task.group}] ` : "";
+  const lines = [`${emoji} *${task.priority}* ${tag}${task.title}`];
+  if (task.description) {
+    lines.push(task.description.length > 300 ? task.description.slice(0, 300) + "…" : task.description);
+  }
+  lines.push(`_${event} · status: ${task.status}_`);
+  return lines.join("\n");
+}
+
 /**
  * Fire room webhooks that match a task event's criteria.
  * Best-effort — failures are logged but don't block task operations.
@@ -53,7 +73,9 @@ export async function fireRoomTaskWebhooks(roomId: string, task: TaskData, event
 
   await Promise.allSettled(
     matching.map(async (w) => {
-      const body = JSON.stringify(payload);
+      const body = isSlackWebhook(w.url)
+        ? JSON.stringify({ text: formatSlackText(event, task) })
+        : JSON.stringify(payload);
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         "X-Trunk-Event": event,
