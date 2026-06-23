@@ -1,0 +1,29 @@
+name: Migrate
+
+# Applies pending Drizzle migrations to the production database on every merge
+# to main, and on manual dispatch. Decoupled from the Vercel build so the prod
+# DATABASE_URL stays a GitHub secret and preview deploys never touch prod.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two migrations at once; never cancel one mid-flight.
+concurrency:
+  group: migrate-prod
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
