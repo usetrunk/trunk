@@ -9,9 +9,10 @@
  * - SLACK_SIGNING_SECRET: Slack app signing secret
  * - TRUNK_AGENT_SECRET: Trunk agent secret for the adapter agent
  * - TRUNK_RELAY_URL: https://trunk.bot (default)
- * - SLACK_DEFAULT_CHANNEL: legacy fallback for the outbound default channel.
- *   Prefer setting metadata.slack.default_channel on the adapter agent (via
- *   PATCH /agents/me) — stored config, changeable without a redeploy.
+ *
+ * Outbound Slack channel is resolved per-conversation (Slack origin stamped in the
+ * message payload) then per-room (room.metadata.slack.channel, set by the room
+ * owner via PATCH /rooms/:id). There is no global/default channel.
  */
 
 import { TrunkApiError, TrunkClient } from "../../src/sdk/index.js";
@@ -22,7 +23,6 @@ const TRUNK_WEBHOOK_SECRET = process.env.TRUNK_WEBHOOK_SECRET || "";
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const SLACK_SIGNING = process.env.SLACK_SIGNING_SECRET || "";
 const SLACK_CHANNEL_AGENT_MAP = parseJsonMap(process.env.SLACK_CHANNEL_AGENT_MAP);
-const SLACK_DEFAULT_CHANNEL = process.env.SLACK_DEFAULT_CHANNEL || "";
 
 // In-memory caches — a fast path only. The durable source of truth is the Slack
 // origin stamped into each inbound message's payload (see resolveSlackDestination),
@@ -30,18 +30,15 @@ const SLACK_DEFAULT_CHANNEL = process.env.SLACK_DEFAULT_CHANNEL || "";
 const slackToTrunkThread = new Map<string, string>();
 const trunkToSlackThread = new Map<string, { channel: string; threadTs?: string }>();
 
-// Adapter routing config, sourced from this agent's stored metadata
-// (PATCH /agents/me → metadata.slack), with the SLACK_DEFAULT_CHANNEL env var as a
-// legacy fallback. Cached briefly so stored changes apply without a redeploy.
-type SlackConfig = { defaultChannel: string };
-let cachedConfig: SlackConfig | null = null;
-let cachedConfigAt = 0;
-const CONFIG_TTL_MS = 5 * 60 * 1000;
+// Per-room Slack channel, resolved from the room's owner-set metadata
+// (room.metadata.slack.channel) and cached briefly. This is the source of truth
+// for where a room's outbound messages post — no global default.
+const roomChannelCache = new Map<string, { channel: string | null; at: number }>();
+const ROOM_CHANNEL_TTL_MS = 5 * 60 * 1000;
 
 // Exposed for tests to clear cross-test cache state.
-export function resetSlackConfigCache(): void {
-  cachedConfig = null;
-  cachedConfigAt = 0;
+export function resetRoomChannelCache(): void {
+  roomChannelCache.clear();
 }
 
 // --- Trunk API helpers ---
@@ -65,26 +62,27 @@ async function trunkAck(messageId: string) {
   return trunkClient().ack(messageId);
 }
 
-// Load routing config from the adapter agent's stored metadata, falling back to
-// the legacy env var. Metadata is authoritative — set it once and drop the env var.
-async function getSlackConfig(): Promise<SlackConfig> {
+// Resolve a room's configured Slack channel from its owner-set metadata
+// (room.metadata.slack.channel). Cached briefly. Requires the adapter agent to be
+// a member of the room (to read room state); returns null otherwise.
+async function resolveRoomChannel(roomId: string): Promise<string | null> {
   const now = Date.now();
-  if (cachedConfig && now - cachedConfigAt < CONFIG_TTL_MS) return cachedConfig;
+  const cached = roomChannelCache.get(roomId);
+  if (cached && now - cached.at < ROOM_CHANNEL_TTL_MS) return cached.channel;
 
-  let defaultChannel = SLACK_DEFAULT_CHANNEL; // legacy fallback
+  let channel: string | null = null;
   try {
-    const me = (await trunkClient().me()) as { metadata?: Record<string, unknown> };
-    const slack = me.metadata?.slack as { default_channel?: string } | undefined;
-    if (typeof slack?.default_channel === "string" && slack.default_channel) {
-      defaultChannel = slack.default_channel;
+    const state = (await trunkClient().roomState(roomId)) as { room?: { metadata?: Record<string, unknown> } };
+    const slack = state.room?.metadata?.slack as { channel?: string } | undefined;
+    if (typeof slack?.channel === "string" && slack.channel) {
+      channel = slack.channel;
     }
   } catch {
-    // Keep the env fallback if the profile fetch fails.
+    // Not a member, no access, or no config — leave channel null.
   }
 
-  cachedConfig = { defaultChannel };
-  cachedConfigAt = now;
-  return cachedConfig;
+  roomChannelCache.set(roomId, { channel, at: now });
+  return channel;
 }
 
 // --- Slack API helpers ---
@@ -201,13 +199,16 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
 
   const body = JSON.parse(rawBody) as {
     event: string;
-    message: { id: string; payload: { content?: string }; thread_id: string };
+    message: { id: string; payload: { content?: string }; thread_id: string; to_room?: string | null };
   };
 
   if (body.event === "message.received") {
     const content = body.message.payload.content || "(no content)";
+    // 1) Reply in a known Slack conversation (origin stamped in the thread).
     const destination = await resolveSlackDestination(body.message.thread_id);
-    const channel = destination?.channel || (await getSlackConfig()).defaultChannel;
+    // 2) Otherwise, a proactive/room-scoped message posts to the room's channel.
+    const channel = destination?.channel
+      || (body.message.to_room ? await resolveRoomChannel(body.message.to_room) : null);
 
     if (channel) {
       await slackPost(channel, content, destination?.threadTs);
@@ -237,7 +238,7 @@ export function findSlackOrigin(
 
 // Resolve where a Trunk thread should post in Slack. In-memory cache first (warm
 // fast path), then the durable payload-stamped origin via the relay (survives cold
-// starts), then null — caller falls back to SLACK_DEFAULT_CHANNEL.
+// starts), then null — caller falls back to the room's configured channel.
 async function resolveSlackDestination(threadId: string): Promise<{ channel: string; threadTs?: string } | null> {
   if (!threadId) return null;
   const cached = trunkToSlackThread.get(threadId);

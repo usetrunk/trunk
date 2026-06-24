@@ -24,7 +24,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // Now import — adapter reads env vars at module scope
-import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget, findSlackOrigin, resetSlackConfigCache } from "../adapters/slack/index.js";
+import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget, findSlackOrigin, resetRoomChannelCache } from "../adapters/slack/index.js";
 
 function currentTimestamp(): string {
   return String(Math.floor(Date.now() / 1000));
@@ -60,7 +60,7 @@ function trunkWebhookRequest(payload: Record<string, unknown>): Request {
 describe("Slack adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetSlackConfigCache();
+    resetRoomChannelCache();
     // Default: fetch succeeds for Trunk API sends
     mockFetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
   });
@@ -418,32 +418,52 @@ describe("Slack adapter", () => {
 
       expect(res.status).toBe(200);
       // It may look up the thread to try to recover a destination, but with no
-      // mapping and no SLACK_DEFAULT_CHANNEL it must NOT post to Slack or ack.
+      // origin and no room (no to_room) it must NOT post to Slack or ack.
       const calledUrls = mockFetch.mock.calls.map((c) => String(c[0]));
       expect(calledUrls.some((u) => u.includes("chat.postMessage"))).toBe(false);
       expect(calledUrls.some((u) => u.includes("/ack"))).toBe(false);
     });
 
-    it("falls back to the default channel from agent metadata when no origin is recoverable", async () => {
-      resetSlackConfigCache();
+    it("resolves a room-scoped message to the room's configured Slack channel", async () => {
+      resetRoomChannelCache();
       mockFetch.mockClear();
       mockFetch
         .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), { status: 200 })) // thread() — no Slack origin
-        .mockResolvedValueOnce(new Response(JSON.stringify({ metadata: { slack: { default_channel: "C_FALLBACK" } } }), { status: 200 })) // me()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ room: { metadata: { slack: { channel: "C_ROOM" } } } }), { status: 200 })) // roomState()
         .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 })) // slackPost
         .mockResolvedValueOnce(new Response("ok", { status: 200 })); // trunkAck
 
       const res = await handleTrunkWebhook(
         trunkWebhookRequest({
           event: "message.received",
-          message: { id: "msg-proactive", payload: { content: "proactive ping" }, thread_id: "no-origin-thread" },
+          message: { id: "msg-room", payload: { content: "room ping" }, thread_id: "no-origin-thread", to_room: "room-123" },
         })
       );
 
       expect(res.status).toBe(200);
       const slackCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"));
       expect(slackCall).toBeTruthy();
-      expect(JSON.parse(slackCall![1].body).channel).toBe("C_FALLBACK");
+      expect(JSON.parse(slackCall![1].body).channel).toBe("C_ROOM");
+    });
+
+    it("does not post a room-scoped message when the room has no Slack channel configured", async () => {
+      resetRoomChannelCache();
+      mockFetch.mockClear();
+      mockFetch
+        .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), { status: 200 })) // thread() — no Slack origin
+        .mockResolvedValueOnce(new Response(JSON.stringify({ room: { metadata: {} } }), { status: 200 })); // roomState() — no slack config
+
+      const res = await handleTrunkWebhook(
+        trunkWebhookRequest({
+          event: "message.received",
+          message: { id: "msg-room-unset", payload: { content: "x" }, thread_id: "no-origin-thread", to_room: "room-456" },
+        })
+      );
+
+      expect(res.status).toBe(200);
+      const calledUrls = mockFetch.mock.calls.map((c) => String(c[0]));
+      expect(calledUrls.some((u) => u.includes("chat.postMessage"))).toBe(false);
+      expect(calledUrls.some((u) => u.includes("/ack"))).toBe(false);
     });
 
     it("uses (no content) fallback when payload.content is empty", async () => {
