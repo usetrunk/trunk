@@ -9,8 +9,9 @@
  * - SLACK_SIGNING_SECRET: Slack app signing secret
  * - TRUNK_AGENT_SECRET: Trunk agent secret for the adapter agent
  * - TRUNK_RELAY_URL: https://trunk.bot (default)
- * - SLACK_DEFAULT_CHANNEL: fallback channel for outbound messages with no
- *   recoverable Slack origin (optional)
+ * - SLACK_DEFAULT_CHANNEL: legacy fallback for the outbound default channel.
+ *   Prefer setting metadata.slack.default_channel on the adapter agent (via
+ *   PATCH /agents/me) — stored config, changeable without a redeploy.
  */
 
 import { TrunkApiError, TrunkClient } from "../../src/sdk/index.js";
@@ -28,6 +29,20 @@ const SLACK_DEFAULT_CHANNEL = process.env.SLACK_DEFAULT_CHANNEL || "";
 // so routing survives serverless cold starts that wipe these maps.
 const slackToTrunkThread = new Map<string, string>();
 const trunkToSlackThread = new Map<string, { channel: string; threadTs?: string }>();
+
+// Adapter routing config, sourced from this agent's stored metadata
+// (PATCH /agents/me → metadata.slack), with the SLACK_DEFAULT_CHANNEL env var as a
+// legacy fallback. Cached briefly so stored changes apply without a redeploy.
+type SlackConfig = { defaultChannel: string };
+let cachedConfig: SlackConfig | null = null;
+let cachedConfigAt = 0;
+const CONFIG_TTL_MS = 5 * 60 * 1000;
+
+// Exposed for tests to clear cross-test cache state.
+export function resetSlackConfigCache(): void {
+  cachedConfig = null;
+  cachedConfigAt = 0;
+}
 
 // --- Trunk API helpers ---
 
@@ -48,6 +63,28 @@ async function trunkSend(to: string, type: string, content: string, threadId?: s
 
 async function trunkAck(messageId: string) {
   return trunkClient().ack(messageId);
+}
+
+// Load routing config from the adapter agent's stored metadata, falling back to
+// the legacy env var. Metadata is authoritative — set it once and drop the env var.
+async function getSlackConfig(): Promise<SlackConfig> {
+  const now = Date.now();
+  if (cachedConfig && now - cachedConfigAt < CONFIG_TTL_MS) return cachedConfig;
+
+  let defaultChannel = SLACK_DEFAULT_CHANNEL; // legacy fallback
+  try {
+    const me = (await trunkClient().me()) as { metadata?: Record<string, unknown> };
+    const slack = me.metadata?.slack as { default_channel?: string } | undefined;
+    if (typeof slack?.default_channel === "string" && slack.default_channel) {
+      defaultChannel = slack.default_channel;
+    }
+  } catch {
+    // Keep the env fallback if the profile fetch fails.
+  }
+
+  cachedConfig = { defaultChannel };
+  cachedConfigAt = now;
+  return cachedConfig;
 }
 
 // --- Slack API helpers ---
@@ -170,7 +207,7 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
   if (body.event === "message.received") {
     const content = body.message.payload.content || "(no content)";
     const destination = await resolveSlackDestination(body.message.thread_id);
-    const channel = destination?.channel || SLACK_DEFAULT_CHANNEL;
+    const channel = destination?.channel || (await getSlackConfig()).defaultChannel;
 
     if (channel) {
       await slackPost(channel, content, destination?.threadTs);
