@@ -24,7 +24,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // Now import — adapter reads env vars at module scope
-import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget } from "../adapters/slack/index.js";
+import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget, findSlackOrigin } from "../adapters/slack/index.js";
 
 function currentTimestamp(): string {
   return String(Math.floor(Date.now() / 1000));
@@ -416,8 +416,11 @@ describe("Slack adapter", () => {
       const res = await handleTrunkWebhook(webhookReq);
 
       expect(res.status).toBe(200);
-      // No slackPost or trunkAck calls
-      expect(mockFetch).not.toHaveBeenCalled();
+      // It may look up the thread to try to recover a destination, but with no
+      // mapping and no SLACK_DEFAULT_CHANNEL it must NOT post to Slack or ack.
+      const calledUrls = mockFetch.mock.calls.map((c) => String(c[0]));
+      expect(calledUrls.some((u) => u.includes("chat.postMessage"))).toBe(false);
+      expect(calledUrls.some((u) => u.includes("/ack"))).toBe(false);
     });
 
     it("uses (no content) fallback when payload.content is empty", async () => {
@@ -566,3 +569,29 @@ describe("Slack adapter", () => {
 function headerValue(headers: HeadersInit, name: string): string | null {
   return headers instanceof Headers ? headers.get(name) : (headers as Record<string, string>)[name] ?? null;
 }
+
+describe("findSlackOrigin (durable outbound routing)", () => {
+  it("recovers channel + thread_ts from the Slack-sourced message in the thread", () => {
+    const origin = findSlackOrigin([
+      { payload: { content: "agent reply", source: "agent" } },
+      { payload: { content: "hi", source: "slack", slack_channel: "C_GENERAL", slack_thread_ts: "1710000.0001" } },
+    ]);
+    expect(origin).toEqual({ channel: "C_GENERAL", threadTs: "1710000.0001" });
+  });
+
+  it("returns null when no Slack-sourced message is present", () => {
+    expect(findSlackOrigin([{ payload: { content: "x", source: "agent" } }])).toBeNull();
+    expect(findSlackOrigin([])).toBeNull();
+  });
+
+  it("tolerates missing or null payloads", () => {
+    expect(findSlackOrigin([{ payload: null }, { payload: undefined }])).toBeNull();
+  });
+
+  it("treats thread_ts as optional (un-threaded post)", () => {
+    expect(findSlackOrigin([{ payload: { source: "slack", slack_channel: "C_X" } }])).toEqual({
+      channel: "C_X",
+      threadTs: undefined,
+    });
+  });
+});
