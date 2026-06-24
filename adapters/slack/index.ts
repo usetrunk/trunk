@@ -9,6 +9,8 @@
  * - SLACK_SIGNING_SECRET: Slack app signing secret
  * - TRUNK_AGENT_SECRET: Trunk agent secret for the adapter agent
  * - TRUNK_RELAY_URL: https://trunk.bot (default)
+ * - SLACK_DEFAULT_CHANNEL: fallback channel for outbound messages with no
+ *   recoverable Slack origin (optional)
  */
 
 import { TrunkApiError, TrunkClient } from "../../src/sdk/index.js";
@@ -19,18 +21,22 @@ const TRUNK_WEBHOOK_SECRET = process.env.TRUNK_WEBHOOK_SECRET || "";
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const SLACK_SIGNING = process.env.SLACK_SIGNING_SECRET || "";
 const SLACK_CHANNEL_AGENT_MAP = parseJsonMap(process.env.SLACK_CHANNEL_AGENT_MAP);
+const SLACK_DEFAULT_CHANNEL = process.env.SLACK_DEFAULT_CHANNEL || "";
 
+// In-memory caches — a fast path only. The durable source of truth is the Slack
+// origin stamped into each inbound message's payload (see resolveSlackDestination),
+// so routing survives serverless cold starts that wipe these maps.
 const slackToTrunkThread = new Map<string, string>();
-const trunkToSlackThread = new Map<string, { channel: string; threadTs: string }>();
+const trunkToSlackThread = new Map<string, { channel: string; threadTs?: string }>();
 
 // --- Trunk API helpers ---
 
-async function trunkSend(to: string, type: string, content: string, threadId?: string) {
+async function trunkSend(to: string, type: string, content: string, threadId?: string, extra?: Record<string, unknown>) {
   try {
     return await trunkClient().send({
       to,
       type,
-      payload: { content, source: "slack" },
+      payload: { content, source: "slack", ...extra },
       thread_id: threadId,
       idempotency_key: crypto.randomUUID(),
     });
@@ -125,7 +131,12 @@ export async function handleSlackEvent(request: Request): Promise<Response> {
 
     if (targetAgent) {
       const existingThread = slackToTrunkThread.get(slackThreadKey);
-      const receipt = await trunkSend(targetAgent, "question", text, existingThread);
+      // Stamp the Slack origin into the payload so outbound replies can recover
+      // the channel/thread even after a cold start wipes the in-memory caches.
+      const receipt = await trunkSend(targetAgent, "question", text, existingThread, {
+        slack_channel: channel,
+        slack_thread_ts: threadTs,
+      });
       if (receipt) {
         slackToTrunkThread.set(slackThreadKey, receipt.thread_id);
         trunkToSlackThread.set(receipt.thread_id, { channel, threadTs });
@@ -158,15 +169,53 @@ export async function handleTrunkWebhook(request: Request): Promise<Response> {
 
   if (body.event === "message.received") {
     const content = body.message.payload.content || "(no content)";
-    const destination = trunkToSlackThread.get(body.message.thread_id);
+    const destination = await resolveSlackDestination(body.message.thread_id);
+    const channel = destination?.channel || SLACK_DEFAULT_CHANNEL;
 
-    if (destination) {
-      await slackPost(destination.channel, content, destination.threadTs);
+    if (channel) {
+      await slackPost(channel, content, destination?.threadTs);
       await trunkAck(body.message.id);
     }
   }
 
   return new Response("ok");
+}
+
+// Find the Slack origin (channel + thread_ts) for a Trunk thread by scanning its
+// messages for the inbound Slack-sourced one. Pure + exported for testing.
+export function findSlackOrigin(
+  messages: Array<{ payload?: Record<string, unknown> | null }>
+): { channel: string; threadTs?: string } | null {
+  for (const msg of messages || []) {
+    const p = msg.payload;
+    if (p && p.source === "slack" && typeof p.slack_channel === "string") {
+      return {
+        channel: p.slack_channel,
+        threadTs: typeof p.slack_thread_ts === "string" ? p.slack_thread_ts : undefined,
+      };
+    }
+  }
+  return null;
+}
+
+// Resolve where a Trunk thread should post in Slack. In-memory cache first (warm
+// fast path), then the durable payload-stamped origin via the relay (survives cold
+// starts), then null — caller falls back to SLACK_DEFAULT_CHANNEL.
+async function resolveSlackDestination(threadId: string): Promise<{ channel: string; threadTs?: string } | null> {
+  if (!threadId) return null;
+  const cached = trunkToSlackThread.get(threadId);
+  if (cached) return cached;
+  try {
+    const thread = await trunkClient().thread(threadId);
+    const origin = findSlackOrigin(thread.messages || []);
+    if (origin) {
+      trunkToSlackThread.set(threadId, origin);
+      return origin;
+    }
+  } catch {
+    // Fall through to the default channel.
+  }
+  return null;
 }
 
 export function resolveSlackTarget(
