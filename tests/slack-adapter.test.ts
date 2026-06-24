@@ -24,7 +24,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // Now import — adapter reads env vars at module scope
-import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget, findSlackOrigin } from "../adapters/slack/index.js";
+import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget, findSlackOrigin, resetSlackConfigCache } from "../adapters/slack/index.js";
 
 function currentTimestamp(): string {
   return String(Math.floor(Date.now() / 1000));
@@ -60,6 +60,7 @@ function trunkWebhookRequest(payload: Record<string, unknown>): Request {
 describe("Slack adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSlackConfigCache();
     // Default: fetch succeeds for Trunk API sends
     mockFetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
   });
@@ -421,6 +422,28 @@ describe("Slack adapter", () => {
       const calledUrls = mockFetch.mock.calls.map((c) => String(c[0]));
       expect(calledUrls.some((u) => u.includes("chat.postMessage"))).toBe(false);
       expect(calledUrls.some((u) => u.includes("/ack"))).toBe(false);
+    });
+
+    it("falls back to the default channel from agent metadata when no origin is recoverable", async () => {
+      resetSlackConfigCache();
+      mockFetch.mockClear();
+      mockFetch
+        .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), { status: 200 })) // thread() — no Slack origin
+        .mockResolvedValueOnce(new Response(JSON.stringify({ metadata: { slack: { default_channel: "C_FALLBACK" } } }), { status: 200 })) // me()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 })) // slackPost
+        .mockResolvedValueOnce(new Response("ok", { status: 200 })); // trunkAck
+
+      const res = await handleTrunkWebhook(
+        trunkWebhookRequest({
+          event: "message.received",
+          message: { id: "msg-proactive", payload: { content: "proactive ping" }, thread_id: "no-origin-thread" },
+        })
+      );
+
+      expect(res.status).toBe(200);
+      const slackCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"));
+      expect(slackCall).toBeTruthy();
+      expect(JSON.parse(slackCall![1].body).channel).toBe("C_FALLBACK");
     });
 
     it("uses (no content) fallback when payload.content is empty", async () => {
