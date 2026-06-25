@@ -332,6 +332,68 @@ describe("Slack adapter", () => {
     });
   });
 
+  // --- message thread replies (no @mention required) ---
+
+  describe("message thread reply events", () => {
+    it("routes a plain thread reply to the mapped agent", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "msg-r", thread_id: "thread-r", status: "pending" }), { status: 200 }),
+      );
+      const body = JSON.stringify({
+        type: "event_callback",
+        event: {
+          type: "message",
+          text: "here is my answer",
+          channel: "C_SUPPORT",
+          ts: "1710000.0009",
+          thread_ts: "1710000.0008",
+          user: "U_HUMAN",
+        },
+      });
+      const res = await handleSlackEvent(slackRequest(body));
+
+      expect(res.status).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe(`${TEST_RELAY_URL}/messages`);
+      const sent = JSON.parse(opts.body);
+      expect(sent.to).toBe("agent-support"); // C_SUPPORT → agent-support
+      expect(sent.payload.content).toBe("here is my answer");
+      expect(sent.payload.slack_channel).toBe("C_SUPPORT");
+      expect(sent.payload.slack_thread_ts).toBe("1710000.0008");
+    });
+
+    it("ignores the bot's own messages (no loop)", async () => {
+      const body = JSON.stringify({
+        type: "event_callback",
+        event: { type: "message", text: "bot post", channel: "C_SUPPORT", ts: "2.1", thread_ts: "2.0", bot_id: "B123" },
+      });
+      const res = await handleSlackEvent(slackRequest(body));
+      expect(res.status).toBe(200);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("ignores top-level messages that are not thread replies", async () => {
+      const body = JSON.stringify({
+        type: "event_callback",
+        event: { type: "message", text: "channel chatter", channel: "C_SUPPORT", ts: "3.0", user: "U_HUMAN" },
+      });
+      const res = await handleSlackEvent(slackRequest(body));
+      expect(res.status).toBe(200);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("ignores message edits/joins (subtype set)", async () => {
+      const body = JSON.stringify({
+        type: "event_callback",
+        event: { type: "message", subtype: "message_changed", channel: "C_SUPPORT", ts: "4.1", thread_ts: "4.0" },
+      });
+      const res = await handleSlackEvent(slackRequest(body));
+      expect(res.status).toBe(200);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
   // --- Unhandled event types ---
 
   describe("unhandled events", () => {
