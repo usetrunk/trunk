@@ -795,6 +795,35 @@ describe("Hono API behavior", () => {
     });
   });
 
+  it("GET /messages/thread-by-origin finds the thread for a stamped Slack origin", async () => {
+    const { beta, alphaClient } = await registerPair();
+    await alphaClient.pair({ code: beta.pairing_code });
+
+    const sent = await alphaClient.send({
+      to: beta.agent_id,
+      type: "question",
+      payload: { content: "From Slack", source: "slack", slack_channel: "C9", slack_thread_ts: "1700.1" },
+    });
+
+    const found = await alphaClient.threadByOrigin("C9", "1700.1");
+    expect(found.thread_id).toBe(sent.thread_id);
+  });
+
+  it("GET /messages/thread-by-origin returns null when no message matches", async () => {
+    const { alphaClient } = await registerPair();
+    const found = await alphaClient.threadByOrigin("C-nope", "0000.0");
+    expect(found.thread_id).toBeNull();
+  });
+
+  it("GET /messages/thread-by-origin requires channel and thread_ts", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/messages/thread-by-origin?channel=C9", {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FIELD");
+  });
+
   it("allows self-messaging (same agent, different sessions)", async () => {
     const alpha = await createClient().register({ name: "planner", owner: "Frank" });
     const alphaClient = createClient(alpha.secret);
@@ -1654,6 +1683,39 @@ describe("Hono API behavior", () => {
     expect(room).toMatchObject({ name: "Sprint Room" });
     expect(typeof room.id).toBe("string");
     expect(typeof room.pairing_code).toBe("string");
+  });
+
+  it("GET /rooms/by-slack-channel resolves room_id + inbound_agent from metadata", async () => {
+    const { alpha } = await registerPair();
+    const res = await createRoomRaw(alpha.secret, {
+      name: "Slack Routed Room",
+      metadata: { slack: { channel: "C123ROUTE", inbound_agent: "agent-dev-7" } },
+    });
+    const room = await res.json();
+
+    const found = await app.request("/rooms/by-slack-channel?channel=C123ROUTE", {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(found.status).toBe(200);
+    expect(await found.json()).toEqual({ room_id: room.id, inbound_agent: "agent-dev-7" });
+  });
+
+  it("GET /rooms/by-slack-channel returns nulls when no room matches", async () => {
+    const { alpha } = await registerPair();
+    const found = await app.request("/rooms/by-slack-channel?channel=C404NONE", {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(found.status).toBe(200);
+    expect(await found.json()).toEqual({ room_id: null, inbound_agent: null });
+  });
+
+  it("GET /rooms/by-slack-channel requires channel", async () => {
+    const { alpha } = await registerPair();
+    const res = await app.request("/rooms/by-slack-channel", {
+      headers: { "Authorization": `Bearer ${alpha.secret}` },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FIELD");
   });
 
   it("joins a room by pairing code and lists rooms", async () => {
@@ -26294,6 +26356,31 @@ function evaluateCondition(condition: SQL | undefined, row: unknown): boolean {
   }
 
   const column = chunks.find(isColumn);
+
+  // Handle JSONB path extraction, e.g. `${col}->>'k' = ${param}` or
+  // `${col}->'a'->>'b' = ${param}`. The path + operator live in a single raw string
+  // chunk produced by sql``; parse it and walk the column's object value.
+  if (column) {
+    const jsonbParam = chunks.find(isParam);
+    const jsonbStringChunk = chunks.find((chunk) => {
+      const v = (chunk as { value?: unknown }).value;
+      return Array.isArray(v) && /->/.test(v.join("")) && /=\s*$/.test(v.join(""));
+    });
+    if (jsonbStringChunk && jsonbParam) {
+      const raw = ((jsonbStringChunk as { value: unknown[] }).value).join("");
+      const path = Array.from(raw.matchAll(/->>?'([^']+)'/g)).map((m) => m[1]);
+      let value: unknown = getRowValue(row, column.name);
+      for (const key of path) {
+        if (value && typeof value === "object") {
+          value = (value as Record<string, unknown>)[key];
+        } else {
+          value = undefined;
+        }
+      }
+      const extracted = value == null ? null : String(value);
+      return extracted === (jsonbParam as { value: unknown }).value;
+    }
+  }
 
   // Handle "column is null" (isNull operator)
   if (column && chunks.some((chunk) => isStringChunk(chunk, " is null"))) {

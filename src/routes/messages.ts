@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { agents, messages, workspaces, rooms, roomMembers, reactions, messageLabels, savedSearches, messageEdits, attachments } from "../db/schema.js";
-import { eq, or, and, desc, lt, gt, gte, lte, inArray, isNull, ne } from "drizzle-orm";
+import { eq, or, and, desc, asc, lt, gt, gte, lte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
@@ -479,6 +479,39 @@ app.get("/inbox", async (c) => {
 
   const page = paginateResults(visible, limit);
   return c.json({ messages: page.items.map(messageToJson), next_cursor: page.next_cursor, has_more: page.has_more });
+});
+
+// Resolve the Trunk thread for a stamped origin (e.g. a Slack channel + thread_ts).
+// Returns the oldest matching message's thread so a reply continues the same thread
+// even after the adapter's in-memory map is wiped by a cold start. Scoped to the
+// caller's own outbound messages.
+app.get("/thread-by-origin", async (c) => {
+  const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  const channel = c.req.query("channel");
+  const thread_ts = c.req.query("thread_ts");
+  if (!channel || !thread_ts) {
+    return c.json({ error: "channel and thread_ts are required", code: "MISSING_FIELD" }, 400);
+  }
+
+  const [row] = await db
+    .select({ threadId: messages.threadId })
+    .from(messages)
+    .where(and(
+      eq(messages.fromAgent, agentId),
+      sql`${messages.payload}->>'slack_channel' = ${channel}`,
+      sql`${messages.payload}->>'slack_thread_ts' = ${thread_ts}`
+    ))
+    .orderBy(asc(messages.createdAt))
+    .limit(1);
+
+  return c.json({ thread_id: row?.threadId ?? null });
 });
 
 // Get inbox stats (unread count + breakdown by type/status)

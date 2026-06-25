@@ -41,6 +41,17 @@ export function resetRoomChannelCache(): void {
   roomChannelCache.clear();
 }
 
+// Per-channel inbound agent, resolved from room config (room.metadata.slack.channel
+// + .inbound_agent via the relay) and cached briefly. Room config is the primary
+// source; the SLACK_CHANNEL_AGENT_MAP env var is only a fallback.
+const targetAgentCache = new Map<string, { agent: string; at: number }>();
+const TARGET_AGENT_TTL_MS = 5 * 60 * 1000;
+
+// Exposed for tests to clear cross-test cache state.
+export function resetTargetAgentCache(): void {
+  targetAgentCache.clear();
+}
+
 // --- Trunk API helpers ---
 
 async function trunkSend(to: string, type: string, content: string, threadId?: string, extra?: Record<string, unknown>) {
@@ -134,11 +145,21 @@ async function verifySlackRequest(
 // when known and stamping the Slack origin so outbound replies can find their way
 // back even after a cold start.
 async function routeSlackMessage(channel: string, threadTs: string, text: string): Promise<void> {
-  const targetAgent = resolveSlackTarget(channel, threadTs);
+  const targetAgent = await resolveTargetAgent(channel, threadTs);
   if (!targetAgent) return;
 
   const slackThreadKey = slackKey(channel, threadTs);
-  const existingThread = slackToTrunkThread.get(slackThreadKey);
+  let existingThread = slackToTrunkThread.get(slackThreadKey);
+  // Cold-start fallback: the in-memory map is empty, so look up the durable thread
+  // for this Slack origin via the relay and continue it instead of starting a new one.
+  if (!existingThread) {
+    try {
+      const found = await trunkClient().threadByOrigin(channel, threadTs);
+      if (found.thread_id) existingThread = found.thread_id;
+    } catch {
+      // Ignore — fall back to starting a new thread.
+    }
+  }
   const receipt = await trunkSend(targetAgent, "question", text, existingThread, {
     slack_channel: channel,
     slack_thread_ts: threadTs,
@@ -277,6 +298,27 @@ export function resolveSlackTarget(
     if (threadTarget) return threadTarget;
   }
   return channelMap[channel] || "";
+}
+
+// Resolve which agent should receive an inbound Slack message. Room config
+// (room.metadata.slack.inbound_agent, via the relay) is the primary source and is
+// cached briefly; the SLACK_CHANNEL_AGENT_MAP env var is the fallback.
+async function resolveTargetAgent(channel: string, threadTs?: string): Promise<string> {
+  const now = Date.now();
+  const cached = targetAgentCache.get(channel);
+  if (cached && now - cached.at < TARGET_AGENT_TTL_MS) return cached.agent;
+
+  try {
+    const result = await trunkClient().roomBySlackChannel(channel);
+    if (result.inbound_agent) {
+      targetAgentCache.set(channel, { agent: result.inbound_agent, at: now });
+      return result.inbound_agent;
+    }
+  } catch {
+    // Fall through to the env map.
+  }
+
+  return resolveSlackTarget(channel, threadTs);
 }
 
 function slackKey(channel: string, threadTs: string): string {

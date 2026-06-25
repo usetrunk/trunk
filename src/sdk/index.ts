@@ -1421,6 +1421,16 @@ export class TrunkClient {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/state`);
   }
 
+  threadByOrigin(channel: string, threadTs: string): Promise<{ thread_id: string | null }> {
+    return this.request(
+      `/messages/thread-by-origin?channel=${encodeURIComponent(channel)}&thread_ts=${encodeURIComponent(threadTs)}`
+    );
+  }
+
+  roomBySlackChannel(channel: string): Promise<{ room_id: string | null; inbound_agent: string | null }> {
+    return this.request(`/rooms/by-slack-channel?channel=${encodeURIComponent(channel)}`);
+  }
+
   createDelegation(input: CreateDelegationRequest): Promise<CreateDelegationResponse> {
     return this.request("/delegations", { method: "POST", body: input });
   }

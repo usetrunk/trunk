@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { db } from "../db/index.js";
 import { rooms, roomMembers, roomWebhooks, agents, messages, tasks, sharedFacts, sharedDocuments } from "../db/schema.js";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { generatePairingCode } from "../lib/auth.js";
 import { audit } from "../lib/audit.js";
@@ -160,6 +160,40 @@ app.post("/heartbeats/run", async (c) => {
   }
 
   return c.json(await runRoomHeartbeats(agentId));
+});
+
+// Resolve a room (and its inbound agent) by the Slack channel stored in
+// room.metadata.slack.channel. Lets the Slack adapter route inbound channel
+// messages to the configured agent without a global env map.
+app.get("/by-slack-channel", async (c) => {
+  const agentId = c.get("agentId");
+
+  const rateLimit = await checkRateLimit(`read:${agentId}`, 60, 60 * 1000);
+  setRateLimitHeaders(c, rateLimit);
+  if (!rateLimit.ok) {
+    return c.json({ error: "Rate limit exceeded", code: "RATE_LIMITED", retry_after_seconds: rateLimit.retryAfterSeconds }, 429);
+  }
+
+  const channel = c.req.query("channel");
+  if (!channel) {
+    return c.json({ error: "channel is required", code: "MISSING_FIELD" }, 400);
+  }
+
+  const [row] = await db
+    .select({ id: rooms.id, metadata: rooms.metadata })
+    .from(rooms)
+    .where(sql`${rooms.metadata}->'slack'->>'channel' = ${channel}`)
+    .limit(1);
+
+  let inboundAgent: string | null = null;
+  if (row && isRecord(row.metadata)) {
+    const slack = row.metadata.slack;
+    if (isRecord(slack) && typeof slack.inbound_agent === "string" && slack.inbound_agent) {
+      inboundAgent = slack.inbound_agent;
+    }
+  }
+
+  return c.json({ room_id: row?.id ?? null, inbound_agent: inboundAgent });
 });
 
 // List members of a room

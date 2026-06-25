@@ -24,7 +24,19 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // Now import — adapter reads env vars at module scope
-import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget, findSlackOrigin, resetRoomChannelCache } from "../adapters/slack/index.js";
+import { handleSlackEvent, handleTrunkWebhook, resolveSlackTarget, findSlackOrigin, resetRoomChannelCache, resetTargetAgentCache } from "../adapters/slack/index.js";
+
+// Relay JSON response for GET /rooms/by-slack-channel when the channel is not
+// configured to a room (the adapter then falls back to the env channel→agent map).
+function noRoomRoute(): Response {
+  return new Response(JSON.stringify({ room_id: null, inbound_agent: null }), { status: 200 });
+}
+
+// Relay JSON response for GET /messages/thread-by-origin when no durable thread
+// exists yet (the adapter then starts a new thread).
+function noOriginThread(): Response {
+  return new Response(JSON.stringify({ thread_id: null }), { status: 200 });
+}
 
 function currentTimestamp(): string {
   return String(Math.floor(Date.now() / 1000));
@@ -61,8 +73,15 @@ describe("Slack adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRoomChannelCache();
-    // Default: fetch succeeds for Trunk API sends
-    mockFetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    resetTargetAgentCache();
+    // Default: fetch succeeds. A fresh Response per call (bodies are single-use) with
+    // a shape covering every Trunk GET the inbound path makes (roomBySlackChannel →
+    // nulls so it falls back to the env map, threadByOrigin → null) plus generic sends.
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ ok: true, room_id: null, inbound_agent: null, thread_id: null }), { status: 200 })
+      )
+    );
   });
 
   // --- Replay protection ---
@@ -192,9 +211,8 @@ describe("Slack adapter", () => {
       expect(res.status).toBe(200);
       expect(await res.text()).toBe("ok");
 
-      // Should have called trunkSend (fetch to relay)
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const [url, opts] = mockFetch.mock.calls[0];
+      // Should have called trunkSend (POST to relay /messages)
+      const [url, opts] = sendCall();
       expect(url).toBe(`${TEST_RELAY_URL}/messages`);
       expect(opts.method).toBe("POST");
       const sentBody = JSON.parse(opts.body);
@@ -222,8 +240,7 @@ describe("Slack adapter", () => {
       const req = slackRequest(body);
       await handleSlackEvent(req);
 
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const sentBody = JSON.parse(sendCall()[1].body);
       expect(sentBody.payload.content).toBe("hello there");
     });
 
@@ -244,8 +261,7 @@ describe("Slack adapter", () => {
       const req = slackRequest(body);
       await handleSlackEvent(req);
 
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const sentBody = JSON.parse(sendCall()[1].body);
       expect(sentBody.to).toBe("agent-support");
     });
 
@@ -263,8 +279,12 @@ describe("Slack adapter", () => {
       const res = await handleSlackEvent(req);
 
       expect(res.status).toBe(200);
-      // resolveSlackTarget returns "" for unmapped, so trunkSend is NOT called
-      expect(mockFetch).not.toHaveBeenCalled();
+      // Room config has no match and the env map returns "" for an unmapped channel,
+      // so no message is sent (the routing lookup itself may run).
+      const sentToRelay = mockFetch.mock.calls.some(
+        (c) => String(c[0]).endsWith("/messages") && c[1]?.method === "POST"
+      );
+      expect(sentToRelay).toBe(false);
     });
 
     it("uses ts as thread_ts when thread_ts is absent (new thread)", async () => {
@@ -284,8 +304,7 @@ describe("Slack adapter", () => {
       const req = slackRequest(body);
       await handleSlackEvent(req);
 
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const sentBody = JSON.parse(sendCall()[1].body);
       expect(sentBody.to).toBe("agent-general");
     });
 
@@ -306,7 +325,7 @@ describe("Slack adapter", () => {
       const req = slackRequest(body);
       await handleSlackEvent(req);
 
-      const headers = mockFetch.mock.calls[0][1].headers;
+      const headers = sendCall()[1].headers;
       expect(headerValue(headers, "Authorization")).toBe(`Bearer ${TEST_AGENT_SECRET}`);
       expect(headerValue(headers, "Idempotency-Key")).toBeDefined();
     });
@@ -336,9 +355,12 @@ describe("Slack adapter", () => {
 
   describe("message thread reply events", () => {
     it("routes a plain thread reply to the mapped agent", async () => {
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: "msg-r", thread_id: "thread-r", status: "pending" }), { status: 200 }),
-      );
+      mockFetch
+        .mockResolvedValueOnce(noRoomRoute())
+        .mockResolvedValueOnce(noOriginThread())
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "msg-r", thread_id: "thread-r", status: "pending" }), { status: 200 }),
+        );
       const body = JSON.stringify({
         type: "event_callback",
         event: {
@@ -353,14 +375,44 @@ describe("Slack adapter", () => {
       const res = await handleSlackEvent(slackRequest(body));
 
       expect(res.status).toBe(200);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const [url, opts] = mockFetch.mock.calls[0];
+      const [url, opts] = sendCall();
       expect(url).toBe(`${TEST_RELAY_URL}/messages`);
       const sent = JSON.parse(opts.body);
-      expect(sent.to).toBe("agent-support"); // C_SUPPORT → agent-support
+      expect(sent.to).toBe("agent-support"); // C_SUPPORT → agent-support (env fallback)
       expect(sent.payload.content).toBe("here is my answer");
       expect(sent.payload.slack_channel).toBe("C_SUPPORT");
       expect(sent.payload.slack_thread_ts).toBe("1710000.0008");
+    });
+
+    it("continues the durable Trunk thread when the in-memory map is empty (cold start)", async () => {
+      // Map is empty (reset in beforeEach). roomBySlackChannel → nulls (env fallback),
+      // threadByOrigin → an existing thread id, so the send must continue that thread.
+      mockFetch
+        .mockResolvedValueOnce(noRoomRoute())
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ thread_id: "durable-thread-77" }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "msg-cold", thread_id: "durable-thread-77", status: "pending" }), { status: 200 }),
+        );
+
+      const body = JSON.stringify({
+        type: "event_callback",
+        event: {
+          type: "message",
+          text: "reply after cold start",
+          channel: "C_SUPPORT",
+          ts: "1710000.0011",
+          thread_ts: "1710000.0010",
+          user: "U_HUMAN",
+        },
+      });
+      const res = await handleSlackEvent(slackRequest(body));
+
+      expect(res.status).toBe(200);
+      const sent = JSON.parse(sendCall()[1].body);
+      expect(sent.thread_id).toBe("durable-thread-77");
+      expect(sent.payload.content).toBe("reply after cold start");
     });
 
     it("ignores the bot's own messages (no loop)", async () => {
@@ -415,10 +467,14 @@ describe("Slack adapter", () => {
 
   describe("handleTrunkWebhook", () => {
     it("posts to Slack when thread mapping exists", async () => {
-      // First, create a thread mapping by sending an app_mention
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: "msg-10", thread_id: "trunk-thread-10", status: "pending" }), { status: 200 }),
-      );
+      // First, create a thread mapping by sending an app_mention. The inbound path
+      // makes routing GETs (roomBySlackChannel, threadByOrigin) before the send.
+      mockFetch
+        .mockResolvedValueOnce(noRoomRoute())
+        .mockResolvedValueOnce(noOriginThread())
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "msg-10", thread_id: "trunk-thread-10", status: "pending" }), { status: 200 }),
+        );
 
       const mentionBody = JSON.stringify({
         type: "event_callback",
@@ -529,10 +585,13 @@ describe("Slack adapter", () => {
     });
 
     it("uses (no content) fallback when payload.content is empty", async () => {
-      // Set up thread mapping
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: "msg-20", thread_id: "trunk-thread-20", status: "pending" }), { status: 200 }),
-      );
+      // Set up thread mapping (routing GETs precede the send on the inbound path)
+      mockFetch
+        .mockResolvedValueOnce(noRoomRoute())
+        .mockResolvedValueOnce(noOriginThread())
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "msg-20", thread_id: "trunk-thread-20", status: "pending" }), { status: 200 }),
+        );
       const mentionBody = JSON.stringify({
         type: "event_callback",
         event: {
@@ -660,6 +719,48 @@ describe("Slack adapter", () => {
     });
   });
 
+  // --- resolveTargetAgent (room config primary, env map fallback) ---
+
+  describe("resolveTargetAgent routing", () => {
+    it("prefers the room's configured inbound_agent over the env map", async () => {
+      // roomBySlackChannel returns an inbound_agent; the env map for C_GENERAL is
+      // agent-general, so seeing the room agent proves room config wins.
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ room_id: "room-1", inbound_agent: "agent-room-config" }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(noOriginThread())
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "m", thread_id: "t", status: "pending" }), { status: 200 }),
+        );
+
+      const body = JSON.stringify({
+        type: "event_callback",
+        event: { type: "app_mention", text: "<@UBOT> hi", channel: "C_GENERAL", ts: "1750000.0001" },
+      });
+      await handleSlackEvent(slackRequest(body));
+
+      expect(JSON.parse(sendCall()[1].body).to).toBe("agent-room-config");
+    });
+
+    it("falls back to the env channel map when room config returns nulls", async () => {
+      mockFetch
+        .mockResolvedValueOnce(noRoomRoute())
+        .mockResolvedValueOnce(noOriginThread())
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "m", thread_id: "t", status: "pending" }), { status: 200 }),
+        );
+
+      const body = JSON.stringify({
+        type: "event_callback",
+        event: { type: "app_mention", text: "<@UBOT> hi", channel: "C_GENERAL", ts: "1750000.0002" },
+      });
+      await handleSlackEvent(slackRequest(body));
+
+      expect(JSON.parse(sendCall()[1].body).to).toBe("agent-general");
+    });
+  });
+
   // --- parseJsonMap (tested indirectly through env var) ---
 
   describe("channel map parsing", () => {
@@ -673,6 +774,17 @@ describe("Slack adapter", () => {
 
 function headerValue(headers: HeadersInit, name: string): string | null {
   return headers instanceof Headers ? headers.get(name) : (headers as Record<string, string>)[name] ?? null;
+}
+
+// The inbound path now makes routing GETs (roomBySlackChannel, threadByOrigin)
+// before the POST /messages send, so locate the send call by URL + method rather
+// than by a fixed index.
+function sendCall(): [string, { method?: string; body: string; headers: HeadersInit }] {
+  const call = mockFetch.mock.calls.find(
+    (c) => String(c[0]).endsWith("/messages") && c[1]?.method === "POST"
+  );
+  if (!call) throw new Error("expected a POST /messages send call");
+  return call as [string, { method?: string; body: string; headers: HeadersInit }];
 }
 
 describe("findSlackOrigin (durable outbound routing)", () => {
