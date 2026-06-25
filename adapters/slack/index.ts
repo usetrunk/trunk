@@ -130,6 +130,25 @@ async function verifySlackRequest(
 
 // --- Request handler ---
 
+// Route an inbound Slack message to its mapped agent, continuing the Trunk thread
+// when known and stamping the Slack origin so outbound replies can find their way
+// back even after a cold start.
+async function routeSlackMessage(channel: string, threadTs: string, text: string): Promise<void> {
+  const targetAgent = resolveSlackTarget(channel, threadTs);
+  if (!targetAgent) return;
+
+  const slackThreadKey = slackKey(channel, threadTs);
+  const existingThread = slackToTrunkThread.get(slackThreadKey);
+  const receipt = await trunkSend(targetAgent, "question", text, existingThread, {
+    slack_channel: channel,
+    slack_thread_ts: threadTs,
+  });
+  if (receipt) {
+    slackToTrunkThread.set(slackThreadKey, receipt.thread_id);
+    trunkToSlackThread.set(receipt.thread_id, { channel, threadTs });
+  }
+}
+
 export async function handleSlackEvent(request: Request): Promise<Response> {
   const rawBody = await request.text();
   const timestamp = request.headers.get("X-Slack-Request-Timestamp") || "";
@@ -155,29 +174,21 @@ export async function handleSlackEvent(request: Request): Promise<Response> {
     });
   }
 
-  // Handle app_mention events
-  if (event.event?.type === "app_mention") {
-    const text = event.event.text.replace(/<@[A-Z0-9]+>/g, "").trim();
-    const channel = event.event.channel;
-    const threadTs = event.event.thread_ts || event.event.ts;
-    const slackThreadKey = slackKey(channel, threadTs);
+  const ev = event.event;
 
-    const targetAgent = resolveSlackTarget(channel, threadTs);
+  // An @mention always routes.
+  if (ev?.type === "app_mention") {
+    const text = ev.text.replace(/<@[A-Z0-9]+>/g, "").trim();
+    await routeSlackMessage(ev.channel, ev.thread_ts || ev.ts, text);
+    return new Response("ok");
+  }
 
-    if (targetAgent) {
-      const existingThread = slackToTrunkThread.get(slackThreadKey);
-      // Stamp the Slack origin into the payload so outbound replies can recover
-      // the channel/thread even after a cold start wipes the in-memory caches.
-      const receipt = await trunkSend(targetAgent, "question", text, existingThread, {
-        slack_channel: channel,
-        slack_thread_ts: threadTs,
-      });
-      if (receipt) {
-        slackToTrunkThread.set(slackThreadKey, receipt.thread_id);
-        trunkToSlackThread.set(receipt.thread_id, { channel, threadTs });
-      }
-    }
-
+  // A plain thread reply routes too, so a human can answer the bot inline without
+  // re-@mentioning it. Skip the bot's own posts and edits/joins (bot_id/subtype) to
+  // avoid loops, and require a thread_ts so top-level channel chatter is ignored.
+  if (ev?.type === "message" && ev.thread_ts && !ev.bot_id && !ev.subtype) {
+    const text = (ev.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+    if (text) await routeSlackMessage(ev.channel, ev.thread_ts, text);
     return new Response("ok");
   }
 
