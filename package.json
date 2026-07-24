@@ -26,7 +26,7 @@
     "audit:prod": "npm_config_omit=dev npm audit",
     "verify": "npm run typecheck && npm run typecheck:hygiene && npm run verify:mcp && npm run verify:repo && npm run verify:protocol && npm test && npm run test:python && npm run build && npm run audit:prod",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "tsx scripts/db-migrate.ts",
     "db:studio": "drizzle-kit studio"
   },
   "license": "MIT",
