@@ -17,6 +17,14 @@ import {
   tasks,
   webhookDeliveries,
 } from "../db/schema.js";
+import {
+  buildAuditExplanation,
+  type AuditCredentialType,
+  type AuditEventDetails,
+  type AuditOutcome,
+  type AuditProvenanceReference,
+  type AuditReasonCode,
+} from "./audit.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -364,8 +372,22 @@ export type AuditEventRow = {
   action: string;
   target_type: string;
   target_id: string | null;
+  outcome: AuditOutcome;
+  reason_code: AuditReasonCode;
+  credential: {
+    type: AuditCredentialType;
+    id: string | null;
+  };
+  delegation: {
+    id: string;
+    parent_agent_id: string | null;
+  } | null;
+  request_id: string | null;
+  trace_id: string | null;
+  provenance: AuditProvenanceReference[];
   metadata: Record<string, unknown>;
   created_at: string;
+  explanation: string;
 };
 
 export async function getRecentAudits(agentId: string, days = 7, now: Date = new Date()): Promise<AuditEventRow[]> {
@@ -377,15 +399,59 @@ export async function getRecentAudits(agentId: string, days = 7, now: Date = new
     .orderBy(desc(auditEvents.createdAt))
     .limit(100);
 
-  return rows.map((r) => ({
-    id: r.id,
-    actor_agent: r.actorAgent,
-    action: r.action,
-    target_type: r.targetType,
-    target_id: r.targetId,
-    metadata: r.metadata ?? {},
-    created_at: r.createdAt.toISOString(),
-  }));
+  return rows.map(auditRowToJson);
+}
+
+export async function getAuditDetails(agentId: string, eventId: string): Promise<AuditEventRow | null> {
+  const [row] = await db
+    .select()
+    .from(auditEvents)
+    .where(and(eq(auditEvents.id, eventId), eq(auditEvents.actorAgent, agentId)))
+    .limit(1);
+  return row ? auditRowToJson(row) : null;
+}
+
+export function auditRowToJson(row: typeof auditEvents.$inferSelect): AuditEventRow {
+  const details: AuditEventDetails = {
+    id: row.id,
+    actorAgent: row.actorAgent,
+    action: row.action,
+    targetType: row.targetType,
+    targetId: row.targetId,
+    outcome: row.outcome as AuditOutcome,
+    reasonCode: row.reasonCode as AuditReasonCode,
+    credentialType: row.credentialType as AuditCredentialType,
+    credentialId: row.credentialId,
+    delegationId: row.delegationId,
+    parentAgentId: row.parentAgentId,
+    requestId: row.requestId ?? "legacy",
+    traceId: row.traceId,
+    provenance: (row.provenance ?? []) as AuditProvenanceReference[],
+    metadata: row.metadata ?? {},
+    createdAt: row.createdAt,
+  };
+  return {
+    id: details.id,
+    actor_agent: details.actorAgent,
+    action: details.action,
+    target_type: details.targetType,
+    target_id: details.targetId,
+    outcome: details.outcome,
+    reason_code: details.reasonCode,
+    credential: {
+      type: details.credentialType,
+      id: details.credentialId,
+    },
+    delegation: details.delegationId
+      ? { id: details.delegationId, parent_agent_id: details.parentAgentId }
+      : null,
+    request_id: row.requestId,
+    trace_id: details.traceId,
+    provenance: details.provenance,
+    metadata: details.metadata,
+    created_at: details.createdAt.toISOString(),
+    explanation: buildAuditExplanation(details),
+  };
 }
 
 export async function getRecentThreads(agentId: string, limit = 10) {

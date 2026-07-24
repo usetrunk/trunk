@@ -5,6 +5,7 @@ import { eq, and, desc, lt, gte, lte } from "drizzle-orm";
 import { authMiddleware } from "../lib/auth.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
+import { auditRowToJson } from "../lib/inspector.js";
 import type { AgentVariables } from "../lib/types.js";
 
 const app = new Hono<AgentVariables>();
@@ -72,14 +73,7 @@ app.get("/", async (c) => {
   const paginated = paginateResults(rows, pagination.limit);
 
   return c.json({
-    events: paginated.items.map((e) => ({
-      id: e.id,
-      action: e.action,
-      target_type: e.targetType,
-      target_id: e.targetId,
-      metadata: e.metadata,
-      created_at: e.createdAt,
-    })),
+    events: paginated.items.map(auditRowToJson),
     next_cursor: paginated.next_cursor,
     has_more: paginated.has_more,
   });

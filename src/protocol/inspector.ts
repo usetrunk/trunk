@@ -88,8 +88,26 @@ export const AuditEvent = z.object({
   action: z.string(),
   target_type: z.string(),
   target_id: z.string().nullable(),
+  outcome: z.enum(["success", "denied", "failure"]),
+  reason_code: z.string().min(1),
+  credential: z.object({
+    type: z.enum(["agent_secret", "scoped_grant", "delegation_claim", "webhook_signature", "system", "anonymous"]),
+    id: z.string().nullable(),
+  }),
+  delegation: z.object({
+    id: Uuid,
+    parent_agent_id: Uuid.nullable(),
+  }).nullable(),
+  request_id: z.string().nullable(),
+  trace_id: z.string().regex(/^[a-f0-9]{32}$/).nullable(),
+  provenance: z.array(z.object({
+    kind: z.enum(["message", "task", "fact", "document"]),
+    id: z.string().min(1).max(500),
+    relation: z.enum(["origin", "input", "target", "derived_from"]),
+  })).max(32),
   metadata: z.record(z.string(), z.unknown()),
   created_at: IsoTimestamp,
+  explanation: z.string(),
 });
 export type AuditEventT = z.infer<typeof AuditEvent>;
 

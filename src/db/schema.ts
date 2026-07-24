@@ -170,6 +170,19 @@ export const auditEvents = pgTable("audit_events", {
   action: text("action").notNull(),
   targetType: text("target_type").notNull(),
   targetId: text("target_id"),
+  outcome: text("outcome").notNull().default("success"),
+  reasonCode: text("reason_code").notNull().default("ACTION_COMPLETED"),
+  credentialType: text("credential_type").notNull().default("system"),
+  credentialId: text("credential_id"),
+  delegationId: text("delegation_id").references(() => agentDelegations.id),
+  parentAgentId: text("parent_agent_id").references(() => agents.id),
+  requestId: text("request_id"),
+  traceId: text("trace_id"),
+  provenance: jsonb("provenance").$type<Array<{
+    kind: "message" | "task" | "fact" | "document";
+    id: string;
+    relation: "origin" | "input" | "target" | "derived_from";
+  }>>().notNull().default([]),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [

@@ -9,6 +9,7 @@ import {
   getFactTouches,
   getRecentAudits,
   getRecentThreads,
+  getAuditDetails,
 } from "../lib/inspector.js";
 import { isValidUUID } from "../lib/errors.js";
 import { html, raw } from "hono/html";
@@ -125,7 +126,12 @@ app.get("/", async (c) => {
       ${audits.length === 0
         ? html`<li class="empty">No recent audits.</li>`
         : audits.slice(0, 10).map((a) => html`
-          <li>${a.created_at} — ${a.action} on ${a.target_type}${a.target_id ? html` (${a.target_id.slice(0, 8)})` : ""}</li>
+          <li>
+            <a href="/inspector/audit/${a.id}/view">${a.action}</a>
+            <span class="${a.outcome === "denied" || a.outcome === "failure" ? "bad" : "ok"}">${a.outcome}</span>
+            <span class="pill">${a.reason_code}</span>
+            <span class="small">on ${a.target_type}${a.target_id ? html` (${a.target_id.slice(0, 8)})` : ""} via ${a.credential.type}</span>
+          </li>
         `)}
     </ul>
   </div>
@@ -141,6 +147,75 @@ app.get("/", async (c) => {
     recent_facts: factTouches,
     recent_audits: audits,
   });
+});
+
+app.get("/audit/:eventId", async (c) => {
+  const agentId = c.get("agentId");
+  const eventId = c.req.param("eventId");
+  if (!eventId || !isValidUUID(eventId)) {
+    return c.json({ error: "Invalid audit event id", code: "INVALID_INPUT" }, 400 as ContentfulStatusCode);
+  }
+  const event = await getAuditDetails(agentId, eventId);
+  if (!event) return c.json({ error: "Audit event not found", code: "NOT_FOUND" }, 404 as ContentfulStatusCode);
+  return c.json(event);
+});
+
+app.get("/audit/:eventId/view", async (c) => {
+  const agentId = c.get("agentId");
+  const eventId = c.req.param("eventId");
+  if (!eventId || !isValidUUID(eventId)) {
+    return c.text("Invalid audit event id", 400 as ContentfulStatusCode);
+  }
+  const event = await getAuditDetails(agentId, eventId);
+  if (!event) return c.text("Audit event not found", 404 as ContentfulStatusCode);
+
+  return c.html(html`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audit provenance — Trunk Inspector</title>
+  <style>${raw(inspectorStyles())}</style>
+</head>
+<body>
+  <div class="shell">
+    <div class="nav">
+      <a class="brand" href="/inspector">trunk / inspector</a>
+      <span class="small">Audit provenance</span>
+      <span class="spacer"></span>
+      <a class="small" href="/inspector">Back to overview</a>
+    </div>
+    <h1>${event.action}</h1>
+    <p class="${event.outcome === "denied" || event.outcome === "failure" ? "bad" : "ok"}">${event.outcome} — ${event.reason_code}</p>
+    <div class="card">
+      <h3>Explanation</h3>
+      <p>${event.explanation}</p>
+    </div>
+    <h2>Decision</h2>
+    <table>
+      <tbody>
+        <tr><th>Actor</th><td>${event.actor_agent ?? "unknown"}</td></tr>
+        <tr><th>Target</th><td>${event.target_type}${event.target_id ? ` / ${event.target_id}` : ""}</td></tr>
+        <tr><th>Credential</th><td>${event.credential.type}${event.credential.id ? ` / ${event.credential.id}` : ""}</td></tr>
+        <tr><th>Delegation</th><td>${event.delegation ? `${event.delegation.id} / parent ${event.delegation.parent_agent_id ?? "unknown"}` : "direct"}</td></tr>
+        <tr><th>Request</th><td>${event.request_id ?? "legacy"}${event.trace_id ? ` / trace ${event.trace_id}` : ""}</td></tr>
+        <tr><th>When</th><td>${event.created_at}</td></tr>
+      </tbody>
+    </table>
+    <h2>Provenance</h2>
+    ${event.provenance.length === 0
+      ? html`<p class="empty">No originating entity was supplied.</p>`
+      : html`<table>
+          <thead><tr><th>Relation</th><th>Kind</th><th>ID</th></tr></thead>
+          <tbody>${event.provenance.map((reference) => html`
+            <tr><td>${reference.relation}</td><td>${reference.kind}</td><td>${reference.id}</td></tr>
+          `)}</tbody>
+        </table>`}
+    <h2>Safe metadata</h2>
+    <pre>${JSON.stringify(event.metadata, null, 2)}</pre>
+  </div>
+</body>
+</html>`);
 });
 
 app.get("/health", async (c) => {
