@@ -11,10 +11,12 @@ import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs, isValidUUID } from "../lib/errors.js";
 import { recordFactWrite, getFactHistory, FactHistoryError } from "../lib/fact-history.js";
 import type { AgentVariables } from "../lib/types.js";
+import { actionControlMiddleware, activeQuarantine, activeQuarantineObjectIds } from "../lib/action-controls.js";
 
 const app = new Hono<AgentVariables>();
 
 app.use("/*", authMiddleware);
+app.use("/*", actionControlMiddleware);
 
 // --- Room-scoped fact endpoints (must be before /:contactId to avoid route conflicts) ---
 
@@ -105,7 +107,13 @@ app.put("/room/:roomId/facts/:key", requireValidUUIDs("roomId"), requireRoomMemb
       source_message_id: body.source_message_id ?? null,
       source_thread_id: body.source_thread_id ?? null,
     });
-    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { room_id: roomId, key, version, reason: body.reason });
+    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, {
+      room_id: roomId,
+      key,
+      version,
+      reason: body.reason,
+      source_message_id: body.source_message_id,
+    });
     return c.json({ key, value: body.value, version, updated_by: agentId });
   } catch (err) {
     if (err instanceof FactHistoryError) {
@@ -148,9 +156,12 @@ app.get("/workspace/:workspaceId/facts", requireValidUUIDs("workspaceId"), requi
 
   const scope = workspaceScope(workspaceId);
   const facts = await db.select().from(sharedFacts).where(eq(sharedFacts.scope, scope)).limit(200);
+  const quarantined = await activeQuarantineObjectIds(workspaceId, "fact");
 
   return c.json({
-    facts: facts.map((f) => ({ key: f.key, value: f.value, version: f.version, updated_by: f.updatedBy, updated_at: f.updatedAt })),
+    facts: facts
+      .filter((f) => !quarantined.has(f.key))
+      .map((f) => ({ key: f.key, value: f.value, version: f.version, updated_by: f.updatedBy, updated_at: f.updatedAt })),
   });
 });
 
@@ -163,6 +174,10 @@ app.get("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), 
   const key = c.req.param("key");
 
   if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  const quarantine = await activeQuarantine(workspaceId, "fact", key);
+  if (quarantine) {
+    return c.json({ error: "Fact is quarantined pending workspace review", code: "OBJECT_QUARANTINED", quarantine_id: quarantine.id }, 423);
+  }
 
   const [fact] = await db.select().from(sharedFacts).where(and(eq(sharedFacts.scope, workspaceScope(workspaceId)), eq(sharedFacts.key, key))).limit(1);
   if (!fact) return c.json({ error: "Fact not found", code: "NOT_FOUND" }, 404);
@@ -207,7 +222,13 @@ app.put("/workspace/:workspaceId/facts/:key", requireValidUUIDs("workspaceId"), 
       source_message_id: body.source_message_id ?? null,
       source_thread_id: body.source_thread_id ?? null,
     });
-    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { workspace_id: workspaceId, key, version, reason: body.reason });
+    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, {
+      workspace_id: workspaceId,
+      key,
+      version,
+      reason: body.reason,
+      source_message_id: body.source_message_id,
+    });
     return c.json({ key, value: body.value, version, updated_by: agentId });
   } catch (err) {
     if (err instanceof FactHistoryError) {
@@ -326,7 +347,13 @@ app.put("/:contactId/facts/:key", requireValidUUIDs("contactId"), async (c) => {
       source_message_id: body.source_message_id ?? null,
       source_thread_id: body.source_thread_id ?? null,
     });
-    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, { contact_id: contactId, key, version, reason: body.reason });
+    await audit(agentId, "fact.upsert", "shared_fact", `${scope}:${key}`, {
+      contact_id: contactId,
+      key,
+      version,
+      reason: body.reason,
+      source_message_id: body.source_message_id,
+    });
     return c.json({ key, value: body.value, version, updated_by: agentId });
   } catch (err) {
     if (err instanceof FactHistoryError) {
@@ -360,6 +387,10 @@ app.get("/workspace/:workspaceId/facts/:key/history", requireValidUUIDs("workspa
   const workspaceId = c.req.param("workspaceId");
   const key = c.req.param("key");
   if (!isValidFactKey(key)) return c.json({ error: "Invalid fact key", code: "INVALID_INPUT" }, 400);
+  const quarantine = await activeQuarantine(workspaceId, "fact", key);
+  if (quarantine) {
+    return c.json({ error: "Fact is quarantined pending workspace review", code: "OBJECT_QUARANTINED", quarantine_id: quarantine.id }, 423);
+  }
   const result = await getFactHistory(workspaceScope(workspaceId), key);
   return c.json(result);
 });

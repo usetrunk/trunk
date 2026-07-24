@@ -184,7 +184,7 @@ const PATHS: Record<string, unknown> = {
     response: "ClaimDelegationResponse",
   }),
   "/delegations/{id}": endpoint("delete", "/delegations/{id}", {
-    summary: "Revoke an open delegation",
+    summary: "Revoke an open or claimed strict delegation",
     operationId: "revokeDelegation",
     auth: true,
     response: "ApiError",
@@ -197,6 +197,65 @@ const PATHS: Record<string, unknown> = {
     auth: true,
     response: "ThreadTimeline",
     parameters: [{ name: "threadId", in: "path", required: true, schema: PARAM_UUID }],
+  }),
+  "/inspector/audit/{eventId}": endpoint("get", "/inspector/audit/{eventId}", {
+    summary: "Explain an audit decision and its provenance",
+    operationId: "inspectorAudit",
+    auth: true,
+    response: "AuditEvent",
+    parameters: [{ name: "eventId", in: "path", required: true, schema: PARAM_UUID }],
+  }),
+  "/action-controls": {
+    ...endpoint("get", "/action-controls", {
+      summary: "Get workspace high-risk action controls",
+      operationId: "getActionControls",
+      auth: true,
+      response: "ActionControlsResponse",
+    }),
+    ...endpoint("put", "/action-controls", {
+      summary: "Configure workspace high-risk action controls",
+      operationId: "updateActionControls",
+      auth: true,
+      requestBody: "UpdateWorkspaceActionControlsRequest",
+      response: "UpdatedActionControlsResponse",
+    }),
+  },
+  "/action-controls/confirmations": endpoint("get", "/action-controls/confirmations", {
+    summary: "List workspace action confirmations",
+    operationId: "listActionConfirmations",
+    auth: true,
+    response: "ListConfirmationsResponse",
+  }),
+  "/action-controls/confirmations/{id}": endpoint("post", "/action-controls/confirmations/{id}", {
+    summary: "Approve or reject a pending action",
+    operationId: "reviewActionConfirmation",
+    auth: true,
+    requestBody: "ReviewConfirmationRequest",
+    response: "ConfirmationResponse",
+    parameters: [{ name: "id", in: "path", required: true, schema: PARAM_UUID }],
+  }),
+  "/action-controls/quarantines": {
+    ...endpoint("get", "/action-controls/quarantines", {
+      summary: "List workspace quarantines",
+      operationId: "listQuarantines",
+      auth: true,
+      response: "ListQuarantinesResponse",
+    }),
+    ...endpoint("post", "/action-controls/quarantines", {
+      summary: "Quarantine a suspicious shared object",
+      operationId: "reportQuarantine",
+      auth: true,
+      requestBody: "ReportQuarantineRequest",
+      response: "QuarantineResponse",
+    }),
+  },
+  "/action-controls/quarantines/{id}": endpoint("post", "/action-controls/quarantines/{id}", {
+    summary: "Release or retain a quarantined object",
+    operationId: "reviewQuarantine",
+    auth: true,
+    requestBody: "ReviewQuarantineRequest",
+    response: "QuarantineResponse",
+    parameters: [{ name: "id", in: "path", required: true, schema: PARAM_UUID }],
   }),
 };
 

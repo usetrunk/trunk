@@ -13,6 +13,7 @@ import { canMessage, canMessageWorkspace, getWorkspaceMembers, isBlocked, getBlo
 import { isValidUUID, requireValidUUIDs, validatePayload } from "../lib/errors.js";
 import { messageToJson } from "../lib/response-shapes.js";
 import type { AgentVariables } from "../lib/types.js";
+import { actionControlMiddleware } from "../lib/action-controls.js";
 
 const VALID_INBOX_STATUSES = ["pending", "delivered", "processed", "replied"] as const;
 const MAX_TTL_SECONDS = 365 * 24 * 60 * 60; // 1 year
@@ -24,6 +25,7 @@ const DEFAULT_RETENTION_DAYS = 90;
 const EDIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 app.use("/*", authMiddleware);
+app.use("/*", actionControlMiddleware);
 
 // Send a message (supports workspace:<id> addressing for fan-out)
 app.post("/", async (c) => {
@@ -2287,4 +2289,3 @@ function receipt(message: MessageRow) {
 function payloadSizeBytes(payload: Record<string, unknown>): number {
   return new TextEncoder().encode(JSON.stringify(payload)).length;
 }
-

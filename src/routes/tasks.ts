@@ -13,6 +13,7 @@ import { fireRoomTaskWebhooks } from "../lib/room-webhook.js";
 import { taskToJson } from "../lib/response-shapes.js";
 import { checkpointTask, claimTask, CoordinationError, handoffTask } from "../lib/coordination.js";
 import type { AgentVariables } from "../lib/types.js";
+import { actionControlMiddleware } from "../lib/action-controls.js";
 
 const VALID_STATUSES = ["open", "in-progress", "done", "blocked"] as const;
 const VALID_PRIORITIES = ["critical", "high", "medium", "low"] as const;
@@ -68,6 +69,7 @@ function isValidDate(s: string): boolean {
 const app = new Hono<AgentVariables>();
 
 app.use("/*", authMiddleware);
+app.use("/*", actionControlMiddleware);
 
 function coordinationErrorResponse(c: Context, error: CoordinationError) {
   return c.json({ error: error.message, code: error.code, ...error.details }, error.status as 400);
@@ -282,6 +284,8 @@ app.get("/room/:roomId", requireValidUUIDs("roomId"), requireRoomMember(), async
 
   const scope = `room:${roomId}`;
   const conditions = [eq(tasks.scope, scope)];
+  const delegatedTaskId = c.get("delegation")?.taskId;
+  if (delegatedTaskId) conditions.push(eq(tasks.id, delegatedTaskId));
   if (status) conditions.push(eq(tasks.status, status));
   if (ownerFilter) conditions.push(eq(tasks.owner, ownerFilter));
   if (groupFilter) conditions.push(eq(tasks.group, groupFilter));

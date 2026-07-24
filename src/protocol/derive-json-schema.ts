@@ -74,6 +74,21 @@ const SCHEMAS: Array<{ name: string; schema: unknown }> = (
     ["TaskChangeEvent", P.TaskChangeEvent],
     ["FactTouch", P.FactTouch],
     ["InspectorSummary", P.InspectorSummary],
+    ["ControlledOperation", P.ControlledOperation],
+    ["QuarantineObjectType", P.QuarantineObjectType],
+    ["WorkspaceActionControls", P.WorkspaceActionControls],
+    ["UpdateWorkspaceActionControlsRequest", P.UpdateWorkspaceActionControlsRequest],
+    ["ActionControlsResponse", P.ActionControlsResponse],
+    ["UpdatedActionControlsResponse", P.UpdatedActionControlsResponse],
+    ["ConfirmationRecord", P.ConfirmationRecord],
+    ["ListConfirmationsResponse", P.ListConfirmationsResponse],
+    ["ConfirmationResponse", P.ConfirmationResponse],
+    ["ReviewConfirmationRequest", P.ReviewConfirmationRequest],
+    ["QuarantineRecord", P.QuarantineRecord],
+    ["ReportQuarantineRequest", P.ReportQuarantineRequest],
+    ["ReviewQuarantineRequest", P.ReviewQuarantineRequest],
+    ["ListQuarantinesResponse", P.ListQuarantinesResponse],
+    ["QuarantineResponse", P.QuarantineResponse],
   ] as const
 ).map(([name, schema]) => ({ name, schema }));
 

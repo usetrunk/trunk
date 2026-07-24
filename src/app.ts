@@ -21,6 +21,7 @@ import templatesRoutes from "./routes/templates.js";
 import attachmentsRoutes from "./routes/attachments.js";
 import slackRoutes from "./routes/slack.js";
 import inspectorRoutes from "./routes/inspector.js";
+import actionControlsRoutes from "./routes/action-controls.js";
 import { handleMcpRequest } from "./mcp/handler.js";
 import { db } from "./db/index.js";
 import { agents } from "./db/schema.js";
@@ -91,6 +92,7 @@ app.route("/templates", templatesRoutes);
 app.route("/attachments", attachmentsRoutes);
 app.route("/slack", slackRoutes);
 app.route("/inspector", inspectorRoutes);
+app.route("/action-controls", actionControlsRoutes);
 
 export default app;
 

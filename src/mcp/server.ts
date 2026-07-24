@@ -1,10 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { agents, contacts, messages, workspaces, workspaceContacts, tasks, rooms, roomMembers, roomWebhooks, sharedDocuments, sharedDocumentVersions, sharedFacts, reactions, webhookDeliveries, auditEvents, messageLabels, blockedContacts, contactNotes, messageTemplates, notificationPreferences, contactTags, savedSearches, messageEdits, attachments } from "../db/schema.js";
 import { contactScope, verifyContactAccess, isValidFactKey } from "../lib/context.js";
 import { eq, or, and, desc, lt, gt, gte, lte, ne, inArray } from "drizzle-orm";
-import { generateSecret, generatePairingCode, hashSecretAsync } from "../lib/auth.js";
+import { generateSecret, generatePairingCode, hashSecretAsync, resolveCredential, type ResolvedCredential } from "../lib/auth.js";
 import { deliverWebhook } from "../lib/webhook.js";
 import { canMessage, verifyWorkspaceAccess } from "../lib/workspace.js";
 import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
@@ -14,6 +15,24 @@ import { validateWebhookUrl } from "../lib/ssrf.js";
 import { runRoomHeartbeats } from "../lib/room-heartbeat.js";
 import { checkpointTask, claimTask, CoordinationError, getRoomState, handoffTask } from "../lib/coordination.js";
 import { claimDelegation, createDelegation, DelegationError, listDelegations, revokeDelegation } from "../lib/delegations.js";
+import { authorizationRequestForMcp, authorizeGrant } from "../lib/authorization.js";
+import { authorizeDelegation, delegationRequestForMcp } from "../lib/delegation-authorization.js";
+import { DelegationCapability } from "../protocol/delegations.js";
+import { auditRowToJson } from "../lib/inspector.js";
+import {
+  createAnonymousAuditExecutionContext,
+  createAuditExecutionContext,
+  provenanceFromMcpArguments,
+  recordAuthorizationDecision,
+  runWithAuditContext,
+  type AuditReasonCode,
+} from "../lib/audit.js";
+import {
+  activeQuarantine,
+  activeQuarantineObjectIds,
+  controlledActionForMcp,
+  enforceActionControl,
+} from "../lib/action-controls.js";
 
 type MessageRow = typeof messages.$inferSelect;
 
@@ -26,6 +45,7 @@ export function createTrunkMcpServer() {
     name: "trunk",
     version: "0.1.0",
   });
+  installAuthorization(server);
 
   // --- Tools ---
 
@@ -152,6 +172,7 @@ export function createTrunkMcpServer() {
       scheduled_at: z.string().optional().describe("ISO 8601 date for deferred delivery (must be in the future)"),
       expires_at: z.string().optional().describe("ISO 8601 date when message expires and is filtered from inbox"),
       ttl_seconds: z.number().optional().describe("Time-to-live in seconds (alternative to expires_at)"),
+      confirmation_id: z.string().optional().describe("Approved one-time confirmation ID when workspace policy requires it"),
     },
     async ({ secret, to, type, content, thread_id, reply_to, idempotency_key, context, urgency, finality, scheduled_at, expires_at, ttl_seconds }) => {
       const agent = await resolveAgent(secret);
@@ -1742,6 +1763,7 @@ export function createTrunkMcpServer() {
       estimate: z.number().optional().describe("Estimated hours/days"),
       context_ref: z.string().optional().describe("Reference to a thread or message"),
       metadata: z.record(z.string(), z.unknown()).optional().describe("Task metadata for coordination state such as claimed files, blockers, or verification commands"),
+      confirmation_id: z.string().optional().describe("Approved one-time confirmation ID when workspace policy requires it"),
     },
     async ({ secret, title, contact_id, room_id, workspace_id, description, priority, owner, due, start_date, group, depends_on, sequence, estimate, context_ref, metadata }) => {
       const agent = await resolveAgent(secret);
@@ -1822,6 +1844,8 @@ export function createTrunkMcpServer() {
       }
 
       const conditions = [eq(tasks.scope, scope)];
+      const delegatedTaskId = activeMcpCredential.getStore()?.delegation?.taskId;
+      if (delegatedTaskId) conditions.push(eq(tasks.id, delegatedTaskId));
       if (status) conditions.push(eq(tasks.status, status));
       if (cursor) {
         conditions.push(
@@ -1865,6 +1889,7 @@ export function createTrunkMcpServer() {
       sequence: z.number().optional().describe("Update ordering within group"),
       estimate: z.number().optional().describe("Update estimate (hours/days)"),
       metadata: z.record(z.string(), z.unknown()).optional().describe("Replace task metadata for coordination state"),
+      confirmation_id: z.string().optional().describe("Approved one-time confirmation ID when workspace policy requires it"),
     },
     async ({ secret, contact_id, room_id, workspace_id, task_id, status, priority, owner, title, description, due, start_date, group, depends_on, sequence, estimate, metadata }) => {
       const agent = await resolveAgent(secret);
@@ -2017,6 +2042,7 @@ export function createTrunkMcpServer() {
       room_id: z.string().optional().describe("Room ID (for room-scoped tasks)"),
       workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped tasks)"),
       task_id: z.string().describe("Task ID to delete"),
+      confirmation_id: z.string().optional().describe("Approved one-time confirmation ID when workspace policy requires it"),
     },
     async ({ secret, contact_id, room_id, workspace_id, task_id }) => {
       const agent = await resolveAgent(secret);
@@ -2049,6 +2075,8 @@ export function createTrunkMcpServer() {
       runtime: z.string().optional().describe("Runtime that will spawn the child, e.g. codex, claude_code, opencode, custom"),
       relationship: z.string().optional().describe("Relationship label, default delegated_worker"),
       collaboration_role: z.string().optional().describe("Room-specific role for the child, e.g. reviewer, scout, builder"),
+      containment: z.enum(["legacy", "strict"]).optional().describe("Opt-in strict task-bound credential containment; defaults to legacy"),
+      capabilities: z.array(DelegationCapability).optional().describe("Strict child capability ceiling; omitted uses the standard task-worker envelope"),
       ttl_seconds: z.number().optional().describe("Claim-token lifetime in seconds, max 30 days"),
       expires_at: z.string().optional().describe("Claim-token expiry as ISO timestamp"),
       metadata: z.record(z.string(), z.unknown()).optional().describe("Delegation metadata"),
@@ -2060,7 +2088,7 @@ export function createTrunkMcpServer() {
       delegation_id: z.string().optional().describe("Delegation ID for revoke action"),
       reason: z.string().optional().describe("Revoke reason"),
     },
-    async ({ secret, action, room_id, task_id, name, runtime, relationship, collaboration_role, ttl_seconds, expires_at, metadata, claim_token, owner, webhook_url, profile_role, runtime_session_ref, delegation_id, reason }) => {
+    async ({ secret, action, room_id, task_id, name, runtime, relationship, collaboration_role, containment, capabilities, ttl_seconds, expires_at, metadata, claim_token, owner, webhook_url, profile_role, runtime_session_ref, delegation_id, reason }) => {
       try {
         if (action === "claim") {
           const result = await claimDelegation({ claim_token: claim_token ?? "", name, owner, webhook_url, profile_role, runtime_session_ref, metadata });
@@ -2079,6 +2107,8 @@ export function createTrunkMcpServer() {
             runtime: runtime ?? "custom",
             relationship: relationship ?? "delegated_worker",
             collaboration_role,
+            containment: containment ?? "legacy",
+            capabilities,
             ttl_seconds,
             expires_at,
             metadata,
@@ -2113,7 +2143,11 @@ export function createTrunkMcpServer() {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
       try {
-        const result = await getRoomState(agent.id, room_id);
+        const result = await getRoomState(
+          agent.id,
+          room_id,
+          activeMcpCredential.getStore()?.delegation?.taskId,
+        );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         if (error instanceof CoordinationError) return coordinationErrorResult(error);
@@ -2900,6 +2934,7 @@ export function createTrunkMcpServer() {
       content_type: z.string().optional().describe("Content type (for create, default: text/markdown)"),
       limit: z.number().optional().describe("Max documents to return for list action (default 50, max 100)"),
       cursor: z.string().optional().describe("Pagination cursor for list action"),
+      confirmation_id: z.string().optional().describe("Approved one-time confirmation ID when workspace policy requires it"),
     },
     async ({ secret, action, contact_id, room_id, workspace_id, doc_id, name, body, content_type, limit: limitParam, cursor: cursorParam }) => {
       const agent = await resolveAgent(secret);
@@ -2946,20 +2981,25 @@ export function createTrunkMcpServer() {
         }
         const docs = await db.select().from(sharedDocuments).where(and(...listConditions)).orderBy(desc(sharedDocuments.createdAt), desc(sharedDocuments.id)).limit(limit + 1);
         const page = paginateResults(docs, limit);
-        return { content: [{ type: "text", text: JSON.stringify({ documents: page.items.map(d => ({ id: d.id, name: d.name, content_type: d.contentType, version: d.version, last_edited_by: d.lastEditedBy, updated_at: d.updatedAt })), next_cursor: page.next_cursor, has_more: page.has_more }, null, 2) }] };
+        const quarantined = workspace_id ? await activeQuarantineObjectIds(workspace_id, "document") : new Set<string>();
+        return { content: [{ type: "text", text: JSON.stringify({ documents: page.items.filter((d) => !quarantined.has(d.id)).map(d => ({ id: d.id, name: d.name, content_type: d.contentType, version: d.version, last_edited_by: d.lastEditedBy, updated_at: d.updatedAt })), next_cursor: page.next_cursor, has_more: page.has_more }, null, 2) }] };
       }
 
       if (action === "get") {
         if (!doc_id) return errorResult("doc_id is required for get");
+        if (workspace_id) {
+          const quarantine = await activeQuarantine(workspace_id, "document", doc_id);
+          if (quarantine) return errorResult(`OBJECT_QUARANTINED: ${quarantine.id}`);
+        }
         const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, doc_id)).limit(1);
-        if (!doc) return errorResult("Document not found");
+        if (!doc || doc.scope !== scope) return errorResult("Document not found");
         return { content: [{ type: "text", text: JSON.stringify({ id: doc.id, name: doc.name, content_type: doc.contentType, body: doc.body, version: doc.version, last_edited_by: doc.lastEditedBy, created_at: doc.createdAt, updated_at: doc.updatedAt }, null, 2) }] };
       }
 
       if (action === "update") {
         if (!doc_id || !body) return errorResult("doc_id and body are required for update");
         const [existing] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, doc_id)).limit(1);
-        if (!existing) return errorResult("Document not found");
+        if (!existing || existing.scope !== scope) return errorResult("Document not found");
         const newVersion = existing.version + 1;
         await db.insert(sharedDocumentVersions).values({ documentId: doc_id, version: newVersion, body, editedBy: agent.id });
         const updates: Record<string, unknown> = { body, version: newVersion, lastEditedBy: agent.id, updatedAt: new Date() };
@@ -2996,16 +3036,31 @@ export function createTrunkMcpServer() {
     async ({ secret, contact_id, room_id, workspace_id, doc_id, version }) => {
       const agent = await resolveAgent(secret);
       if (!agent) return errorResult("Invalid secret");
+      if (workspace_id) {
+        const quarantine = await activeQuarantine(workspace_id, "document", doc_id);
+        if (quarantine) return errorResult(`OBJECT_QUARANTINED: ${quarantine.id}`);
+      }
 
       if (!contact_id && !room_id && !workspace_id) return errorResult("contact_id, room_id, or workspace_id is required");
+      let scope: string;
       if (workspace_id) {
         if (!(await verifyWorkspaceAccess(agent.id, workspace_id))) return errorResult("Not a workspace member");
+        scope = `workspace:${workspace_id}`;
       } else if (room_id) {
         const members = await db.select().from(roomMembers).where(and(eq(roomMembers.roomId, room_id), eq(roomMembers.agentId, agent.id))).limit(1);
         if (members.length === 0) return errorResult("Not a room member");
+        scope = `room:${room_id}`;
       } else {
         if (!(await verifyContactAccess(agent.id, contact_id!))) return errorResult("Not a contact");
+        scope = contactScope(agent.id, contact_id!);
       }
+
+      const [document] = await db
+        .select({ id: sharedDocuments.id })
+        .from(sharedDocuments)
+        .where(and(eq(sharedDocuments.id, doc_id), eq(sharedDocuments.scope, scope)))
+        .limit(1);
+      if (!document) return errorResult("Document not found");
 
       if (version !== undefined) {
         const [v] = await db
@@ -3118,6 +3173,7 @@ export function createTrunkMcpServer() {
       workspace_id: z.string().optional().describe("Workspace ID (for workspace-scoped facts)"),
       key: z.string().optional().describe("Fact key (required for get/put/delete, not needed for list)"),
       value: z.unknown().optional().describe("Fact value (for put)"),
+      confirmation_id: z.string().optional().describe("Approved one-time confirmation ID when workspace policy requires it"),
     },
     async ({ secret, action, contact_id, room_id, workspace_id, key, value }) => {
       const agent = await resolveAgent(secret);
@@ -3140,13 +3196,18 @@ export function createTrunkMcpServer() {
 
       if (action === "list") {
         const facts = await db.select().from(sharedFacts).where(eq(sharedFacts.scope, scope));
-        return { content: [{ type: "text", text: JSON.stringify({ facts: facts.map((f) => ({ key: f.key, value: f.value, version: f.version, updated_by: f.updatedBy, updated_at: f.updatedAt })) }, null, 2) }] };
+        const quarantined = workspace_id ? await activeQuarantineObjectIds(workspace_id, "fact") : new Set<string>();
+        return { content: [{ type: "text", text: JSON.stringify({ facts: facts.filter((f) => !quarantined.has(f.key)).map((f) => ({ key: f.key, value: f.value, version: f.version, updated_by: f.updatedBy, updated_at: f.updatedAt })) }, null, 2) }] };
       }
 
       if (!key) return errorResult("key is required for get/put/delete actions");
       if (!isValidFactKey(key)) return errorResult("Invalid fact key");
 
       if (action === "get") {
+        if (workspace_id) {
+          const quarantine = await activeQuarantine(workspace_id, "fact", key);
+          if (quarantine) return errorResult(`OBJECT_QUARANTINED: ${quarantine.id}`);
+        }
         const [fact] = await db.select().from(sharedFacts).where(and(eq(sharedFacts.scope, scope), eq(sharedFacts.key, key))).limit(1);
         if (!fact) return errorResult("Fact not found");
         return { content: [{ type: "text", text: JSON.stringify({ key: fact.key, value: fact.value, version: fact.version, updated_by: fact.updatedBy, updated_at: fact.updatedAt }, null, 2) }] };
@@ -3298,14 +3359,7 @@ export function createTrunkMcpServer() {
         content: [{
           type: "text",
           text: JSON.stringify({
-            events: paginated.items.map((e) => ({
-              id: e.id,
-              action: e.action,
-              target_type: e.targetType,
-              target_id: e.targetId,
-              metadata: e.metadata,
-              created_at: e.createdAt,
-            })),
+            events: paginated.items.map(auditRowToJson),
             next_cursor: paginated.next_cursor,
             has_more: paginated.has_more,
           }, null, 2),
@@ -4213,13 +4267,9 @@ export function createTrunkMcpServer() {
 // --- Helpers ---
 
 async function resolveAgent(secret: string) {
-  const hash = await hashSecretAsync(secret);
-  const [agent] = await db
-    .select()
-    .from(agents)
-    .where(eq(agents.secretHash, hash))
-    .limit(1);
-  return agent || null;
+  const activeCredential = activeMcpCredential.getStore();
+  if (activeCredential) return activeCredential.agent;
+  return (await resolveCredential(secret))?.agent ?? null;
 }
 
 function errorResult(message: string) {
@@ -4234,4 +4284,165 @@ function coordinationErrorResult(error: CoordinationError) {
     }],
     isError: true,
   };
+}
+
+const activeMcpCredential = new AsyncLocalStorage<ResolvedCredential>();
+
+function installAuthorization(server: McpServer): void {
+  const registerTool = server.tool;
+  server.tool = (function (...registration: unknown[]) {
+    const toolName = registration[0];
+    const handlerIndex = registration.length - 1;
+    const handler = registration[handlerIndex];
+    if (typeof toolName !== "string" || typeof handler !== "function") {
+      return Reflect.apply(registerTool, server, registration);
+    }
+
+    registration[handlerIndex] = async (args: unknown, extra: unknown) => {
+      if (!isRecord(args) || typeof args.secret !== "string") {
+        return Reflect.apply(handler, undefined, [args, extra]);
+      }
+
+      const credential = await resolveCredential(args.secret);
+      if (!credential) {
+        const executionContext = createAnonymousAuditExecutionContext({
+          provenance: provenanceFromMcpArguments(args),
+        });
+        await runWithAuditContext(executionContext, () =>
+          recordMcpAuthorization(null, toolName, args, "denied", "INVALID_CREDENTIAL")
+        );
+        return errorResult("UNAUTHORIZED: Invalid or expired credential");
+      }
+      const authorizationRequest = authorizationRequestForMcp(toolName, args, credential.agent);
+      const executionContext = await createAuditExecutionContext(credential, {
+        provenance: provenanceFromMcpArguments(args),
+      });
+      if (credential.grant && credential.scopes) {
+        const decision = authorizeGrant(
+          { grant: credential.grant, scopes: credential.scopes },
+          authorizationRequest,
+        );
+        if (!decision.allowed) {
+          await runWithAuditContext(executionContext, () =>
+            recordMcpAuthorization(credential.agentId, toolName, args, "denied", decision.code, authorizationRequest?.scope)
+          );
+          return errorResult(`${decision.code}: ${decision.message}`);
+        }
+      }
+      if (credential.delegation) {
+        const request = delegationRequestForMcp(toolName, args, credential.delegation);
+        const decision = request && "allowed" in request
+          ? request
+          : authorizeDelegation(credential.delegation, request);
+        if (!decision.allowed) {
+          await runWithAuditContext(executionContext, () =>
+            recordMcpAuthorization(credential.agentId, toolName, args, "denied", decision.code, authorizationRequest?.scope)
+          );
+          return errorResult(`${decision.code}: ${decision.message}`);
+        }
+      }
+
+      const controlledAction = await controlledActionForMcp(toolName, args);
+      if (controlledAction) {
+        if (controlledAction.fingerprint.startsWith("quarantined:")) {
+          return errorResult(`OBJECT_QUARANTINED: ${controlledAction.fingerprint.slice("quarantined:".length)}`);
+        }
+        const controlDecision = await enforceActionControl({
+          actorAgentId: credential.agentId,
+          action: controlledAction,
+          confirmationId: typeof args.confirmation_id === "string" ? args.confirmation_id : null,
+        });
+        if (!controlDecision.allowed) {
+          return errorResult(`${controlDecision.code}: ${JSON.stringify({
+            message: controlDecision.message,
+            confirmation: controlDecision.confirmation,
+          })}`);
+        }
+      }
+
+      return await runWithAuditContext(executionContext, async () => {
+        const result = await activeMcpCredential.run(
+          credential,
+          () => Reflect.apply(handler, undefined, [args, extra]),
+        );
+        const deniedReason = mcpDenialReason(result);
+        await recordMcpAuthorization(
+          credential.agentId,
+          toolName,
+          args,
+          deniedReason ? "denied" : "success",
+          deniedReason ?? "AUTHORIZED",
+          authorizationRequest?.scope,
+        );
+        return result;
+      });
+    };
+    return Reflect.apply(registerTool, server, registration);
+  }) as typeof server.tool;
+}
+
+async function recordMcpAuthorization(
+  actorAgent: string | null,
+  toolName: string,
+  args: Record<string, unknown>,
+  outcome: "success" | "denied" | "failure",
+  reasonCode: AuditReasonCode,
+  scope?: string,
+): Promise<void> {
+  const target = mcpAuditTarget(args);
+  await recordAuthorizationDecision({
+    actorAgent,
+    outcome,
+    reasonCode,
+    targetType: target.type,
+    targetId: target.id,
+    surface: "mcp",
+    operation: toolName,
+    scope,
+  });
+}
+
+function mcpAuditTarget(args: Record<string, unknown>): { type: string; id: string | null } {
+  const candidates: Array<[string, unknown]> = [
+    ["message", args.message_id],
+    ["task", args.task_id],
+    ["document", args.doc_id],
+    ["room", args.room_id],
+    ["workspace", args.workspace_id],
+    ["agent", args.agent_id ?? args.contact_id ?? args.to],
+  ];
+  for (const [type, value] of candidates) {
+    if (typeof value !== "string" || value.length === 0) continue;
+    if (type === "agent" && value.includes(":")) {
+      const [addressType, id] = value.split(":", 2);
+      if (addressType === "room" || addressType === "workspace") return { type: addressType, id };
+    }
+    return { type, id: value };
+  }
+  return { type: "mcp_tool", id: null };
+}
+
+function mcpDenialReason(result: unknown): AuditReasonCode | null {
+  if (!isRecord(result) || result.isError !== true) return null;
+  const serialized = JSON.stringify(result);
+  const standardized = [
+    "GRANT_ACTION_NOT_ALLOWED",
+    "INSUFFICIENT_SCOPE",
+    "AUDIENCE_MISMATCH",
+    "DELEGATION_ACTION_NOT_ALLOWED",
+    "DELEGATION_SCOPE_MISMATCH",
+    "DELEGATION_PRIVILEGE_ESCALATION",
+    "NOT_MEMBER",
+    "NOT_OWNER",
+    "INSUFFICIENT_ROLE",
+    "BLOCKED",
+    "FORBIDDEN",
+    "UNAUTHORIZED",
+  ] as const;
+  for (const code of standardized) {
+    if (serialized.includes(code)) return code;
+  }
+  if (/not (?:a |an )?(?:contact|member)|pair first/i.test(serialized)) return "NOT_MEMBER";
+  if (/not authorized|only .* can|cannot perform/i.test(serialized)) return "FORBIDDEN";
+  return null;
 }

@@ -9,6 +9,16 @@ export const workspaces = pgTable("workspaces", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const workspaceActionControls = pgTable("workspace_action_controls", {
+  workspaceId: text("workspace_id").primaryKey().references(() => workspaces.id),
+  enabled: integer("enabled").notNull().default(0),
+  confirmationOperations: jsonb("confirmation_operations").$type<string[]>().notNull().default([]),
+  quarantineEnabled: integer("quarantine_enabled").notNull().default(0),
+  quarantineObjectTypes: jsonb("quarantine_object_types").$type<string[]>().notNull().default([]),
+  updatedBy: text("updated_by").notNull().references(() => agents.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const agents = pgTable("agents", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   name: text("name").notNull(),
@@ -188,6 +198,45 @@ export const auditEvents = pgTable("audit_events", {
 }, (table) => [
   index("audit_events_actor_idx").on(table.actorAgent, table.createdAt),
   index("audit_events_target_idx").on(table.targetType, table.targetId),
+  index("audit_events_request_idx").on(table.requestId, table.createdAt),
+  index("audit_events_decision_idx").on(table.actorAgent, table.outcome, table.reasonCode, table.createdAt),
+]);
+
+export const actionConfirmations = pgTable("action_confirmations", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  requestedBy: text("requested_by").notNull().references(() => agents.id),
+  operation: text("operation").notNull(),
+  requestFingerprint: text("request_fingerprint").notNull(),
+  targetType: text("target_type").notNull(),
+  targetId: text("target_id"),
+  status: text("status").notNull().default("pending"),
+  reviewedBy: text("reviewed_by").references(() => agents.id),
+  reviewNote: text("review_note"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  executedAt: timestamp("executed_at", { withTimezone: true }),
+}, (table) => [
+  index("action_confirmations_workspace_idx").on(table.workspaceId, table.status, table.createdAt),
+  index("action_confirmations_requester_idx").on(table.requestedBy, table.createdAt),
+]);
+
+export const sharedObjectQuarantines = pgTable("shared_object_quarantines", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  objectType: text("object_type").notNull(),
+  objectId: text("object_id").notNull(),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("active"),
+  reportedBy: text("reported_by").notNull().references(() => agents.id),
+  reviewedBy: text("reviewed_by").references(() => agents.id),
+  reviewNote: text("review_note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+}, (table) => [
+  index("shared_object_quarantines_lookup_idx").on(table.workspaceId, table.objectType, table.objectId, table.status),
+  index("shared_object_quarantines_workspace_idx").on(table.workspaceId, table.status, table.createdAt),
 ]);
 
 export const rateLimits = pgTable("rate_limits", {

@@ -10,6 +10,7 @@ import { parsePaginationQuery, paginateResults } from "../lib/pagination.js";
 import { checkRateLimit, setRateLimitHeaders } from "../lib/rate-limit.js";
 import { requireValidUUIDs } from "../lib/errors.js";
 import type { AgentVariables } from "../lib/types.js";
+import { actionControlMiddleware, activeQuarantine, activeQuarantineObjectIds } from "../lib/action-controls.js";
 
 const app = new Hono<AgentVariables>();
 const MAX_DOC_NAME_LENGTH = 255;
@@ -18,6 +19,7 @@ const MAX_CONTENT_TYPE_LENGTH = 100;
 const MAX_DOCS_PER_SCOPE = 200;
 
 app.use("/*", authMiddleware);
+app.use("/*", actionControlMiddleware);
 
 function validateDocName(name: string): string | null {
   if (!name.trim()) return "name must not be blank";
@@ -396,8 +398,11 @@ app.get("/workspace/:workspaceId", requireValidUUIDs("workspaceId"), requireWork
 
   const docs = await db.select().from(sharedDocuments).where(and(...conditions)).orderBy(desc(sharedDocuments.createdAt), desc(sharedDocuments.id)).limit(limit + 1);
   const page = paginateResults(docs, limit);
+  const quarantined = await activeQuarantineObjectIds(workspaceId, "document");
   return c.json({
-    documents: page.items.map(d => ({ id: d.id, name: d.name, content_type: d.contentType, version: d.version, last_edited_by: d.lastEditedBy, updated_at: d.updatedAt })),
+    documents: page.items
+      .filter((d) => !quarantined.has(d.id))
+      .map(d => ({ id: d.id, name: d.name, content_type: d.contentType, version: d.version, last_edited_by: d.lastEditedBy, updated_at: d.updatedAt })),
     next_cursor: page.next_cursor,
     has_more: page.has_more,
   });
@@ -412,6 +417,10 @@ app.get("/workspace/:workspaceId/:docId", requireValidUUIDs("workspaceId", "docI
   }
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
+  const quarantine = await activeQuarantine(workspaceId, "document", docId);
+  if (quarantine) {
+    return c.json({ error: "Document is quarantined pending workspace review", code: "OBJECT_QUARANTINED", quarantine_id: quarantine.id }, 423);
+  }
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
@@ -463,6 +472,10 @@ app.get("/workspace/:workspaceId/:docId/versions", requireValidUUIDs("workspaceI
   }
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
+  const quarantine = await activeQuarantine(workspaceId, "document", docId);
+  if (quarantine) {
+    return c.json({ error: "Document is quarantined pending workspace review", code: "OBJECT_QUARANTINED", quarantine_id: quarantine.id }, 423);
+  }
 
   const [doc] = await db.select().from(sharedDocuments).where(eq(sharedDocuments.id, docId)).limit(1);
   if (!doc || doc.scope !== workspaceScope(workspaceId)) return c.json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" }, 404);
@@ -508,6 +521,10 @@ app.get("/workspace/:workspaceId/:docId/versions/:version", requireValidUUIDs("w
   }
   const workspaceId = c.req.param("workspaceId");
   const docId = c.req.param("docId");
+  const quarantine = await activeQuarantine(workspaceId, "document", docId);
+  if (quarantine) {
+    return c.json({ error: "Document is quarantined pending workspace review", code: "OBJECT_QUARANTINED", quarantine_id: quarantine.id }, 423);
+  }
   const version = parseInt(c.req.param("version"));
   if (isNaN(version) || version < 1) return c.json({ error: "Invalid version", code: "INVALID_INPUT" }, 400);
 

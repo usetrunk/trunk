@@ -57,6 +57,21 @@ const required: Array<[string, unknown]> = [
   ["TaskChangeEvent", P.TaskChangeEvent],
   ["FactTouch", P.FactTouch],
   ["InspectorSummary", P.InspectorSummary],
+  ["ControlledOperation", P.ControlledOperation],
+  ["QuarantineObjectType", P.QuarantineObjectType],
+  ["WorkspaceActionControls", P.WorkspaceActionControls],
+  ["UpdateWorkspaceActionControlsRequest", P.UpdateWorkspaceActionControlsRequest],
+  ["ActionControlsResponse", P.ActionControlsResponse],
+  ["UpdatedActionControlsResponse", P.UpdatedActionControlsResponse],
+  ["ConfirmationRecord", P.ConfirmationRecord],
+  ["ListConfirmationsResponse", P.ListConfirmationsResponse],
+  ["ConfirmationResponse", P.ConfirmationResponse],
+  ["ReviewConfirmationRequest", P.ReviewConfirmationRequest],
+  ["QuarantineRecord", P.QuarantineRecord],
+  ["ReportQuarantineRequest", P.ReportQuarantineRequest],
+  ["ReviewQuarantineRequest", P.ReviewQuarantineRequest],
+  ["ListQuarantinesResponse", P.ListQuarantinesResponse],
+  ["QuarantineResponse", P.QuarantineResponse],
 ];
 
 for (const [name, schema] of required) {
@@ -149,6 +164,8 @@ const positiveCases: Array<[string, unknown, unknown]> = [
       runtime: "codex",
       name: "Codex reviewer",
       collaboration_role: "reviewer",
+      containment: "legacy",
+      capabilities: [],
       token_id: "td_example",
       status: "open",
       expires_at: "2026-01-01T00:00:00.000Z",
@@ -160,6 +177,18 @@ const positiveCases: Array<[string, unknown, unknown]> = [
     },
   ],
   ["ClaimDelegationRequest", P.ClaimDelegationRequest, { claim_token: "td_token.secret", name: "Codex reviewer" }],
+  [
+    "WorkspaceActionControls",
+    P.WorkspaceActionControls,
+    {
+      enabled: true,
+      confirmation_operations: ["facts.upsert"],
+      quarantine_enabled: true,
+      quarantine_object_types: ["fact"],
+    },
+  ],
+  ["ReviewConfirmationRequest", P.ReviewConfirmationRequest, { decision: "approve" }],
+  ["ReportQuarantineRequest", P.ReportQuarantineRequest, { object_type: "fact", object_id: "release.phase", reason: "Unexpected provenance" }],
 ];
 
 const negativeCases: Array<[string, unknown, unknown]> = [
@@ -196,6 +225,8 @@ const negativeCases: Array<[string, unknown, unknown]> = [
   ["CreateGrantRequest (no scopes)", P.CreateGrantRequest, { name: "test" }],
   ["CreateDelegationRequest (missing room)", P.CreateDelegationRequest, { name: "worker" }],
   ["ClaimDelegationRequest (missing token)", P.ClaimDelegationRequest, { name: "worker" }],
+  ["WorkspaceActionControls (unknown operation)", P.WorkspaceActionControls, { enabled: true, confirmation_operations: ["shell.exec"], quarantine_enabled: false, quarantine_object_types: [] }],
+  ["ReportQuarantineRequest (missing reason)", P.ReportQuarantineRequest, { object_type: "fact", object_id: "release.phase" }],
 ];
 
 for (const [name, schema, value] of positiveCases) {
