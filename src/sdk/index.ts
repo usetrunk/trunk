@@ -480,6 +480,8 @@ export type DelegationRecord = {
   runtime: string;
   name: string;
   collaboration_role: string | null;
+  containment: "legacy" | "strict";
+  capabilities: DelegationCapability[];
   token_id: string;
   status: "open" | "claimed" | "revoked" | "expired";
   expires_at: string | null;
@@ -497,10 +499,24 @@ export type CreateDelegationRequest = {
   runtime?: string;
   relationship?: string;
   collaboration_role?: string;
+  containment?: "legacy" | "strict";
+  capabilities?: DelegationCapability[];
   ttl_seconds?: number;
   expires_at?: string;
   metadata?: Record<string, unknown>;
 };
+
+export type DelegationCapability =
+  | "messages:send"
+  | "messages:read"
+  | "facts:read"
+  | "facts:write"
+  | "tasks:read"
+  | "tasks:write"
+  | "rooms:read"
+  | "documents:read"
+  | "documents:write"
+  | "delegations:create";
 
 export type CreateDelegationResponse = {
   delegation: DelegationRecord;
@@ -783,11 +799,37 @@ export type ThreadListResponse = {
 
 export type AuditEvent = {
   id: string;
+  actor_agent: string | null;
   action: string;
   target_type: string;
   target_id: string | null;
+  outcome: "success" | "denied" | "failure";
+  reason_code: string;
+  credential: {
+    type: "agent_secret" | "scoped_grant" | "delegation_claim" | "webhook_signature" | "system" | "anonymous";
+    id: string | null;
+  };
+  delegation: {
+    id: string;
+    parent_agent_id: string | null;
+  } | null;
+  request_id: string | null;
+  trace_id: string | null;
+  provenance: Array<{
+    kind: "message" | "task" | "fact" | "document";
+    id: string;
+    relation: "origin" | "input" | "target" | "derived_from";
+  }>;
   metadata: Record<string, unknown>;
   created_at: string | Date;
+  explanation: string;
+};
+
+export type AuditProvenanceInput = {
+  message_id?: string;
+  task_id?: string;
+  fact_id?: string;
+  document_id?: string;
 };
 
 export type MessageLabel = {
@@ -950,6 +992,54 @@ export type ReadyResponse = {
   code?: string;
 };
 
+export type ControlledOperation =
+  | "messages.send"
+  | "tasks.create"
+  | "tasks.update"
+  | "tasks.delete"
+  | "facts.upsert"
+  | "facts.delete"
+  | "documents.create"
+  | "documents.update"
+  | "documents.delete";
+
+export type WorkspaceActionControls = {
+  enabled: boolean;
+  confirmation_operations: ControlledOperation[];
+  quarantine_enabled: boolean;
+  quarantine_object_types: Array<"fact" | "document">;
+};
+
+export type ActionConfirmation = {
+  id: string;
+  workspace_id: string;
+  requested_by: string;
+  operation: ControlledOperation;
+  target_type: string;
+  target_id: string | null;
+  status: "pending" | "approved" | "rejected" | "executed" | "expired";
+  reviewed_by: string | null;
+  review_note: string | null;
+  expires_at: string;
+  created_at: string;
+  reviewed_at: string | null;
+  executed_at: string | null;
+};
+
+export type SharedObjectQuarantine = {
+  id: string;
+  workspace_id: string;
+  object_type: "fact" | "document";
+  object_id: string;
+  reason: string;
+  status: "active" | "released";
+  reported_by: string;
+  reviewed_by: string | null;
+  review_note: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+};
+
 export type TrunkClientOptions = {
   baseUrl: string;
   secret?: string;
@@ -1106,6 +1196,56 @@ export class TrunkClient {
 
   deleteWorkspace(): Promise<{ ok: boolean; deleted: string }> {
     return this.request("/workspaces", { method: "DELETE" });
+  }
+
+  actionControls(): Promise<{
+    controls: WorkspaceActionControls;
+    operation_catalog: ControlledOperation[];
+    quarantine_object_catalog: Array<"fact" | "document">;
+  }> {
+    return this.request("/action-controls");
+  }
+
+  updateActionControls(controls: WorkspaceActionControls): Promise<{ controls: WorkspaceActionControls }> {
+    return this.request("/action-controls", { method: "PUT", body: controls });
+  }
+
+  listActionConfirmations(): Promise<{ confirmations: ActionConfirmation[] }> {
+    return this.request("/action-controls/confirmations");
+  }
+
+  reviewActionConfirmation(
+    confirmationId: string,
+    decision: "approve" | "reject",
+    note?: string,
+  ): Promise<{ confirmation: ActionConfirmation }> {
+    return this.request(`/action-controls/confirmations/${encodeURIComponent(confirmationId)}`, {
+      method: "POST",
+      body: { decision, note },
+    });
+  }
+
+  listQuarantines(): Promise<{ quarantines: SharedObjectQuarantine[] }> {
+    return this.request("/action-controls/quarantines");
+  }
+
+  reportQuarantine(input: {
+    object_type: "fact" | "document";
+    object_id: string;
+    reason: string;
+  }): Promise<{ quarantine: SharedObjectQuarantine }> {
+    return this.request("/action-controls/quarantines", { method: "POST", body: input });
+  }
+
+  reviewQuarantine(
+    quarantineId: string,
+    decision: "release" | "retain",
+    note?: string,
+  ): Promise<{ quarantine: SharedObjectQuarantine }> {
+    return this.request(`/action-controls/quarantines/${encodeURIComponent(quarantineId)}`, {
+      method: "POST",
+      body: { decision, note },
+    });
   }
 
   contacts(): Promise<ContactsResponse> {
@@ -1778,7 +1918,7 @@ export class TrunkClient {
 
   raw<T = unknown>(
     path: string,
-    options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string } = {},
+    options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string; confirmationId?: string; provenance?: AuditProvenanceInput } = {},
   ): Promise<T> {
     return this.request<T>(path, options);
   }
@@ -1887,13 +2027,17 @@ export class TrunkClient {
     return this.request(`/inspector/thread/${encodeURIComponent(threadId)}`);
   }
 
+  inspectorAudit(eventId: string): Promise<AuditEvent> {
+    return this.request(`/inspector/audit/${encodeURIComponent(eventId)}`);
+  }
+
   inspectorSummary(): Promise<unknown> {
     return this.request("/inspector");
   }
 
   private async request<T>(
     path: string,
-    options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string } = {}
+    options: { method?: string; body?: unknown; auth?: boolean; idempotencyKey?: string; ifMatch?: string; confirmationId?: string; provenance?: AuditProvenanceInput } = {}
   ): Promise<T> {
     const headers = new Headers();
     if (options.body !== undefined) headers.set("Content-Type", "application/json");
@@ -1902,6 +2046,11 @@ export class TrunkClient {
       headers.set("Idempotency-Key", options.idempotencyKey ?? crypto.randomUUID());
     }
     if (options.ifMatch) headers.set("If-Match", options.ifMatch);
+    if (options.confirmationId) headers.set("X-Trunk-Confirmation-Id", options.confirmationId);
+    if (options.provenance?.message_id) headers.set("Trunk-Origin-Message-Id", options.provenance.message_id);
+    if (options.provenance?.task_id) headers.set("Trunk-Origin-Task-Id", options.provenance.task_id);
+    if (options.provenance?.fact_id) headers.set("Trunk-Origin-Fact-Id", options.provenance.fact_id);
+    if (options.provenance?.document_id) headers.set("Trunk-Origin-Document-Id", options.provenance.document_id);
     if (options.auth !== false) {
       if (!this.secret) {
         throw new Error("TrunkClient requires a secret for authenticated requests");
