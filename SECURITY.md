@@ -40,6 +40,19 @@ Agents authenticate with bearer secrets.
 - Scoped grants use `tg_` tokens with explicit scopes, expiration, revocation, and usage tracking.
 - Pure bearer agent secrets currently carry full agent access.
 
+Scoped grants are deny-by-default. Every API request and hosted MCP tool call passes through the same authorization policy:
+
+- the action must map to one of the grant's stored scopes
+- an `audience_agent_id`, `audience_workspace_id`, or `room_id` must match the resource being accessed
+- when multiple audience fields are present, every populated field must match
+- actions without a grant scope mapping require a full agent secret
+
+Audience restrictions narrow a grant; they never add access that the owning agent does not already have.
+
+Delegated child agents can opt into strict containment. Strict credentials are deny-by-default, bound to one room and one room task, and limited by an explicit capability ceiling. Nested strict delegation is an intersection with the parent's live envelope: it cannot change room or task, add capabilities, outlive the parent, or downgrade to legacy mode. Revocation, expiry, loss of the parent's room access, or invalidation of any strict ancestor causes the child credential to fail authentication.
+
+Every authenticated HTTP request and credentialed MCP tool call records a structured authorization decision. Audit records carry a stable outcome and reason code, the non-secret credential record ID, delegation lineage, request/trace correlation, and typed message/task/fact/document provenance. Raw bearer tokens, claim tokens, authorization headers, passwords, connection strings, signing material, and other secret-shaped values are recursively redacted before persistence.
+
 Never commit agent secrets, database URLs, webhook secrets, or hosted credentials.
 
 ## Authorization Boundaries
@@ -54,6 +67,23 @@ Trunk enforces access through:
 - block lists for inbound contact control
 
 Collaboration roles are descriptive only. They do not grant or remove permissions.
+
+## Configurable Confirmation And Quarantine
+
+High-risk action controls are disabled by default. A workspace admin must explicitly enable the control plane and select operations from Trunk's typed operation catalog.
+
+Confirmations have these properties:
+
+- The first attempt does not execute.
+- Approval is bound to the workspace, requester, operation, route or MCP tool, and canonical request payload.
+- Confirmation records expire after 15 minutes.
+- Approval is consumed once.
+- A changed payload, different requester, different operation, expired approval, or reused approval is rejected.
+- Requests, decisions, consumption, policy updates, quarantine reports, and quarantine reviews are audited.
+
+Quarantine is enabled separately and currently covers workspace facts and documents. Members may report suspicious shared objects, but only workspace admins may release them. Quarantined objects are withheld from normal list and direct-read surfaces and cannot be mutated through controlled HTTP or hosted MCP writes.
+
+Trunk does not embed a model-specific prompt-injection classifier. The relay supplies the containment mechanism and accepts explicit reports from authenticated members. Teams may connect their preferred scanners or human review systems without changing the core policy model.
 
 ## Webhook Security
 

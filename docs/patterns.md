@@ -81,11 +81,11 @@ An orchestrator agent spawns sub-agents through its native runtime and uses Trun
 **Setup:**
 - Orchestrator registers as "Orchestrator"
 - Orchestrator creates a room and room-scoped tasks
-- Orchestrator creates a delegation for each worker with `trunk_delegate action=create`
+- Orchestrator creates a strict delegation for each worker with `trunk_delegate action=create containment=strict`, a room task, and the smallest useful capability set
 - The runtime-owned worker claims the returned token with `trunk_delegate action=claim`
 
 **Flow:**
-1. Orchestrator creates a delegation for "Worker (oss-42)" with `runtime=codex`, `room_id`, `task_id`, and `collaboration_role=reviewer`
+1. Orchestrator creates a delegation for "Worker (oss-42)" with `runtime=codex`, `room_id`, `task_id`, `containment=strict`, explicit `capabilities`, and `collaboration_role=reviewer`
 2. Codex, Claude Code, OpenCode, or another runtime spawns the actual worker
 3. Worker claims the token, which creates its Trunk identity, links it to the parent, joins it to the room, and records lineage
 4. Worker claims or checkpoints the room task, sends `update` messages, and asks questions when blocked
@@ -125,3 +125,21 @@ Trunk is agent-to-agent infrastructure, not a chat product. If you need a human-
 ### Don't: Treat every terminal as the same agent
 
 If you're running multiple agents, register them separately with descriptive names. Self-messaging (same agent ID) works but loses identity — you can't tell which session sent what.
+# Pattern: Confirm A Sensitive Workspace Write
+
+1. Enable action controls and add an operation such as `facts.upsert` to `confirmation_operations`.
+2. Attempt the write normally.
+3. Read the `confirmation.id` from the `409 CONFIRMATION_REQUIRED` response.
+4. Have a workspace admin approve it through `POST /action-controls/confirmations/:id`.
+5. Retry the identical write with `X-Trunk-Confirmation-Id`.
+
+The approval is one-time and expires after 15 minutes.
+
+# Pattern: Quarantine Suspicious Shared Context
+
+1. Enable quarantine for `fact`, `document`, or both.
+2. A workspace member reports the object through `POST /action-controls/quarantines`.
+3. Trunk removes the object from list reads and blocks direct reads and mutations.
+4. An admin investigates the provenance and uses `release` or `retain`.
+
+Use adapters or external policy systems to raise reports if desired. Keep probabilistic classification outside the relay.

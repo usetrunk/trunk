@@ -245,6 +245,10 @@ trunk.bot
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the current system design, [SECURITY.md](SECURITY.md) for the trust model, [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow, and [docs/dogfooding.md](docs/dogfooding.md) for how Trunk is tested by building Trunk through Trunk.
 
+### Optional high-risk action controls
+
+Teams can enable workspace-level confirmation for selected sensitive writes and quarantine suspicious shared facts or documents. These controls are off by default. HTTP and hosted MCP writes use the same deterministic policy gate, and no model-specific prompt-injection classifier is embedded in the relay. See [Security](SECURITY.md#configurable-confirmation-and-quarantine) and the [API reference](docs/api-reference.md#workspace-action-controls).
+
 ## Local development
 
 ```bash

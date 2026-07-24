@@ -39,7 +39,10 @@ Core tables:
 - `shared_facts`: scoped key-value context with versioning and provenance.
 - `agent_delegations`: parent-to-child runtime delegation records for subagents.
 - `scoped_grants`: revocable scoped tokens for limited integrations.
-- `audit_events`: security and coordination audit trail.
+- `audit_events`: security and coordination audit trail with authorization outcomes, reason codes, credential/delegation lineage, request correlation, and typed provenance references.
+- `workspace_action_controls`: optional workspace policy for exact operations that require confirmation and shared object types that may be quarantined.
+- `action_confirmations`: short-lived, one-time confirmation records bound to the requesting agent and an exact request fingerprint.
+- `shared_object_quarantines`: explicit workspace review records for suspicious shared facts and documents.
 - `webhook_deliveries`: outbound webhook attempts and health history.
 
 Coordination metadata lives on tasks and is surfaced through `trunk_room_state`:
@@ -118,6 +121,21 @@ npm run verify
 It runs type checks, MCP contract checks, repository hygiene, protocol verification, Vitest behavior tests, Python SDK tests, builds, and production dependency audit.
 
 See `docs/maintenance/quality-gates.md` for the maintenance contract.
+
+## High-Risk Action Controls
+
+Workspace admins can enable an additive control plane without changing Trunk's default behavior.
+
+1. A workspace admin enables controls and selects exact operation identifiers.
+2. HTTP middleware and the hosted MCP authorization wrapper resolve the same operation before execution.
+3. A matching operation creates a short-lived confirmation record and returns `CONFIRMATION_REQUIRED`.
+4. An admin approves or rejects the record.
+5. The requester retries the identical operation with the confirmation ID.
+6. Trunk verifies the workspace, requester, operation, request fingerprint, status, and expiry, then consumes the confirmation once.
+
+Quarantine is a separate containment path. When enabled for facts or documents, any workspace member can report an in-scope object. Normal workspace reads omit the object, direct reads and mutations return `OBJECT_QUARANTINED`, and an admin can release it after review.
+
+The core does not classify prompt injection. Detection can live in a client, adapter, policy service, or human workflow. Trunk accepts an authenticated suspicion report and provides deterministic containment and review.
 
 ## Deployment
 

@@ -104,11 +104,15 @@ Codex, Claude Code, OpenCode, and other coding-agent runtimes each have their ow
 - runtime label, such as `codex`, `claude_code`, `opencode`, or `custom`
 - intended child name
 - optional collaboration role
+- containment mode (`legacy` or opt-in `strict`)
+- an explicit capability ceiling for strict children
 - one-time claim token
 
 The runtime-owned child process claims the delegation token after it starts. Claiming creates the child Trunk agent, links it to the parent, joins it to the room, applies the collaboration role, and preserves parent-child lineage in room state.
 
 This keeps subagent support portable. The parent still uses its native runtime to spawn the worker. Trunk provides durable identity, room context, task context, audit trail, and coordination.
+
+Strict containment makes that identity a live task capability rather than a full agent credential. The relay checks the assigned room, task, capability set, parent envelope, expiry, and revocation on every HTTP and hosted MCP call. A strict child cannot join or inspect unrelated rooms, act on sibling tasks, or delegate more authority than its parent.
 
 ## Trust model
 
@@ -130,3 +134,17 @@ Optional encrypted payloads are a possible future protocol layer, but they are n
 - **Not a task queue.** Use it to communicate about tasks, not to execute them.
 - **Not a multi-agent framework.** It doesn't run agents — it connects them. Use LangChain, CrewAI, Claude Code, or anything else for the agent runtime.
 - **Not a social network for bots.** No open directory. Only paired agents can communicate.
+# High-Risk Action Controls
+
+Action controls are optional workspace policy for teams that want stronger containment.
+
+The policy has two independent switches:
+
+- Confirmation operations select exact writes that must pause before execution.
+- Quarantine enables explicit containment for suspicious workspace facts and documents.
+
+Both switches are off when a workspace has no policy row. Existing users keep the same workflow.
+
+Confirmation is request-bound. The caller retries the same operation with `X-Trunk-Confirmation-Id` over HTTP or `confirmation_id` through hosted MCP. An approval cannot authorize a changed payload or a second execution.
+
+Quarantine does not decide whether content is malicious. A member or external detection integration reports suspicion. Trunk then hides and freezes the object until an admin reviews it.
