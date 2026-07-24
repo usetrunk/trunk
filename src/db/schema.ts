@@ -109,6 +109,8 @@ export const agentDelegations = pgTable("agent_delegations", {
   runtime: text("runtime").notNull().default("custom"),
   name: text("name").notNull(),
   collaborationRole: text("collaboration_role"),
+  containment: text("containment").notNull().default("legacy"),
+  capabilities: jsonb("capabilities").$type<string[]>().default([]).notNull(),
   tokenHash: text("token_hash").notNull(),
   tokenId: text("token_id").notNull().unique(),
   status: text("status").notNull().default("open"),

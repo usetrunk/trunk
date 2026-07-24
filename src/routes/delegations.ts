@@ -30,10 +30,31 @@ app.post("/claim", async (c) => {
       parent_agent_id: result.delegation.parent_agent_id,
       room_id: result.delegation.room_id,
       runtime: result.delegation.runtime,
+      task_id: result.delegation.task_id,
+    }, {
+      credentialType: "delegation_claim",
+      credentialId: result.delegation.id,
+      delegationId: result.delegation.id,
+      parentAgentId: result.delegation.parent_agent_id,
+      provenance: result.delegation.task_id
+        ? [{ kind: "task", id: result.delegation.task_id, relation: "origin" }]
+        : [],
     });
     return c.json(result, 201);
   } catch (err) {
     if (err instanceof DelegationError) {
+      const credentialId = err.credentialId;
+      await audit(null, "authorization.decision", "agent_delegation", credentialId, {
+        surface: "http",
+        operation: "delegation.claim",
+        claim_error_code: err.code,
+      }, {
+        outcome: "denied",
+        reasonCode: "INVALID_CREDENTIAL",
+        credentialType: "delegation_claim",
+        credentialId,
+        delegationId: credentialId,
+      });
       return c.json({ error: err.message, code: err.code }, err.status as ContentfulStatusCode);
     }
     throw err;

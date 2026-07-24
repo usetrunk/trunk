@@ -262,7 +262,11 @@ app.get("/:roomId/state", requireValidUUIDs("roomId"), async (c) => {
   }
 
   try {
-    return c.json(await getRoomState(agentId, c.req.param("roomId")));
+    return c.json(await getRoomState(
+      agentId,
+      c.req.param("roomId"),
+      c.get("delegation")?.taskId,
+    ));
   } catch (error) {
     if (error instanceof CoordinationError) return coordinationErrorResponse(c, error);
     throw error;

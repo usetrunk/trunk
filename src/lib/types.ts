@@ -1,5 +1,6 @@
 import type { agents } from "../db/schema.js";
 import type { GrantRecordT, GrantScopeT } from "../protocol/grants.js";
+import type { DelegationEnvelope } from "./delegation-authorization.js";
 
 export type AgentVariables = {
   Variables: {
@@ -7,5 +8,6 @@ export type AgentVariables = {
     agent: typeof agents.$inferSelect;
     grant?: GrantRecordT;
     grantScopes?: GrantScopeT[];
+    delegation?: DelegationEnvelope;
   };
 };

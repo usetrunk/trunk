@@ -4,6 +4,24 @@ import { IsoTimestamp, Uuid } from "./primitives.js";
 export const DelegationStatus = z.enum(["open", "claimed", "revoked", "expired"]);
 export type DelegationStatusT = z.infer<typeof DelegationStatus>;
 
+export const DelegationContainment = z.enum(["legacy", "strict"]);
+export type DelegationContainmentT = z.infer<typeof DelegationContainment>;
+
+export const DELEGATION_CAPABILITIES = [
+  "messages:send",
+  "messages:read",
+  "facts:read",
+  "facts:write",
+  "tasks:read",
+  "tasks:write",
+  "rooms:read",
+  "documents:read",
+  "documents:write",
+  "delegations:create",
+] as const;
+export const DelegationCapability = z.enum(DELEGATION_CAPABILITIES);
+export type DelegationCapabilityT = z.infer<typeof DelegationCapability>;
+
 export const CreateDelegationRequest = z.object({
   room_id: Uuid,
   task_id: Uuid.optional(),
@@ -11,6 +29,8 @@ export const CreateDelegationRequest = z.object({
   runtime: z.string().min(1).max(50).default("custom"),
   relationship: z.string().min(1).max(80).default("delegated_worker"),
   collaboration_role: z.string().min(1).max(100).optional(),
+  containment: DelegationContainment.default("legacy"),
+  capabilities: z.array(DelegationCapability).min(1).max(DELEGATION_CAPABILITIES.length).optional(),
   ttl_seconds: z.number().int().positive().max(30 * 24 * 60 * 60).optional(),
   expires_at: IsoTimestamp.optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -43,6 +63,8 @@ export const DelegationRecord = z.object({
   runtime: z.string(),
   name: z.string(),
   collaboration_role: z.string().nullable(),
+  containment: DelegationContainment,
+  capabilities: z.array(DelegationCapability),
   token_id: z.string(),
   status: DelegationStatus,
   expires_at: IsoTimestamp.nullable(),

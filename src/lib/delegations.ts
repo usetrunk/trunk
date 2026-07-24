@@ -1,4 +1,4 @@
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agentDelegations, agents, contacts, roomMembers, rooms, tasks } from "../db/schema.js";
 import { generatePairingCode, generateSecret, hashSecretAsync } from "./auth.js";
@@ -11,26 +11,42 @@ import {
   type ClaimDelegationResponseT,
   type CreateDelegationRequestT,
   type CreateDelegationResponseT,
+  type DelegationCapabilityT,
   type DelegationRecordT,
 } from "../protocol/delegations.js";
+import { resolveDelegationCredential } from "./delegation-authorization.js";
 
 const DEFAULT_TTL_SECONDS = 24 * 60 * 60;
 const TOKEN_PREFIX = "td_";
+const DEFAULT_STRICT_CAPABILITIES: DelegationCapabilityT[] = [
+  "messages:send",
+  "messages:read",
+  "facts:read",
+  "tasks:read",
+  "tasks:write",
+  "rooms:read",
+  "documents:read",
+];
 
 export class DelegationError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly credentialId: string | null;
 
-  constructor(message: string, status = 400, code = "VALIDATION_ERROR") {
+  constructor(message: string, status = 400, code = "VALIDATION_ERROR", credentialId: string | null = null) {
     super(message);
     this.name = "DelegationError";
     this.status = status;
     this.code = code;
+    this.credentialId = credentialId;
   }
 }
 
 export function delegationToRecord(row: typeof agentDelegations.$inferSelect): DelegationRecordT {
-  const isExpired = row.status === "open" && row.expiresAt !== null && row.expiresAt.getTime() <= Date.now();
+  const isExpired = (
+    row.status === "open"
+    || (row.status === "claimed" && row.containment === "strict")
+  ) && row.expiresAt !== null && row.expiresAt.getTime() <= Date.now();
   return {
     id: row.id,
     parent_agent_id: row.parentAgentId,
@@ -41,6 +57,10 @@ export function delegationToRecord(row: typeof agentDelegations.$inferSelect): D
     runtime: row.runtime,
     name: row.name,
     collaboration_role: row.collaborationRole ?? null,
+    containment: row.containment === "strict" ? "strict" : "legacy",
+    capabilities: row.containment === "strict"
+      ? (row.capabilities as DelegationCapabilityT[])
+      : [],
     token_id: row.tokenId,
     status: isExpired ? "expired" : row.status as DelegationRecordT["status"],
     expires_at: row.expiresAt ? row.expiresAt.toISOString() : null,
@@ -68,6 +88,20 @@ export async function createDelegation(
   }
   if (data.expires_at && data.ttl_seconds) {
     throw new DelegationError("Use either expires_at or ttl_seconds, not both", 400, "INVALID_FIELD");
+  }
+  if (data.containment === "strict" && !data.task_id) {
+    throw new DelegationError(
+      "Strict containment requires task_id",
+      400,
+      "STRICT_DELEGATION_REQUIRES_TASK",
+    );
+  }
+  if (data.containment === "legacy" && data.capabilities) {
+    throw new DelegationError(
+      "capabilities require strict containment",
+      400,
+      "INVALID_FIELD",
+    );
   }
 
   const [room] = await db.select({ id: rooms.id }).from(rooms).where(eq(rooms.id, data.room_id)).limit(1);
@@ -103,6 +137,34 @@ export async function createDelegation(
     throw new DelegationError("expires_at must be in the future", 400, "INVALID_FIELD");
   }
 
+  const capabilities = data.containment === "strict"
+    ? [...new Set(data.capabilities ?? DEFAULT_STRICT_CAPABILITIES)]
+    : [];
+  const parentDelegation = await resolveDelegationCredential(parentAgentId);
+  if (parentDelegation.kind === "invalid") {
+    throw new DelegationError("Parent delegation is inactive", 401, "UNAUTHORIZED");
+  }
+  if (parentDelegation.kind === "active") {
+    const parent = parentDelegation.envelope;
+    const isContained =
+      data.containment === "strict"
+      && parent.capabilities.includes("delegations:create")
+      && parent.roomId === data.room_id
+      && parent.taskId === data.task_id
+      && capabilities.every((capability) => parent.capabilities.includes(capability))
+      && (
+        !parent.expiresAt
+        || expiresAt.getTime() <= parent.expiresAt.getTime()
+      );
+    if (!isContained) {
+      throw new DelegationError(
+        "Child delegation would exceed the parent's capability envelope",
+        403,
+        "DELEGATION_PRIVILEGE_ESCALATION",
+      );
+    }
+  }
+
   const [row] = await db.insert(agentDelegations).values({
     parentAgentId,
     roomId: data.room_id,
@@ -111,6 +173,8 @@ export async function createDelegation(
     runtime: data.runtime,
     name: data.name,
     collaborationRole: data.collaboration_role ?? null,
+    containment: data.containment,
+    capabilities,
     tokenHash,
     tokenId,
     expiresAt,
@@ -183,14 +247,14 @@ export async function claimDelegation(input: ClaimDelegationRequestT): Promise<C
 
   if (!existing) throw new DelegationError("Invalid claim token", 401, "UNAUTHORIZED");
   if (existing.status === "claimed" || existing.childAgentId) {
-    throw new DelegationError("Delegation already claimed", 409, "DELEGATION_CLAIMED");
+    throw new DelegationError("Delegation already claimed", 409, "DELEGATION_CLAIMED", existing.id);
   }
   if (existing.status === "revoked" || existing.revokedAt) {
-    throw new DelegationError("Delegation revoked", 409, "DELEGATION_REVOKED");
+    throw new DelegationError("Delegation revoked", 409, "DELEGATION_REVOKED", existing.id);
   }
   if (existing.expiresAt && existing.expiresAt.getTime() <= Date.now()) {
     await db.update(agentDelegations).set({ status: "expired" }).where(eq(agentDelegations.id, existing.id));
-    throw new DelegationError("Delegation expired", 409, "DELEGATION_EXPIRED");
+    throw new DelegationError("Delegation expired", 409, "DELEGATION_EXPIRED", existing.id);
   }
 
   const childSecret = generateSecret();
@@ -253,7 +317,14 @@ export async function claimDelegation(input: ClaimDelegationRequestT): Promise<C
         ...(existing.metadata ?? {}),
         claim_metadata: data.metadata ?? {},
       },
-    }).where(eq(agentDelegations.id, existing.id)).returning();
+    }).where(and(
+      eq(agentDelegations.id, existing.id),
+      eq(agentDelegations.status, "open"),
+      isNull(agentDelegations.childAgentId),
+    )).returning();
+    if (!updated) {
+      throw new DelegationError("Delegation already claimed or revoked", 409, "DELEGATION_CLAIMED", existing.id);
+    }
 
     return {
       delegation: delegationToRecord(updated),
@@ -282,18 +353,27 @@ export async function revokeDelegation(
     .limit(1);
 
   if (!existing) throw new DelegationError("Delegation not found", 404, "NOT_FOUND");
-  if (existing.status === "claimed") {
+  if (existing.status === "claimed" && existing.containment !== "strict") {
     throw new DelegationError("Claimed delegations cannot be revoked", 409, "DELEGATION_CLAIMED");
   }
 
-  const [updated] = await db.update(agentDelegations).set({
-    status: "revoked",
-    revokedAt: new Date(),
-    metadata: {
-      ...(existing.metadata ?? {}),
-      revoked_reason: reason ?? null,
-    },
-  }).where(eq(agentDelegations.id, delegationId)).returning();
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx.update(agentDelegations).set({
+      status: "revoked",
+      revokedAt: new Date(),
+      metadata: {
+        ...(existing.metadata ?? {}),
+        revoked_reason: reason ?? null,
+      },
+    }).where(eq(agentDelegations.id, delegationId)).returning();
+
+    if (existing.containment === "strict" && existing.childAgentId) {
+      await tx.update(agents)
+        .set({ secretHash: await hashSecretAsync(generateSecret()) })
+        .where(eq(agents.id, existing.childAgentId));
+    }
+    return row;
+  });
 
   return delegationToRecord(updated);
 }

@@ -289,7 +289,7 @@ export async function handoffTask(agentId: string, scopeId: string, taskId: stri
   return taskToJson(updated);
 }
 
-export async function getRoomState(agentId: string, roomId: string) {
+export async function getRoomState(agentId: string, roomId: string, taskId?: string) {
   if (!(await verifyRoomAccess(agentId, roomId))) {
     throw new CoordinationError(403, "NOT_MEMBER", "Not a room member");
   }
@@ -322,10 +322,11 @@ export async function getRoomState(agentId: string, roomId: string) {
     };
   });
 
+  const taskScopeCondition = eq(tasks.scope, `room:${roomId}`);
   const taskRows = await db
     .select()
     .from(tasks)
-    .where(eq(tasks.scope, `room:${roomId}`))
+    .where(taskId ? and(taskScopeCondition, eq(tasks.id, taskId)) : taskScopeCondition)
     .orderBy(desc(tasks.updatedAt))
     .limit(200);
   const roomTasks = taskRows.map(taskToJson);
@@ -366,7 +367,8 @@ export async function getRoomState(agentId: string, roomId: string) {
       task_title: task.title,
       ...task.coordination.handoff!,
     }));
-  const delegations = await listRoomDelegations(roomId);
+  const delegations = (await listRoomDelegations(roomId))
+    .filter((delegation) => !taskId || delegation.task_id === taskId);
 
   return {
     room: {
