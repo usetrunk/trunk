@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ROUTE_PREFIX_BY_FILE: Record<string, string> = {
+  "action-controls.ts": "/action-controls",
   "agents.ts": "/agents",
   "agent-cards.ts": "/agents",
   "attachments.ts": "/attachments",

@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { SQL } from "drizzle-orm";
 import app from "../src/app.js";
 import { createTrunkInboxNode, createTrunkSendNode } from "../src/adapters/langgraph.js";
+import { createTrunkMcpServer } from "../src/mcp/server.js";
 import { TrunkApiError, TrunkClient, signWebhookPayload, verifyWebhookSignature, type RegisterResponse, type TrunkMessage } from "../src/sdk/index.js";
 
 type CascadeAuditMetadata = {
@@ -117,6 +120,47 @@ type WorkspaceContactRow = {
   pairedAt: Date;
 };
 
+type WorkspaceActionControlRow = {
+  workspaceId: string;
+  enabled: number;
+  confirmationOperations: string[];
+  quarantineEnabled: number;
+  quarantineObjectTypes: string[];
+  updatedBy: string;
+  updatedAt: Date;
+};
+
+type ActionConfirmationRow = {
+  id: string;
+  workspaceId: string;
+  requestedBy: string;
+  operation: string;
+  requestFingerprint: string;
+  targetType: string;
+  targetId: string | null;
+  status: string;
+  reviewedBy: string | null;
+  reviewNote: string | null;
+  expiresAt: Date;
+  createdAt: Date;
+  reviewedAt: Date | null;
+  executedAt: Date | null;
+};
+
+type SharedObjectQuarantineRow = {
+  id: string;
+  workspaceId: string;
+  objectType: string;
+  objectId: string;
+  reason: string;
+  status: string;
+  reportedBy: string;
+  reviewedBy: string | null;
+  reviewNote: string | null;
+  createdAt: Date;
+  reviewedAt: Date | null;
+};
+
 type SharedFactRow = {
   scope: string;
   key: string;
@@ -132,6 +176,15 @@ type AuditEventRow = {
   action: string;
   targetType: string;
   targetId: string | null;
+  outcome: "success" | "denied" | "failure";
+  reasonCode: string;
+  credentialType: string;
+  credentialId: string | null;
+  delegationId: string | null;
+  parentAgentId: string | null;
+  requestId: string;
+  traceId: string | null;
+  provenance: Array<{ kind: "message" | "task" | "fact" | "document"; id: string; relation: string }>;
   metadata: Record<string, unknown>;
   createdAt: Date;
 };
@@ -344,6 +397,8 @@ type AgentDelegationRow = {
   runtime: string;
   name: string;
   collaborationRole: string | null;
+  containment: string;
+  capabilities: string[];
   tokenHash: string;
   tokenId: string;
   status: string;
@@ -379,6 +434,9 @@ type TableName =
   | "room_members"
   | "workspaces"
   | "workspace_contacts"
+  | "workspace_action_controls"
+  | "action_confirmations"
+  | "shared_object_quarantines"
   | "shared_facts"
   | "shared_documents"
   | "shared_document_versions"
@@ -411,6 +469,9 @@ const testState = vi.hoisted(() => ({
   "room_members": [] as RoomMemberRow[],
   workspaces: [] as WorkspaceRow[],
   "workspace_contacts": [] as WorkspaceContactRow[],
+  "workspace_action_controls": [] as WorkspaceActionControlRow[],
+  "action_confirmations": [] as ActionConfirmationRow[],
+  "shared_object_quarantines": [] as SharedObjectQuarantineRow[],
   "shared_facts": [] as SharedFactRow[],
   "shared_documents": [] as SharedDocumentRow[],
   "shared_document_versions": [] as SharedDocumentVersionRow[],
@@ -458,6 +519,9 @@ describe("Hono API behavior", () => {
     testState["room_members"].length = 0;
     testState.workspaces.length = 0;
     testState["workspace_contacts"].length = 0;
+    testState["workspace_action_controls"].length = 0;
+    testState["action_confirmations"].length = 0;
+    testState["shared_object_quarantines"].length = 0;
     testState["shared_facts"].length = 0;
     testState["shared_documents"].length = 0;
     testState["shared_document_versions"].length = 0;
@@ -670,7 +734,8 @@ describe("Hono API behavior", () => {
 
   it("error responses include structured error codes", async () => {
     // Unauthorized request should include UNAUTHORIZED code
-    const client = createClient("bad-secret");
+    const invalidSecret = "f".repeat(64);
+    const client = createClient(invalidSecret);
     try {
       await client.me();
       throw new Error("should have thrown");
@@ -680,6 +745,18 @@ describe("Hono API behavior", () => {
       expect(err.code).toBe("UNAUTHORIZED");
       expect(err.body).toMatchObject({ error: expect.any(String), code: "UNAUTHORIZED" });
     }
+    const denial = testState["audit_events"].find((event) =>
+      event.action === "authorization.decision" && event.reasonCode === "INVALID_CREDENTIAL"
+    );
+    expect(denial).toMatchObject({
+      actorAgent: null,
+      outcome: "denied",
+      credentialType: "anonymous",
+      credentialId: null,
+      targetType: "http_route",
+      targetId: "/agents/me",
+    });
+    expect(JSON.stringify(denial)).not.toContain(invalidSecret);
   });
 
   it("sends to a contact and the recipient sees a pending inbound message", async () => {
@@ -772,7 +849,9 @@ describe("Hono API behavior", () => {
         payload: { content: "Still there?" },
       })
     ).rejects.toMatchObject({ status: 403, message: "Not a contact. Pair first." });
-    expect(testState["audit_events"].map((event) => event.action)).toEqual([
+    expect(testState["audit_events"]
+      .filter((event) => event.action !== "authorization.decision")
+      .map((event) => event.action)).toEqual([
       "contact.pair",
       "contact.unpair",
     ]);
@@ -2300,6 +2379,17 @@ describe("Hono API behavior", () => {
       status: "claimed",
       runtime_session_ref: "codex-thread-1",
     });
+    expect(testState["audit_events"]).toContainEqual(expect.objectContaining({
+      actorAgent: claimed.agent.agent_id,
+      action: "delegation.claim",
+      credentialType: "delegation_claim",
+      credentialId: created.delegation.id,
+      delegationId: created.delegation.id,
+      parentAgentId: parent.agent_id,
+      provenance: expect.arrayContaining([
+        expect.objectContaining({ kind: "task", id: task.id, relation: "origin" }),
+      ]),
+    }));
 
     const members = await parentClient.roomMembers(room.id);
     const childMember = members.members.find((member) => member.id === claimed.agent.agent_id);
@@ -2316,6 +2406,16 @@ describe("Hono API behavior", () => {
       payload: { content: "Review complete" },
     });
     expect(sent.status).toBe("delivered");
+    expect(testState["audit_events"]).toContainEqual(expect.objectContaining({
+      actorAgent: claimed.agent.agent_id,
+      action: "authorization.decision",
+      outcome: "success",
+      reasonCode: "AUTHORIZED",
+      credentialType: "agent_secret",
+      credentialId: claimed.agent.agent_id,
+      delegationId: created.delegation.id,
+      parentAgentId: parent.agent_id,
+    }));
 
     const list = await parentClient.listDelegations({ room_id: room.id });
     expect(list.delegations).toEqual([
@@ -2362,6 +2462,294 @@ describe("Hono API behavior", () => {
       status: 409,
       code: "DELEGATION_CLAIMED",
     });
+    const denial = testState["audit_events"].find((event) =>
+      event.action === "authorization.decision"
+      && event.outcome === "denied"
+      && event.credentialType === "delegation_claim"
+      && event.credentialId === created.delegation.id
+    );
+    expect(denial).toMatchObject({
+      actorAgent: null,
+      reasonCode: "INVALID_CREDENTIAL",
+      targetType: "agent_delegation",
+      targetId: created.delegation.id,
+      metadata: expect.objectContaining({
+        surface: "http",
+        operation: "delegation.claim",
+        claim_error_code: "DELEGATION_CLAIMED",
+      }),
+    });
+    expect(JSON.stringify(denial)).not.toContain(created.claim_token);
+  });
+
+  it("strict delegation credentials stay inside their assigned room and task", async () => {
+    const parent = await createClient().register({ name: "Strict Parent" });
+    const parentClient = createClient(parent.secret);
+    const assignedRoom = await parentClient.createRoom({ name: "Assigned Room" });
+    const unrelatedRoom = await parentClient.createRoom({ name: "Unrelated Room" });
+    const assignedTask = await parentClient.createTask({ room_id: assignedRoom.id, title: "Assigned task" });
+    const siblingTask = await parentClient.createTask({ room_id: assignedRoom.id, title: "Sibling task" });
+
+    const createResponse = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${parent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: assignedRoom.id,
+        task_id: assignedTask.id,
+        name: "Contained Worker",
+        runtime: "codex",
+        containment: "strict",
+        capabilities: ["rooms:read", "tasks:read", "tasks:write", "messages:send"],
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+    const created = await createResponse.json() as { claim_token: string };
+    const claimed = await createClient().claimDelegation({ claim_token: created.claim_token });
+    const childSecret = claimed.agent.secret;
+
+    const assignedState = await app.request(`/rooms/${assignedRoom.id}/state`, {
+      headers: { Authorization: `Bearer ${childSecret}` },
+    });
+    expect(assignedState.status).toBe(200);
+    await expect(assignedState.json()).resolves.toMatchObject({
+      tasks: [expect.objectContaining({ id: assignedTask.id })],
+    });
+
+    const unrelatedState = await app.request(`/rooms/${unrelatedRoom.id}/state`, {
+      headers: { Authorization: `Bearer ${childSecret}` },
+    });
+    expect(unrelatedState.status).toBe(403);
+    await expect(unrelatedState.json()).resolves.toMatchObject({ code: "DELEGATION_SCOPE_MISMATCH" });
+
+    const siblingUpdate = await app.request(`/tasks/${assignedRoom.id}/${siblingTask.id}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${childSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(siblingUpdate.status).toBe(403);
+    await expect(siblingUpdate.json()).resolves.toMatchObject({ code: "DELEGATION_SCOPE_MISMATCH" });
+
+    const createRoom = await app.request("/rooms", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${childSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Escape Room" }),
+    });
+    expect(createRoom.status).toBe(403);
+    await expect(createRoom.json()).resolves.toMatchObject({ code: "DELEGATION_ACTION_NOT_ALLOWED" });
+
+    const outsideMessage = await app.request("/messages", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${childSecret}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "strict-outside-message",
+      },
+      body: JSON.stringify({ to: parent.agent_id, type: "update", payload: { content: "allowed parent update" } }),
+    });
+    expect(outsideMessage.status).toBe(201);
+  });
+
+  it("strict child delegations cannot amplify their parent's envelope", async () => {
+    const parent = await createClient().register({ name: "Root Parent" });
+    const parentClient = createClient(parent.secret);
+    const room = await parentClient.createRoom({ name: "Nested Delegation Room" });
+    const task = await parentClient.createTask({ room_id: room.id, title: "Nested task" });
+    const rootDelegationResponse = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${parent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: room.id,
+        task_id: task.id,
+        name: "Strict Delegator",
+        containment: "strict",
+        capabilities: ["tasks:read", "delegations:create"],
+      }),
+    });
+    const rootDelegation = await rootDelegationResponse.json() as {
+      claim_token: string;
+      delegation: { id: string };
+    };
+    const strictParent = await createClient().claimDelegation({ claim_token: rootDelegation.claim_token });
+
+    const amplified = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${strictParent.agent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: room.id,
+        task_id: task.id,
+        name: "Overprivileged Child",
+        containment: "strict",
+        capabilities: ["tasks:read", "tasks:write"],
+      }),
+    });
+    expect(amplified.status).toBe(403);
+    await expect(amplified.json()).resolves.toMatchObject({ code: "DELEGATION_PRIVILEGE_ESCALATION" });
+
+    const legacyChild = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${strictParent.agent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: room.id,
+        task_id: task.id,
+        name: "Legacy Escape Child",
+      }),
+    });
+    expect(legacyChild.status).toBe(403);
+    await expect(legacyChild.json()).resolves.toMatchObject({ code: "DELEGATION_PRIVILEGE_ESCALATION" });
+
+    const contained = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${strictParent.agent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: room.id,
+        task_id: task.id,
+        name: "Contained Grandchild",
+        containment: "strict",
+        capabilities: ["tasks:read"],
+        ttl_seconds: 60,
+      }),
+    });
+    expect(contained.status).toBe(201);
+    const containedDelegation = await contained.json() as { claim_token: string };
+    const grandchild = await createClient().claimDelegation({ claim_token: containedDelegation.claim_token });
+
+    await parentClient.revokeDelegation(rootDelegation.delegation.id, "revoke the strict branch");
+    const descendantAfterAncestorRevoke = await app.request(`/tasks/room/${room.id}`, {
+      headers: { Authorization: `Bearer ${grandchild.agent.secret}` },
+    });
+    expect(descendantAfterAncestorRevoke.status).toBe(401);
+  });
+
+  it("requires a room task when strict containment is requested", async () => {
+    const parent = await createClient().register({ name: "Task Binding Parent" });
+    const room = await createClient(parent.secret).createRoom({ name: "Task Binding Room" });
+    const response = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${parent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: room.id,
+        name: "Untasked Strict Worker",
+        containment: "strict",
+      }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "STRICT_DELEGATION_REQUIRES_TASK" });
+  });
+
+  it("enforces the strict delegation envelope through MCP, including object scope", async () => {
+    async function callTool(name: string, args: Record<string, unknown>) {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const server = createTrunkMcpServer();
+      const client = new Client({ name: "delegation-boundary-test", version: "1.0.0" });
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      try {
+        return await client.callTool({ name, arguments: args });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    }
+
+    const parent = await createClient().register({ name: "MCP Parent" });
+    const parentClient = createClient(parent.secret);
+    const assignedRoom = await parentClient.createRoom({ name: "MCP Assigned Room" });
+    const unrelatedRoom = await parentClient.createRoom({ name: "MCP Unrelated Room" });
+    const task = await parentClient.createTask({ room_id: assignedRoom.id, title: "MCP assigned task" });
+    const unrelatedDocumentResponse = await app.request(`/documents/room/${unrelatedRoom.id}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${parent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Private sibling-room document", body: "must stay private" }),
+    });
+    const unrelatedDocument = await unrelatedDocumentResponse.json() as { id: string };
+
+    const createResponse = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${parent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: assignedRoom.id,
+        task_id: task.id,
+        name: "MCP Contained Worker",
+        containment: "strict",
+        capabilities: ["rooms:read", "documents:read"],
+      }),
+    });
+    const created = await createResponse.json() as { claim_token: string };
+    const claimed = await createClient().claimDelegation({ claim_token: created.claim_token });
+
+    const unrelatedState = await callTool("trunk_room_state", {
+      secret: claimed.agent.secret,
+      room_id: unrelatedRoom.id,
+    });
+    expect(unrelatedState.isError).toBe(true);
+    expect(JSON.stringify(unrelatedState.content)).toContain("DELEGATION_SCOPE_MISMATCH");
+
+    const disguisedDocumentRead = await callTool("trunk_document", {
+      secret: claimed.agent.secret,
+      action: "get",
+      room_id: assignedRoom.id,
+      doc_id: unrelatedDocument.id,
+    });
+    expect(disguisedDocumentRead.isError).toBe(true);
+    expect(JSON.stringify(disguisedDocumentRead.content)).not.toContain("must stay private");
+  });
+
+  it("revokes claimed strict delegations and invalidates the child credential", async () => {
+    const parent = await createClient().register({ name: "Revoking Parent" });
+    const parentClient = createClient(parent.secret);
+    const room = await parentClient.createRoom({ name: "Revocable Room" });
+    const task = await parentClient.createTask({ room_id: room.id, title: "Revocable task" });
+    const createResponse = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${parent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: room.id,
+        task_id: task.id,
+        name: "Revocable Worker",
+        containment: "strict",
+        capabilities: ["rooms:read"],
+      }),
+    });
+    const created = await createResponse.json() as { claim_token: string; delegation: { id: string } };
+    const claimed = await createClient().claimDelegation({ claim_token: created.claim_token });
+
+    await expect(parentClient.revokeDelegation(created.delegation.id, "work cancelled")).resolves.toMatchObject({
+      delegation: expect.objectContaining({ status: "revoked" }),
+    });
+
+    const afterRevoke = await app.request(`/rooms/${room.id}/state`, {
+      headers: { Authorization: `Bearer ${claimed.agent.secret}` },
+    });
+    expect(afterRevoke.status).toBe(401);
+  });
+
+  it("invalidates strict child credentials when the delegation expires", async () => {
+    const parent = await createClient().register({ name: "Expiring Parent" });
+    const parentClient = createClient(parent.secret);
+    const room = await parentClient.createRoom({ name: "Expiring Room" });
+    const task = await parentClient.createTask({ room_id: room.id, title: "Expiring task" });
+    const createResponse = await app.request("/delegations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${parent.secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: room.id,
+        task_id: task.id,
+        name: "Expiring Worker",
+        containment: "strict",
+        capabilities: ["rooms:read"],
+        ttl_seconds: 60,
+      }),
+    });
+    const created = await createResponse.json() as { claim_token: string; delegation: { id: string } };
+    const claimed = await createClient().claimDelegation({ claim_token: created.claim_token });
+    const row = testState.agent_delegations.find((delegation) => delegation.id === created.delegation.id);
+    expect(row).toBeDefined();
+    row!.expiresAt = new Date(Date.now() - 1);
+
+    const afterExpiry = await app.request(`/rooms/${room.id}/state`, {
+      headers: { Authorization: `Bearer ${claimed.agent.secret}` },
+    });
+    expect(afterExpiry.status).toBe(401);
   });
 
   it("SDK joinRoom idempotent for existing member", async () => {
@@ -22398,8 +22786,14 @@ describe("Hono API behavior", () => {
       expect(page1.next_cursor).toBeDefined();
 
       const page2 = await client.auditLog({ limit: 2, cursor: page1.next_cursor! });
-      expect(page2.events.length).toBe(1);
-      expect(page2.has_more).toBe(false);
+      expect(page2.events.length).toBe(2);
+      expect(page2.has_more).toBe(true);
+
+      const page3 = await client.auditLog({ limit: 2, cursor: page2.next_cursor! });
+      expect(page3.events.length).toBe(2);
+      expect(page3.has_more).toBe(false);
+      const ids = [...page1.events, ...page2.events, ...page3.events].map((event) => event.id);
+      expect(new Set(ids).size).toBe(ids.length);
     });
 
     it("returns events in descending order by created_at", async () => {
@@ -22445,8 +22839,10 @@ describe("Hono API behavior", () => {
       await createRoomRaw(reg.secret, { name: "Shape Room" });
 
       const result = await client.auditLog();
-      expect(result.events.length).toBe(1);
-      const event = result.events[0];
+      expect(result.events.length).toBe(2);
+      const event = result.events.find((item) => item.action === "room.created");
+      expect(event).toBeDefined();
+      if (!event) throw new Error("room.created audit event missing");
       expect(event).toHaveProperty("id");
       expect(event).toHaveProperty("action");
       expect(event).toHaveProperty("target_type");
@@ -25228,6 +25624,20 @@ describe("Hono API behavior", () => {
   });
 
   describe("scoped grants", () => {
+    async function callMcpTool(name: string, args: Record<string, unknown>) {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const server = createTrunkMcpServer();
+      const client = new Client({ name: "grant-boundary-test", version: "1.0.0" });
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      try {
+        return await client.callTool({ name, arguments: args });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    }
+
     it("creates a grant with secret + records metadata", async () => {
       const { alphaClient } = await registerPair();
       const res = await alphaClient.createGrant({
@@ -25243,6 +25653,30 @@ describe("Hono API behavior", () => {
       expect(grant.revoked).toBe(false);
       expect(grant.use_count).toBe(0);
       expect(grant.metadata.source).toBe("test");
+    });
+
+    it("records invalid MCP credential denials without persisting the credential", async () => {
+      const invalidSecret = "e".repeat(64);
+      const result = await callMcpTool("trunk_config", {
+        secret: invalidSecret,
+        name: "must-not-change",
+      });
+      expect(result.isError).toBe(true);
+      const denial = testState["audit_events"].find((event) =>
+        event.action === "authorization.decision"
+        && event.reasonCode === "INVALID_CREDENTIAL"
+        && event.metadata.surface === "mcp"
+      );
+      expect(denial).toMatchObject({
+        actorAgent: null,
+        outcome: "denied",
+        credentialType: "anonymous",
+        credentialId: null,
+        targetType: "mcp_tool",
+        targetId: null,
+        metadata: expect.objectContaining({ operation: "trunk_config" }),
+      });
+      expect(JSON.stringify(denial)).not.toContain(invalidSecret);
     });
 
     it("lists grants owned by the agent", async () => {
@@ -25309,6 +25743,285 @@ describe("Hono API behavior", () => {
       });
       expect(res.status).toBe(400);
     });
+
+    it.each([
+      ["messages:send", "POST", "/messages", { to: "TARGET", type: "update", payload: { content: "denied" } }],
+      ["messages:read", "GET", "/messages/inbox", undefined],
+      ["facts:read", "GET", "/context/TARGET/facts", undefined],
+      ["facts:write", "PUT", "/context/TARGET/facts/phase", { value: "denied" }],
+      ["tasks:read", "GET", "/tasks/TARGET", undefined],
+      ["tasks:write", "POST", "/tasks", { title: "denied", contact_id: "TARGET" }],
+      ["rooms:read", "GET", "/rooms", undefined],
+      ["rooms:write", "POST", "/rooms", { name: "denied" }],
+      ["contacts:read", "GET", "/contacts", undefined],
+      ["workspaces:read", "GET", "/workspaces/me", undefined],
+      ["agent_card:read", "GET", "/agents/TARGET/card", undefined],
+    ] as const)("denies HTTP %s actions when the grant lacks that scope", async (requiredScope, method, path, body) => {
+      const { beta, alphaClient } = await registerPair();
+      const grant = await alphaClient.createGrant({
+        name: `missing-${requiredScope}`,
+        scopes: [requiredScope === "messages:read" ? "messages:send" : "messages:read"],
+      });
+      const response = await app.request(path.replace("TARGET", beta.agent_id), {
+        method,
+        headers: {
+          Authorization: `Bearer ${grant.secret}`,
+          ...(body ? { "Content-Type": "application/json" } : {}),
+          ...(path === "/messages" ? { "Idempotency-Key": `scope-denial-${requiredScope}` } : {}),
+        },
+        body: body ? JSON.stringify(JSON.parse(JSON.stringify(body).replaceAll("TARGET", beta.agent_id))) : undefined,
+      });
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "INSUFFICIENT_SCOPE" });
+    });
+
+    it("preserves ordinary bearer-secret behavior through the centralized HTTP policy", async () => {
+      const { alphaClient } = await registerPair();
+      await expect(alphaClient.inbox()).resolves.toMatchObject({ messages: [] });
+      await expect(alphaClient.listRooms()).resolves.toMatchObject({ rooms: [] });
+      await expect(alphaClient.contacts()).resolves.toMatchObject({ contacts: [] });
+    });
+
+    it("denies grant-backed API and MCP actions that have no grant scope mapping", async () => {
+      const { alpha, alphaClient } = await registerPair();
+      const grant = await alphaClient.createGrant({ name: "deny-unmapped", scopes: ["messages:read"] });
+      const grantRecord = grant.grant as { id: string };
+
+      const apiDenied = await app.request("/agents/me", {
+        headers: { Authorization: `Bearer ${grant.secret}` },
+      });
+      expect(apiDenied.status).toBe(403);
+      await expect(apiDenied.json()).resolves.toMatchObject({ code: "GRANT_ACTION_NOT_ALLOWED" });
+
+      const mcpDenied = await callMcpTool("trunk_config", {
+        secret: grant.secret,
+        name: "must-not-change",
+      });
+      expect(mcpDenied.isError).toBe(true);
+      expect(JSON.stringify(mcpDenied.content)).toContain("GRANT_ACTION_NOT_ALLOWED");
+      const decisions = testState["audit_events"].filter((event) =>
+        event.action === "authorization.decision"
+        && event.credentialId === grantRecord.id
+      );
+      expect(decisions).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          actorAgent: alpha.agent_id,
+          outcome: "denied",
+          reasonCode: "GRANT_ACTION_NOT_ALLOWED",
+          credentialType: "scoped_grant",
+          metadata: expect.objectContaining({ surface: "http" }),
+        }),
+        expect.objectContaining({
+          actorAgent: alpha.agent_id,
+          outcome: "denied",
+          reasonCode: "GRANT_ACTION_NOT_ALLOWED",
+          credentialType: "scoped_grant",
+          metadata: expect.objectContaining({ surface: "mcp", operation: "trunk_config" }),
+        }),
+      ]));
+      expect(JSON.stringify(decisions)).not.toContain(grant.secret);
+      await expect(alphaClient.me()).resolves.toMatchObject({ agent_id: alpha.agent_id });
+    });
+
+    it("enforces agent audience boundaries for HTTP actions", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "grant-agent-owner" });
+      const beta = await anon.register({ name: "grant-agent-allowed" });
+      const gamma = await anon.register({ name: "grant-agent-denied" });
+      const alphaClient = createClient(alpha.secret);
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.pair({ code: gamma.pairing_code });
+      const grant = await alphaClient.createGrant({
+        name: "agent-audience",
+        scopes: ["messages:send"],
+        audience_agent_id: beta.agent_id,
+      });
+
+      const allowed = await app.request("/messages", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${grant.secret}`, "Content-Type": "application/json", "Idempotency-Key": "agent-audience-allowed" },
+        body: JSON.stringify({ to: beta.agent_id, type: "update", payload: { content: "allowed" } }),
+      });
+      expect(allowed.status).toBe(201);
+
+      const denied = await app.request("/messages", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${grant.secret}`, "Content-Type": "application/json", "Idempotency-Key": "agent-audience-denied" },
+        body: JSON.stringify({ to: gamma.agent_id, type: "update", payload: { content: "denied" } }),
+      });
+      expect(denied.status).toBe(403);
+      await expect(denied.json()).resolves.toMatchObject({ code: "AUDIENCE_MISMATCH" });
+    });
+
+    it("enforces workspace audience boundaries for HTTP actions", async () => {
+      const alpha = await createClient().register({ name: "grant-workspace-owner" });
+      const alphaClient = createClient(alpha.secret);
+      const first = await alphaClient.createWorkspace({ name: "Allowed workspace" });
+      await alphaClient.leaveWorkspace();
+      const second = await alphaClient.createWorkspace({ name: "Denied workspace" });
+      const allowedGrant = await alphaClient.createGrant({
+        name: "workspace-allowed",
+        scopes: ["workspaces:read"],
+        audience_workspace_id: second.id,
+      });
+      const deniedGrant = await alphaClient.createGrant({
+        name: "workspace-denied",
+        scopes: ["workspaces:read"],
+        audience_workspace_id: first.id,
+      });
+
+      const allowed = await app.request("/workspaces/me", {
+        headers: { Authorization: `Bearer ${allowedGrant.secret}` },
+      });
+      expect(allowed.status).toBe(200);
+
+      const denied = await app.request("/workspaces/me", {
+        headers: { Authorization: `Bearer ${deniedGrant.secret}` },
+      });
+      expect(denied.status).toBe(403);
+      await expect(denied.json()).resolves.toMatchObject({ code: "AUDIENCE_MISMATCH" });
+    });
+
+    it("enforces room audience boundaries for HTTP actions", async () => {
+      const alpha = await createClient().register({ name: "grant-room-owner" });
+      const alphaClient = createClient(alpha.secret);
+      const allowedRoom = await alphaClient.createRoom({ name: "Allowed room" });
+      const deniedRoom = await alphaClient.createRoom({ name: "Denied room" });
+      const grant = await alphaClient.createGrant({
+        name: "room-audience",
+        scopes: ["rooms:read"],
+        room_id: allowedRoom.id,
+      });
+
+      const allowed = await app.request(`/rooms/${allowedRoom.id}/state`, {
+        headers: { Authorization: `Bearer ${grant.secret}` },
+      });
+      expect(allowed.status).toBe(200);
+
+      const denied = await app.request(`/rooms/${deniedRoom.id}/state`, {
+        headers: { Authorization: `Bearer ${grant.secret}` },
+      });
+      expect(denied.status).toBe(403);
+      await expect(denied.json()).resolves.toMatchObject({ code: "AUDIENCE_MISMATCH" });
+    });
+
+    it("enforces scopes and audiences through MCP with the same grant policy", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "grant-mcp-owner" });
+      const beta = await anon.register({ name: "grant-mcp-allowed" });
+      const gamma = await anon.register({ name: "grant-mcp-denied" });
+      const alphaClient = createClient(alpha.secret);
+      await alphaClient.pair({ code: beta.pairing_code });
+      await alphaClient.pair({ code: gamma.pairing_code });
+
+      const readGrant = await alphaClient.createGrant({ name: "mcp-read", scopes: ["messages:read"] });
+      const readResult = await callMcpTool("trunk_inbox", { secret: readGrant.secret });
+      expect(readResult.isError).not.toBe(true);
+
+      const wrongScope = await callMcpTool("trunk_send", {
+        secret: readGrant.secret,
+        to: beta.agent_id,
+        type: "update",
+        content: "denied",
+      });
+      expect(wrongScope.isError).toBe(true);
+      expect(JSON.stringify(wrongScope.content)).toContain("INSUFFICIENT_SCOPE");
+
+      const audienceGrant = await alphaClient.createGrant({
+        name: "mcp-agent-audience",
+        scopes: ["messages:send"],
+        audience_agent_id: beta.agent_id,
+      });
+      const allowed = await callMcpTool("trunk_send", {
+        secret: audienceGrant.secret,
+        to: beta.agent_id,
+        type: "update",
+        content: "allowed",
+      });
+      expect(allowed.isError).not.toBe(true);
+
+      const denied = await callMcpTool("trunk_send", {
+        secret: audienceGrant.secret,
+        to: gamma.agent_id,
+        type: "update",
+        content: "denied",
+      });
+      expect(denied.isError).toBe(true);
+      expect(JSON.stringify(denied.content)).toContain("AUDIENCE_MISMATCH");
+    });
+
+    it("denies every MCP action family when its required grant scope is absent", async () => {
+      const anon = createClient();
+      const alpha = await anon.register({ name: "grant-mcp-scope-owner" });
+      const beta = await anon.register({ name: "grant-mcp-scope-contact" });
+      const alphaClient = createClient(alpha.secret);
+      await alphaClient.pair({ code: beta.pairing_code });
+      const workspace = await alphaClient.createWorkspace({ name: "MCP scope workspace" });
+      const room = await alphaClient.createRoom({ name: "MCP scope room" });
+      const readOnly = await alphaClient.createGrant({ name: "mcp-wrong-read", scopes: ["messages:read"] });
+      const sendOnly = await alphaClient.createGrant({ name: "mcp-wrong-send", scopes: ["messages:send"] });
+
+      const cases: Array<[string, string, Record<string, unknown>, string]> = [
+        ["messages:send", "trunk_send", { secret: readOnly.secret, to: beta.agent_id, type: "update", content: "denied" }, "INSUFFICIENT_SCOPE"],
+        ["messages:read", "trunk_inbox", { secret: sendOnly.secret }, "INSUFFICIENT_SCOPE"],
+        ["facts:read", "trunk_fact", { secret: readOnly.secret, action: "list", contact_id: beta.agent_id }, "INSUFFICIENT_SCOPE"],
+        ["facts:write", "trunk_fact", { secret: readOnly.secret, action: "put", contact_id: beta.agent_id, key: "phase", value: "denied" }, "INSUFFICIENT_SCOPE"],
+        ["tasks:read", "trunk_task_list", { secret: readOnly.secret, contact_id: beta.agent_id }, "INSUFFICIENT_SCOPE"],
+        ["tasks:write", "trunk_task_create", { secret: readOnly.secret, contact_id: beta.agent_id, title: "denied" }, "INSUFFICIENT_SCOPE"],
+        ["rooms:read", "trunk_room_state", { secret: readOnly.secret, room_id: room.id }, "INSUFFICIENT_SCOPE"],
+        ["rooms:write", "trunk_room", { secret: readOnly.secret, action: "create", name: "denied" }, "INSUFFICIENT_SCOPE"],
+        ["contacts:read", "trunk_contacts", { secret: readOnly.secret }, "INSUFFICIENT_SCOPE"],
+        ["workspaces:read", "trunk_workspace", { secret: readOnly.secret, action: "status" }, "INSUFFICIENT_SCOPE"],
+        ["agent_card:read", "trunk_profile", { secret: readOnly.secret, agent_id: beta.agent_id }, "INSUFFICIENT_SCOPE"],
+      ];
+
+      for (const [scope, tool, args, code] of cases) {
+        const result = await callMcpTool(tool, args);
+        expect(result.isError, `${scope} should be denied`).toBe(true);
+        expect(JSON.stringify(result.content)).toContain(code);
+      }
+      expect(workspace.id).toBeTruthy();
+    });
+
+    it("enforces workspace and room audiences through MCP", async () => {
+      const alpha = await createClient().register({ name: "grant-mcp-resource-owner" });
+      const alphaClient = createClient(alpha.secret);
+      const firstWorkspace = await alphaClient.createWorkspace({ name: "First MCP workspace" });
+      await alphaClient.leaveWorkspace();
+      const secondWorkspace = await alphaClient.createWorkspace({ name: "Second MCP workspace" });
+      const workspaceGrant = await alphaClient.createGrant({
+        name: "mcp-workspace-audience",
+        scopes: ["workspaces:read"],
+        audience_workspace_id: firstWorkspace.id,
+      });
+      const workspaceDenied = await callMcpTool("trunk_workspace", {
+        secret: workspaceGrant.secret,
+        action: "status",
+      });
+      expect(workspaceDenied.isError).toBe(true);
+      expect(JSON.stringify(workspaceDenied.content)).toContain("AUDIENCE_MISMATCH");
+
+      const allowedRoom = await alphaClient.createRoom({ name: "Allowed MCP room" });
+      const deniedRoom = await alphaClient.createRoom({ name: "Denied MCP room" });
+      const roomGrant = await alphaClient.createGrant({
+        name: "mcp-room-audience",
+        scopes: ["rooms:read"],
+        room_id: allowedRoom.id,
+      });
+      const roomAllowed = await callMcpTool("trunk_room_state", {
+        secret: roomGrant.secret,
+        room_id: allowedRoom.id,
+      });
+      expect(roomAllowed.isError).not.toBe(true);
+
+      const roomDenied = await callMcpTool("trunk_room_state", {
+        secret: roomGrant.secret,
+        room_id: deniedRoom.id,
+      });
+      expect(roomDenied.isError).toBe(true);
+      expect(JSON.stringify(roomDenied.content)).toContain("AUDIENCE_MISMATCH");
+      expect(secondWorkspace.id).toBeTruthy();
+    });
   });
 
   describe("fact provenance", () => {
@@ -25351,10 +26064,20 @@ describe("Hono API behavior", () => {
         type: "update",
         payload: { content: "branch switched", updates_facts: { branch: "main" } },
       });
+      await alphaClient.putFactWithProvenance(beta.agent_id, "branch", "release", {
+        source_message_id: sent.id,
+      });
       const history = await alphaClient.factHistory(beta.agent_id, "branch");
       const h = history as { history: Array<{ source_message_id: string | null; source_thread_id: string | null }> };
       expect(h.history[0].source_message_id).toBe(sent.id);
-      expect(h.history[0].source_thread_id).toBe(sent.thread_id);
+      expect(testState["audit_events"]).toContainEqual(expect.objectContaining({
+        action: "fact.upsert",
+        targetType: "shared_fact",
+        provenance: expect.arrayContaining([
+          { kind: "message", id: sent.id, relation: "origin" },
+          { kind: "fact", id: expect.stringContaining(":branch"), relation: "target" },
+        ]),
+      }));
       void alpha;
     });
 
@@ -25380,6 +26103,242 @@ describe("Hono API behavior", () => {
         body: JSON.stringify({ value: "x", source_message_id: "not-a-uuid" }),
       });
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe("workspace action controls", () => {
+    it("keeps confirmation and quarantine controls disabled by default", async () => {
+      const alpha = await createClient().register({ name: "controls-default" });
+      const client = createClient(alpha.secret);
+      const workspace = await client.createWorkspace({ name: "Default controls" });
+
+      const response = await app.request(`/context/workspace/${workspace.id}/facts/release`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ value: "ready" }),
+      });
+
+      expect(response.status).toBe(200);
+      const controls = await app.request("/action-controls", {
+        headers: { Authorization: `Bearer ${alpha.secret}` },
+      });
+      await expect(controls.json()).resolves.toMatchObject({
+        controls: {
+          enabled: false,
+          confirmation_operations: [],
+          quarantine_enabled: false,
+          quarantine_object_types: [],
+        },
+      });
+    });
+
+    it("binds one-time confirmation to the exact sensitive request", async () => {
+      const alpha = await createClient().register({ name: "controls-owner" });
+      const client = createClient(alpha.secret);
+      const workspace = await client.createWorkspace({ name: "Controlled workspace" });
+      const configured = await app.request("/action-controls", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: true,
+          confirmation_operations: ["facts.upsert"],
+          quarantine_enabled: false,
+          quarantine_object_types: [],
+        }),
+      });
+      expect(configured.status).toBe(200);
+
+      const first = await app.request(`/context/workspace/${workspace.id}/facts/release`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ value: "ready" }),
+      });
+      expect(first.status).toBe(409);
+      const pending = await first.json() as { code: string; confirmation: { id: string } };
+      expect(pending.code).toBe("CONFIRMATION_REQUIRED");
+
+      const approved = await app.request(`/action-controls/confirmations/${pending.confirmation.id}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "approve", note: "Release is intentional" }),
+      });
+      expect(approved.status).toBe(200);
+
+      const retry = await app.request(`/context/workspace/${workspace.id}/facts/release`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${alpha.secret}`,
+          "Content-Type": "application/json",
+          "X-Trunk-Confirmation-Id": pending.confirmation.id,
+        },
+        body: JSON.stringify({ value: "ready" }),
+      });
+      expect(retry.status).toBe(200);
+
+      const changedPayload = await app.request(`/context/workspace/${workspace.id}/facts/release`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${alpha.secret}`,
+          "Content-Type": "application/json",
+          "X-Trunk-Confirmation-Id": pending.confirmation.id,
+        },
+        body: JSON.stringify({ value: "different" }),
+      });
+      expect(changedPayload.status).toBe(403);
+      await expect(changedPayload.json()).resolves.toMatchObject({ code: "CONFIRMATION_INVALID" });
+
+      const replay = await app.request(`/context/workspace/${workspace.id}/facts/release`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${alpha.secret}`,
+          "Content-Type": "application/json",
+          "X-Trunk-Confirmation-Id": pending.confirmation.id,
+        },
+        body: JSON.stringify({ value: "ready" }),
+      });
+      expect(replay.status).toBe(409);
+      await expect(replay.json()).resolves.toMatchObject({ code: "CONFIRMATION_INVALID" });
+    });
+
+    it("enforces the same confirmation policy through hosted MCP", async () => {
+      const alpha = await createClient().register({ name: "controls-mcp-owner" });
+      const client = createClient(alpha.secret);
+      const workspace = await client.createWorkspace({ name: "MCP controlled workspace" });
+      await client.updateActionControls({
+        enabled: true,
+        confirmation_operations: ["facts.upsert"],
+        quarantine_enabled: false,
+        quarantine_object_types: [],
+      });
+
+      const first = await callMcpToolIsolated("trunk_fact", {
+        secret: alpha.secret,
+        action: "put",
+        workspace_id: workspace.id,
+        key: "release",
+        value: "ready",
+      });
+      expect(first.isError).toBe(true);
+      const firstText = JSON.stringify(first.content);
+      expect(firstText).toContain("CONFIRMATION_REQUIRED");
+      const confirmationId = testState["action_confirmations"][0]?.id;
+      expect(confirmationId).toBeTruthy();
+
+      await client.reviewActionConfirmation(confirmationId!, "approve");
+      const retry = await callMcpToolIsolated("trunk_fact", {
+        secret: alpha.secret,
+        action: "put",
+        workspace_id: workspace.id,
+        key: "release",
+        value: "ready",
+        confirmation_id: confirmationId,
+      });
+      expect(retry.isError).not.toBe(true);
+      expect(testState["shared_facts"]).toContainEqual(expect.objectContaining({
+        scope: `workspace:${workspace.id}`,
+        key: "release",
+        value: "ready",
+      }));
+    });
+
+    it("lets members quarantine suspicious facts while only admins can release them", async () => {
+      const alpha = await createClient().register({ name: "quarantine-owner" });
+      const beta = await createClient().register({ name: "quarantine-member" });
+      const alphaClient = createClient(alpha.secret);
+      const betaClient = createClient(beta.secret);
+      const workspace = await alphaClient.createWorkspace({ name: "Quarantine workspace" });
+      await betaClient.joinWorkspace({ code: workspace.pairing_code });
+
+      const memberConfig = await app.request("/action-controls", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${beta.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: true,
+          confirmation_operations: [],
+          quarantine_enabled: true,
+          quarantine_object_types: ["fact"],
+        }),
+      });
+      expect(memberConfig.status).toBe(403);
+
+      await app.request("/action-controls", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: true,
+          confirmation_operations: [],
+          quarantine_enabled: true,
+          quarantine_object_types: ["fact"],
+        }),
+      });
+      await app.request(`/context/workspace/${workspace.id}/facts/deploy.target`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ value: "production" }),
+      });
+
+      const reported = await app.request("/action-controls/quarantines", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${beta.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          object_type: "fact",
+          object_id: "deploy.target",
+          reason: "Unexpected source message",
+        }),
+      });
+      expect(reported.status).toBe(201);
+      const quarantine = await reported.json() as { quarantine: { id: string } };
+
+      const hidden = await app.request(`/context/workspace/${workspace.id}/facts/deploy.target`, {
+        headers: { Authorization: `Bearer ${beta.secret}` },
+      });
+      expect(hidden.status).toBe(423);
+      await expect(hidden.json()).resolves.toMatchObject({ code: "OBJECT_QUARANTINED" });
+      const hiddenHistory = await app.request(`/context/workspace/${workspace.id}/facts/deploy.target/history`, {
+        headers: { Authorization: `Bearer ${beta.secret}` },
+      });
+      expect(hiddenHistory.status).toBe(423);
+
+      const memberRelease = await app.request(`/action-controls/quarantines/${quarantine.quarantine.id}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${beta.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "release" }),
+      });
+      expect(memberRelease.status).toBe(403);
+
+      const ownerRelease = await app.request(`/action-controls/quarantines/${quarantine.quarantine.id}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alpha.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "release", note: "Verified provenance" }),
+      });
+      expect(ownerRelease.status).toBe(200);
+
+      const visible = await app.request(`/context/workspace/${workspace.id}/facts/deploy.target`, {
+        headers: { Authorization: `Bearer ${beta.secret}` },
+      });
+      expect(visible.status).toBe(200);
+    });
+
+    it("does not create confirmation records for cross-workspace probes", async () => {
+      const alpha = await createClient().register({ name: "controls-boundary-owner" });
+      const outsider = await createClient().register({ name: "controls-boundary-outsider" });
+      const client = createClient(alpha.secret);
+      const workspace = await client.createWorkspace({ name: "Boundary workspace" });
+      await client.updateActionControls({
+        enabled: true,
+        confirmation_operations: ["facts.upsert"],
+        quarantine_enabled: false,
+        quarantine_object_types: [],
+      });
+
+      const response = await app.request(`/context/workspace/${workspace.id}/facts/probe`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${outsider.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ value: "should not reach policy queue" }),
+      });
+
+      expect(response.status).toBe(403);
+      expect(testState["action_confirmations"]).toHaveLength(0);
     });
   });
 
@@ -25418,6 +26377,69 @@ describe("Hono API behavior", () => {
       expect(summary.recent_facts.length).toBeGreaterThan(0);
       expect(summary.recent_facts[0].key).toBe("phase");
       expect(summary.recent_threads.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it("explains credential, delegation, decision, and provenance in the inspector", async () => {
+      const { alpha, alphaClient } = await registerPair();
+      const created = await alphaClient.createGrant({
+        name: "inspector-denial",
+        scopes: ["messages:read"],
+      });
+      const grant = created.grant as { id: string };
+      const denied = await app.request("/agents/me", {
+        headers: { Authorization: `Bearer ${created.secret}` },
+      });
+      expect(denied.status).toBe(403);
+
+      const summary = await alphaClient.inspectorSummary() as {
+        recent_audits: Array<{
+          id: string;
+          outcome: string;
+          reason_code: string;
+          credential: { type: string; id: string | null };
+          explanation: string;
+        }>;
+      };
+      const denial = summary.recent_audits.find((event) =>
+        event.outcome === "denied" && event.reason_code === "GRANT_ACTION_NOT_ALLOWED"
+      );
+      expect(denial).toMatchObject({
+        credential: { type: "scoped_grant", id: grant.id },
+        explanation: expect.stringContaining("GRANT_ACTION_NOT_ALLOWED"),
+      });
+
+      const view = await app.request(`/inspector/audit/${denial!.id}/view`, {
+        headers: { Authorization: `Bearer ${alpha.secret}`, Accept: "text/html" },
+      });
+      expect(view.status).toBe(200);
+      const html = await view.text();
+      expect(html).toContain("GRANT_ACTION_NOT_ALLOWED");
+      expect(html).toContain("scoped grant");
+      expect(html).not.toContain(created.secret);
+    });
+
+    it("carries standardized message, task, fact, and document origins into action records", async () => {
+      const { alphaClient } = await registerPair();
+      const origins = {
+        message_id: "00000000-0000-0000-0000-000000000101",
+        task_id: "00000000-0000-0000-0000-000000000102",
+        fact_id: "room:00000000-0000-0000-0000-000000000103:release.phase",
+        document_id: "00000000-0000-0000-0000-000000000104",
+      };
+      const room = await alphaClient.raw<{ id: string }>("/rooms", {
+        method: "POST",
+        body: { name: "Provenance room" },
+        provenance: origins,
+      });
+      const action = testState["audit_events"].find((event) =>
+        event.action === "room.created" && event.targetId === room.id
+      );
+      expect(action?.provenance).toEqual(expect.arrayContaining([
+        { kind: "message", id: origins.message_id, relation: "origin" },
+        { kind: "task", id: origins.task_id, relation: "origin" },
+        { kind: "fact", id: origins.fact_id, relation: "input" },
+        { kind: "document", id: origins.document_id, relation: "input" },
+      ]));
     });
 
     it("renders the HTML inspector dashboard", async () => {
@@ -25465,6 +26487,20 @@ async function registerPair(): Promise<{
     alphaClient: createClient(alpha.secret),
     betaClient: createClient(beta.secret),
   };
+}
+
+async function callMcpToolIsolated(name: string, args: Record<string, unknown>) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createTrunkMcpServer();
+  const client = new Client({ name: "action-controls-test", version: "1.0.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    return await client.callTool({ name, arguments: args });
+  } finally {
+    await client.close();
+    await server.close();
+  }
 }
 
 // Raw task helpers (used by legacy tests — SDK methods available via TrunkClient)
@@ -25818,6 +26854,59 @@ class InsertQuery {
       return row;
     }
 
+    if (this.table === "workspace_action_controls") {
+      const row: WorkspaceActionControlRow = {
+        workspaceId: iv.workspaceId as string,
+        enabled: (iv.enabled as number | undefined) ?? 0,
+        confirmationOperations: (iv.confirmationOperations as string[] | undefined) ?? [],
+        quarantineEnabled: (iv.quarantineEnabled as number | undefined) ?? 0,
+        quarantineObjectTypes: (iv.quarantineObjectTypes as string[] | undefined) ?? [],
+        updatedBy: iv.updatedBy as string,
+        updatedAt: (iv.updatedAt as Date | undefined) ?? new Date(),
+      };
+      testState["workspace_action_controls"].push(row);
+      return row;
+    }
+
+    if (this.table === "action_confirmations") {
+      const row: ActionConfirmationRow = {
+        id: nextId("confirmation"),
+        workspaceId: iv.workspaceId as string,
+        requestedBy: iv.requestedBy as string,
+        operation: iv.operation as string,
+        requestFingerprint: iv.requestFingerprint as string,
+        targetType: iv.targetType as string,
+        targetId: (iv.targetId as string | undefined) ?? null,
+        status: (iv.status as string | undefined) ?? "pending",
+        reviewedBy: (iv.reviewedBy as string | undefined) ?? null,
+        reviewNote: (iv.reviewNote as string | undefined) ?? null,
+        expiresAt: iv.expiresAt as Date,
+        createdAt: new Date(),
+        reviewedAt: (iv.reviewedAt as Date | undefined) ?? null,
+        executedAt: (iv.executedAt as Date | undefined) ?? null,
+      };
+      testState["action_confirmations"].push(row);
+      return row;
+    }
+
+    if (this.table === "shared_object_quarantines") {
+      const row: SharedObjectQuarantineRow = {
+        id: nextId("quarantine"),
+        workspaceId: iv.workspaceId as string,
+        objectType: iv.objectType as string,
+        objectId: iv.objectId as string,
+        reason: iv.reason as string,
+        status: (iv.status as string | undefined) ?? "active",
+        reportedBy: iv.reportedBy as string,
+        reviewedBy: (iv.reviewedBy as string | undefined) ?? null,
+        reviewNote: (iv.reviewNote as string | undefined) ?? null,
+        createdAt: new Date(),
+        reviewedAt: (iv.reviewedAt as Date | undefined) ?? null,
+      };
+      testState["shared_object_quarantines"].push(row);
+      return row;
+    }
+
     if (this.table === "rate_limits") {
       const row: RateLimitRow = {
         scope: iv.scope as string,
@@ -25920,6 +27009,15 @@ class InsertQuery {
         action: iv.action as string,
         targetType: iv.targetType as string,
         targetId: (iv.targetId as string | undefined) ?? null,
+        outcome: (iv.outcome as AuditEventRow["outcome"] | undefined) ?? "success",
+        reasonCode: (iv.reasonCode as string | undefined) ?? "ACTION_COMPLETED",
+        credentialType: (iv.credentialType as string | undefined) ?? "system",
+        credentialId: (iv.credentialId as string | undefined) ?? null,
+        delegationId: (iv.delegationId as string | undefined) ?? null,
+        parentAgentId: (iv.parentAgentId as string | undefined) ?? null,
+        requestId: (iv.requestId as string | undefined) ?? nextId("request"),
+        traceId: (iv.traceId as string | undefined) ?? null,
+        provenance: (iv.provenance as AuditEventRow["provenance"] | undefined) ?? [],
         metadata: (iv.metadata as Record<string, unknown>) ?? {},
         createdAt: new Date(),
       };
@@ -26151,6 +27249,8 @@ class InsertQuery {
         runtime: (iv.runtime as string | undefined) ?? "custom",
         name: iv.name as string,
         collaborationRole: (iv.collaborationRole as string | undefined) ?? null,
+        containment: (iv.containment as string | undefined) ?? "legacy",
+        capabilities: (iv.capabilities as string[] | undefined) ?? [],
         tokenHash: iv.tokenHash as string,
         tokenId: iv.tokenId as string,
         status: (iv.status as string | undefined) ?? "open",
@@ -26286,8 +27386,8 @@ class DeleteQuery {
   }
 }
 
-function rowsFor(table: TableName): Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow | AgentCardRow | ScopedGrantRow | AgentDelegationRow | FactHistoryRow> {
-  return testState[table] as Array<AgentRow | ContactRow | WorkspaceRow | WorkspaceContactRow | MessageRow | TaskRow | RoomRow | RoomMemberRow | SharedFactRow | SharedDocumentRow | SharedDocumentVersionRow | AuditEventRow | RateLimitRow | SubscriptionRow | ReactionRow | WebhookDeliveryRow | MessageLabelRow | BlockedContactRow | ContactNoteRow | MessageTemplateRow | NotificationPrefRow | ContactTagRow | SavedSearchRow | MessageEditRow | AttachmentRow | RoomWebhookRow | AgentCardRow | ScopedGrantRow | AgentDelegationRow | FactHistoryRow>;
+function rowsFor(table: TableName): Array<Record<string, unknown>> {
+  return testState[table] as unknown as Array<Record<string, unknown>>;
 }
 
 function nextId(_prefix: string): string {
@@ -26305,6 +27405,9 @@ function getTableName(table: unknown): TableName {
     name === "agents" ||
     name === "contacts" ||
     name === "workspace_contacts" ||
+    name === "workspace_action_controls" ||
+    name === "action_confirmations" ||
+    name === "shared_object_quarantines" ||
     name === "messages" ||
     name === "tasks" ||
     name === "rooms" ||
@@ -26557,6 +27660,18 @@ const columnToProperty: Record<string, string> = {
   expires_at: "expiresAt",
   workspace_role: "workspaceRole",
   owner_agent_id: "ownerAgentId",
+  confirmation_operations: "confirmationOperations",
+  quarantine_enabled: "quarantineEnabled",
+  quarantine_object_types: "quarantineObjectTypes",
+  requested_by: "requestedBy",
+  request_fingerprint: "requestFingerprint",
+  reviewed_by: "reviewedBy",
+  review_note: "reviewNote",
+  reviewed_at: "reviewedAt",
+  executed_at: "executedAt",
+  object_type: "objectType",
+  object_id: "objectId",
+  reported_by: "reportedBy",
   audience_agent_id: "audienceAgentId",
   audience_workspace_id: "audienceWorkspaceId",
   revoked_at: "revokedAt",
