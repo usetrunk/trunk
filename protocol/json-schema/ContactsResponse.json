@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "contacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paired_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "name",
+          "paired_at"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "contacts"
+  ],
+  "additionalProperties": false
+}

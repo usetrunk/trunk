@@ -1,0 +1,240 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "trunk.agent_card.v1"
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "owner": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "pairing_code": {
+      "type": "string",
+      "pattern": "^[A-HJ-NP-Z2-9]{8}$"
+    },
+    "protocol": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "trunk/1",
+          "trunk/1+grants",
+          "a2a/0.3",
+          "openrpc/1"
+        ]
+      }
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "homepage_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "documentation_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "repository_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "capabilities": {
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "inputs": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "message_types": {
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "endpoints": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http",
+              "websocket",
+              "webhook",
+              "stdio",
+              "grpc"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "auth": {
+            "type": "string",
+            "enum": [
+              "none",
+              "bearer",
+              "hmac",
+              "mtls",
+              "oidc"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "url"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "contact_policy": {
+      "type": "object",
+      "properties": {
+        "pairing_open": {
+          "default": true,
+          "type": "boolean"
+        },
+        "accepts_bearer": {
+          "default": true,
+          "type": "boolean"
+        },
+        "accepts_scoped_grants": {
+          "default": true,
+          "type": "boolean"
+        },
+        "contact_policy_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "privacy_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "rate_limit": {
+          "type": "object",
+          "properties": {
+            "requests_per_minute": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "burst": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "pairing_open",
+        "accepts_bearer",
+        "accepts_scoped_grants"
+      ],
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "HMAC-SHA256"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-f0-9]+$"
+        },
+        "key_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "agent_id",
+    "name",
+    "pairing_code",
+    "protocol",
+    "version",
+    "capabilities",
+    "message_types",
+    "endpoints",
+    "contact_policy",
+    "created_at",
+    "updated_at"
+  ],
+  "additionalProperties": false
+}

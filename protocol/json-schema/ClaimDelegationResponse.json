@@ -1,0 +1,228 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "delegation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "parent_agent_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "child_agent_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "room_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relationship": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "collaboration_role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "containment": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "strict"
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "messages:send",
+              "messages:read",
+              "facts:read",
+              "facts:write",
+              "tasks:read",
+              "tasks:write",
+              "rooms:read",
+              "documents:read",
+              "documents:write",
+              "delegations:create"
+            ]
+          }
+        },
+        "token_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "claimed",
+            "revoked",
+            "expired"
+          ]
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claimed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime_session_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        },
+        "created_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "parent_agent_id",
+        "child_agent_id",
+        "room_id",
+        "task_id",
+        "relationship",
+        "runtime",
+        "name",
+        "collaboration_role",
+        "containment",
+        "capabilities",
+        "token_id",
+        "status",
+        "expires_at",
+        "claimed_at",
+        "revoked_at",
+        "runtime_session_ref",
+        "metadata",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secret": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pairing_code": {
+          "type": "string"
+        },
+        "webhook_secret": {
+          "type": "string"
+        },
+        "webhook_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "agent_id",
+        "name",
+        "secret",
+        "pairing_code",
+        "webhook_secret"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "delegation",
+    "agent"
+  ],
+  "additionalProperties": false
+}

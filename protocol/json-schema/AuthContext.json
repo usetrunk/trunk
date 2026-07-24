@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "scheme": {
+      "type": "string",
+      "enum": [
+        "bearer",
+        "grant"
+      ]
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "grant_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "messages:send",
+          "messages:read",
+          "facts:read",
+          "facts:write",
+          "tasks:read",
+          "tasks:write",
+          "rooms:read",
+          "rooms:write",
+          "contacts:read",
+          "workspaces:read",
+          "agent_card:read"
+        ]
+      }
+    },
+    "audience": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "workspace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "room_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  },
+  "required": [
+    "scheme",
+    "agent_id"
+  ],
+  "additionalProperties": false
+}

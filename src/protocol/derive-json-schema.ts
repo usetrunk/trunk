@@ -6,7 +6,7 @@
  * surface. Consumers (CI, SDK generators, integration tests) read
  * `protocol/json-schema/*.json` to verify drift.
  */
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 import * as P from "./index.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,10 +24,9 @@ function schemaFor(value: unknown, name: string): SchemaEntry {
   if (!value || typeof value !== "object" || !("_def" in (value as Record<string, unknown>))) {
     throw new Error(`Protocol export "${name}" is not a Zod schema`);
   }
-  const json = zodToJsonSchema(value as Parameters<typeof zodToJsonSchema>[0], {
-    $refStrategy: "none",
-    target: "jsonSchema7",
-    errorMessages: true,
+  const json = z.toJSONSchema(value as z.ZodType, {
+    target: "draft-07",
+    unrepresentable: "any",
   });
   return { name, schema: json };
 }

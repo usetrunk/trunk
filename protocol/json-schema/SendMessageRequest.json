@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "type": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "question",
+            "decision",
+            "review",
+            "handoff",
+            "update",
+            "ack"
+          ]
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "type": "string"
+        },
+        "urgency": {
+          "type": "string",
+          "enum": [
+            "sync",
+            "async"
+          ]
+        },
+        "finality": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "decided",
+            "fyi"
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "question": {
+          "type": "string"
+        },
+        "updates_facts": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": {}
+    },
+    "thread_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "reply_to": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "scheduled_at": {
+      "type": "string"
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "ttl_seconds": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 31536000
+    },
+    "attachment_ids": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      }
+    }
+  },
+  "required": [
+    "to",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

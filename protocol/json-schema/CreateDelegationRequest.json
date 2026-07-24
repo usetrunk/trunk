@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "room_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "runtime": {
+      "default": "custom",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 50
+    },
+    "relationship": {
+      "default": "delegated_worker",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "collaboration_role": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "containment": {
+      "default": "legacy",
+      "type": "string",
+      "enum": [
+        "legacy",
+        "strict"
+      ]
+    },
+    "capabilities": {
+      "minItems": 1,
+      "maxItems": 10,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "messages:send",
+          "messages:read",
+          "facts:read",
+          "facts:write",
+          "tasks:read",
+          "tasks:write",
+          "rooms:read",
+          "documents:read",
+          "documents:write",
+          "delegations:create"
+        ]
+      }
+    },
+    "ttl_seconds": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 2592000
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "room_id",
+    "name",
+    "runtime",
+    "relationship",
+    "containment"
+  ],
+  "additionalProperties": false
+}

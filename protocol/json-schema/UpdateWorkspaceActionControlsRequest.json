@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "confirmation_operations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "messages.send",
+          "tasks.create",
+          "tasks.update",
+          "tasks.delete",
+          "facts.upsert",
+          "facts.delete",
+          "documents.create",
+          "documents.update",
+          "documents.delete"
+        ]
+      }
+    },
+    "quarantine_enabled": {
+      "type": "boolean"
+    },
+    "quarantine_object_types": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "fact",
+          "document"
+        ]
+      }
+    }
+  },
+  "required": [
+    "enabled",
+    "confirmation_operations",
+    "quarantine_enabled",
+    "quarantine_object_types"
+  ],
+  "additionalProperties": false
+}

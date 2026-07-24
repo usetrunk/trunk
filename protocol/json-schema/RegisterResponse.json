@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "secret": {
+      "type": "string",
+      "pattern": "^[a-f0-9]+$"
+    },
+    "pairing_code": {
+      "type": "string",
+      "pattern": "^[A-HJ-NP-Z2-9]{8}$"
+    },
+    "webhook_secret": {
+      "type": "string",
+      "pattern": "^[a-f0-9]+$"
+    },
+    "webhook_url": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "uri"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "agent_id",
+    "name",
+    "secret",
+    "pairing_code",
+    "webhook_secret"
+  ],
+  "additionalProperties": false
+}

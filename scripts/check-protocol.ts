@@ -90,6 +90,11 @@ for (const [name] of required) {
     issues.push(`Schema ${name} not derived to JSON Schema`);
   }
 }
+for (const [name, schema] of Object.entries(derived)) {
+  if (!schema || typeof schema !== "object" || Object.keys(schema).length <= 1) {
+    issues.push(`Schema ${name} produced an empty JSON Schema`);
+  }
+}
 
 const openApi = buildOpenApi();
 const openApiSchemas = (openApi.components as { schemas: Record<string, unknown> }).schemas;

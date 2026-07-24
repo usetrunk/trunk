@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "claim_token": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "webhook_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "profile_role": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "runtime_session_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "claim_token"
+  ],
+  "additionalProperties": false
+}
