@@ -23,6 +23,19 @@ function stringifyForLog(value: unknown): string {
         seen.add(nestedValue);
       }
 
+      if (nestedValue instanceof Error) {
+        return {
+          name: nestedValue.name,
+          ...Object.fromEntries(
+            Object.getOwnPropertyNames(nestedValue)
+              .map((property) => [
+                property,
+                (nestedValue as unknown as Record<string, unknown>)[property],
+              ])
+          ),
+        };
+      }
+
       return nestedValue;
     }, 2) ?? String(value);
   } catch {
